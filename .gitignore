@@ -3,3 +3,6 @@ __pycache__/
 .env
 data/
 pytest.ini
+.superpowers/
+progress.md
+task-*-brief.md
