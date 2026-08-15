@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import projects
+from app.routers import modules, projects
 
 
 def create_app() -> FastAPI:
@@ -13,6 +13,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(projects.router)
+    app.include_router(modules.router)
 
     @app.get("/api/health")
     def health() -> dict:

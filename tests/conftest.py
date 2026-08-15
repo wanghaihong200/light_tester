@@ -7,6 +7,7 @@ os.environ.setdefault(
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.database import Base, SessionLocal, engine
 from app.main import create_app
@@ -27,8 +28,11 @@ def _clean_tables():
     yield
     db = SessionLocal()
     try:
-        for table in _TABLES:
-            db.query(table).delete()
+        # Use TRUNCATE for cleaner reset (resets auto-increment and avoids FK issues)
+        db.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        for table in reversed(_TABLES):  # Reverse order helps with some FKs
+            db.execute(text(f"TRUNCATE TABLE {table.__tablename__}"))
+        db.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
         db.commit()
     finally:
         db.close()
