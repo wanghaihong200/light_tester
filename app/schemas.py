@@ -35,6 +35,8 @@ class FeaturePointCreate(BaseModel):
 
 
 class FeaturePointOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     module_id: int
@@ -46,6 +48,8 @@ class StepIn(BaseModel):
 
 
 class StepOut(StepIn):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     step_no: int
 
