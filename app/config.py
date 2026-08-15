@@ -1,0 +1,17 @@
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    database_url: str = "mysql+pymysql://root:root123@127.0.0.1:3307/test_platform?charset=utf8mb4"
+    repos_dir: Path = Path("../data/repos")
+    uploads_dir: Path = Path("../data/uploads")
+    anthropic_api_key: str = ""
+
+
+settings = Settings()
+settings.repos_dir.mkdir(parents=True, exist_ok=True)
+settings.uploads_dir.mkdir(parents=True, exist_ok=True)
