@@ -43,7 +43,8 @@ def upload_document(project_id: int, file: UploadFile, db: Session = Depends(get
 
     target_dir: Path = settings.uploads_dir / str(project_id)
     target_dir.mkdir(parents=True, exist_ok=True)
-    storage_path = target_dir / f"{uuid.uuid4().hex}_{file.filename}"
+    safe_name = Path(file.filename).name
+    storage_path = target_dir / f"{uuid.uuid4().hex}_{safe_name}"
     storage_path.write_bytes(file.file.read())
 
     doc = Document(project_id=project_id, filename=file.filename, storage_path=str(storage_path))

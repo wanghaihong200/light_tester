@@ -1,5 +1,7 @@
 import pytest
 
+from app.config import settings
+
 
 @pytest.fixture()
 def pid(client):
@@ -35,5 +37,17 @@ def test_delete_document(client, pid):
         f"/api/projects/{pid}/documents",
         files={"file": ("a.md", b"# a", "text/markdown")},
     ).json()["id"]
+
+    # Count files before delete
+    files_before = list((settings.uploads_dir / str(pid)).glob("*"))
+    count_before = len(files_before)
+
+    # Delete document
     assert client.delete(f"/api/documents/{doc_id}").status_code == 204
+
+    # Verify DB record is gone (404 from DB check)
     assert client.get(f"/api/documents/{doc_id}/download").status_code == 404
+
+    # Verify disk file is deleted (count should decrease by 1)
+    files_after = list((settings.uploads_dir / str(pid)).glob("*"))
+    assert len(files_after) == count_before - 1
