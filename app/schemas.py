@@ -28,3 +28,52 @@ class ProjectOut(BaseModel):
     description: str | None
     git_repo_url: str | None
     created_at: datetime
+
+
+class FeaturePointCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class FeaturePointOut(BaseModel):
+    id: int
+    name: str
+    module_id: int
+
+
+class StepIn(BaseModel):
+    action: str = Field(min_length=1)
+    expected: str = Field(min_length=1)
+
+
+class StepOut(StepIn):
+    id: int
+    step_no: int
+
+
+class CaseCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    priority: Priority
+    precondition: str | None = None
+    remark: str | None = None
+    steps: list[StepIn] = Field(default_factory=list)
+
+
+class CaseUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    priority: Priority | None = None
+    precondition: str | None = None
+    remark: str | None = None
+    steps: list[StepIn] | None = None
+
+
+class CaseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    feature_point_id: int
+    title: str
+    priority: Priority
+    precondition: str | None
+    remark: str | None
+    executed_pass: bool | None
+    steps: list[StepOut]

@@ -39,6 +39,7 @@ def _module_dict(module: Module) -> dict:
                         "id": case.id,
                         "title": case.title,
                         "priority": case.priority,
+                        "executed_pass": case.executed_pass,
                     }
                     for case in fp.cases
                 ],
