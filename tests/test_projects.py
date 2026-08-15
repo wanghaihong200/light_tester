@@ -32,3 +32,17 @@ def test_delete_project(client):
     pid = client.post("/api/projects", json={"name": "bye"}).json()["id"]
     assert client.delete(f"/api/projects/{pid}").status_code == 204
     assert client.get(f"/api/projects/{pid}").status_code == 404
+
+
+def test_rename_duplicate_name_409(client):
+    p1 = client.post("/api/projects", json={"name": "Alpha"}).json()["id"]
+    client.post("/api/projects", json={"name": "Beta"})
+    resp = client.put(f"/api/projects/{p1}", json={"name": "Beta"})
+    assert resp.status_code == 409
+
+
+def test_rename_fresh_name_200(client):
+    p1 = client.post("/api/projects", json={"name": "Alpha"}).json()["id"]
+    resp = client.put(f"/api/projects/{p1}", json={"name": "Gamma"})
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Gamma"

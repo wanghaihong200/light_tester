@@ -39,7 +39,12 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 @router.put("/{project_id}", response_model=ProjectOut)
 def update_project(project_id: int, payload: ProjectUpdate, db: Session = Depends(get_db)):
     project = _get_or_404(db, project_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data:
+        existing = db.query(Project).filter(Project.name == data["name"], Project.id != project_id).first()
+        if existing:
+            raise HTTPException(status.HTTP_409_CONFLICT, "project name already exists")
+    for field, value in data.items():
         setattr(project, field, value)
     db.commit()
     db.refresh(project)

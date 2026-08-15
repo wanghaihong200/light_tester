@@ -25,40 +25,75 @@ def _get_project_or_404(db: Session, project_id: int) -> Project:
     return project
 
 
-def _module_dict(module: Module) -> dict:
-    return {
-        "id": module.id,
-        "name": module.name,
-        "children": [_module_dict(child) for child in module.children],
-        "feature_points": [
-            {
-                "id": fp.id,
-                "name": fp.name,
-                "cases": [
+@router.get("/projects/{project_id}/tree")
+def get_tree(project_id: int, db: Session = Depends(get_db)):
+    _get_project_or_404(db, project_id)
+
+    # Single query: all modules for the project
+    all_modules = (
+        db.query(Module)
+        .filter(Module.project_id == project_id)
+        .order_by(Module.sort_order, Module.id)
+        .all()
+    )
+    module_ids = [m.id for m in all_modules]
+    modules_by_id: dict[int, dict] = {}
+    children_by_parent: dict[int | None, list[dict]] = {}
+
+    for m in all_modules:
+        d = {"id": m.id, "name": m.name, "children": [], "feature_points": []}
+        modules_by_id[m.id] = d
+        children_by_parent.setdefault(m.parent_id, []).append(d)
+
+    # Wire children into their parent module dicts
+    for m in all_modules:
+        modules_by_id[m.id]["children"] = children_by_parent.get(m.id, [])
+
+    if module_ids:
+        # Single query: all feature points for these modules
+        all_fps = (
+            db.query(FeaturePoint)
+            .filter(FeaturePoint.module_id.in_(module_ids))
+            .order_by(FeaturePoint.sort_order, FeaturePoint.id)
+            .all()
+        )
+        fp_ids = [fp.id for fp in all_fps]
+        fps_by_id: dict[int, dict] = {}
+        cases_by_fp: dict[int, list[dict]] = {}
+
+        for fp in all_fps:
+            fp_dict: dict = {"id": fp.id, "name": fp.name, "cases": []}
+            fps_by_id[fp.id] = fp_dict
+            cases_by_fp.setdefault(fp.id, [])
+
+        if fp_ids:
+            # Single query: all cases for these feature points
+            all_cases = (
+                db.query(Case)
+                .filter(Case.feature_point_id.in_(fp_ids))
+                .order_by(Case.sort_order, Case.id)
+                .all()
+            )
+            for case in all_cases:
+                cases_by_fp[case.feature_point_id].append(
                     {
                         "id": case.id,
                         "title": case.title,
                         "priority": case.priority,
                         "executed_pass": case.executed_pass,
                     }
-                    for case in fp.cases
-                ],
-            }
-            for fp in module.feature_points
-        ],
-    }
+                )
 
+        for fp in all_fps:
+            fps_by_id[fp.id]["cases"] = cases_by_fp.get(fp.id, [])
 
-@router.get("/projects/{project_id}/tree")
-def get_tree(project_id: int, db: Session = Depends(get_db)):
-    _get_project_or_404(db, project_id)
-    roots = (
-        db.query(Module)
-        .filter(Module.project_id == project_id, Module.parent_id.is_(None))
-        .order_by(Module.sort_order, Module.id)
-        .all()
-    )
-    return [_module_dict(m) for m in roots]
+        for fp in all_fps:
+            if fp.module_id in modules_by_id:
+                modules_by_id[fp.module_id]["feature_points"].append(fps_by_id[fp.id])
+
+    # Roots are modules with no parent, already ordered
+    roots = children_by_parent.get(None, [])
+    return roots
 
 
 @router.post("/projects/{project_id}/modules", status_code=status.HTTP_201_CREATED)
@@ -91,6 +126,9 @@ def update_module(module_id: int, payload: ModuleUpdate, db: Session = Depends(g
         raise HTTPException(status.HTTP_404_NOT_FOUND, "module not found")
     data = payload.model_dump(exclude_unset=True)
     if "parent_id" in data and data["parent_id"] is not None:
+        parent = db.get(Module, data["parent_id"])
+        if parent is None or parent.project_id != module.project_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid parent_id")
         if data["parent_id"] == module_id or _is_descendant(db, data["parent_id"], module_id):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "cannot move under self/descendant")
     for field, value in data.items():
