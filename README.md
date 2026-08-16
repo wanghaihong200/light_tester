@@ -18,3 +18,14 @@ FastAPI + SQLAlchemy 2.x + MySQL
 ### 测试
 
     pytest -v   # 使用 DATABASE_URL 指向的测试库(默认 test_platform_test)
+
+## 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `ANTHROPIC_API_KEY` | 必填才启动生成 worker;空则任务停留 pending |
+| `AI_MODEL` | 可选,默认 `claude-opus-5` |
+
+## 任务管道(AI 用例生成)
+
+发起即返回任务 ID;进程内 asyncio 队列 + 3 个 worker;同项目串行、跨项目并行;AI 失败任务落 failed+error 可回看;单测全部 mock AI 客户端零网络调用;依赖 `anthropic openpyxl pytest-asyncio` 已入 requirements.txt。
