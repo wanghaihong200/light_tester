@@ -9,7 +9,8 @@ class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://root:root123@127.0.0.1:3307/test_platform?charset=utf8mb4"
     repos_dir: Path = Path("../data/repos")
     uploads_dir: Path = Path("../data/uploads")
-    anthropic_api_key: str = ""
+    anthropic_api_key: str | None = None
+    ai_model: str = "claude-opus-5"
 
 
 settings = Settings()
