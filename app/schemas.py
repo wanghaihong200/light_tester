@@ -81,3 +81,35 @@ class CaseOut(BaseModel):
     remark: str | None
     executed_pass: bool | None
     steps: list[StepOut]
+
+
+class GenerationJobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    document_id: int | None
+    target_module_id: int | None
+    job_type: str
+    status: str
+    model: str | None
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    error: str | None
+    created_at: datetime
+    document_name: str | None
+
+
+class StagedCaseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: int
+    feature_point_name: str
+    title: str
+    priority: str
+    precondition: str | None
+    remark: str | None
+    steps: list
+    created_at: datetime

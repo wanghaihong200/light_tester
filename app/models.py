@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -22,6 +22,9 @@ class Project(Base):
         back_populates="project", cascade="all, delete-orphan"
     )
     documents: Mapped[list[Document]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+    jobs: Mapped[list[GenerationJob]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
 
@@ -105,3 +108,57 @@ class Document(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     project: Mapped[Project] = relationship(back_populates="documents")
+
+
+class GenerationJob(Base):
+    __tablename__ = "generation_jobs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id"), nullable=True
+    )
+    target_module_id: Mapped[int | None] = mapped_column(
+        ForeignKey("modules.id"), nullable=True
+    )
+    job_type: Mapped[str] = mapped_column(String(50), default="case_generation")
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="jobs")
+    document: Mapped[Document | None] = relationship(
+        foreign_keys=[document_id], lazy="select"
+    )
+    target_module: Mapped[Module | None] = relationship(
+        foreign_keys=[target_module_id], lazy="select"
+    )
+    staged: Mapped[list[StagedCase]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def document_name(self) -> str | None:
+        """返回关联文档的文件名,若无文档则返回 None"""
+        return self.document.filename if self.document else None
+
+
+class StagedCase(Base):
+    __tablename__ = "staged_cases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("generation_jobs.id"))
+    feature_point_name: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(500))
+    priority: Mapped[str] = mapped_column(String(8))  # P0 / P1 / P2
+    precondition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    steps: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    job: Mapped[GenerationJob] = relationship(back_populates="staged")
