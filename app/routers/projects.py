@@ -1,9 +1,13 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Project
 from app.schemas import ProjectCreate, ProjectOut, ProjectUpdate
+from app.xmind_export import build_xmind_bytes
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -56,3 +60,15 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
     project = _get_or_404(db, project_id)
     db.delete(project)
     db.commit()
+
+
+@router.get("/{project_id}/export/xmind")
+def export_xmind(project_id: int, db: Session = Depends(get_db)):
+    project = _get_or_404(db, project_id)
+    payload = build_xmind_bytes(db, project)
+    filename = quote(f"{project.name}.xmind")  # RFC 5987,支持中文项目名
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
