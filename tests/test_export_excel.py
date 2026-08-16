@@ -80,3 +80,46 @@ def test_export_excel_empty_project(client):
     assert cells["用例数"] == 0
     assert wb["功能点清单"].max_row == 1  # 仅表头
     assert wb["测试用例"].max_row == 1
+
+
+def test_export_excel_formula_injection_prevention(client):
+    """用户可控字符串以公式前缀开头时,导出应为纯文本而非公式。"""
+    pid = client.post("/api/projects", json={"name": "=SUM(1,1)"}).json()["id"]
+    m1 = client.post(f"/api/projects/{pid}/modules", json={"name": "+DANGER"}).json()
+    fp = client.post(f"/api/modules/{m1['id']}/feature-points", json={"name": "-INJECT"}).json()
+    client.post(
+        f"/api/feature-points/{fp['id']}/cases",
+        json={
+            "title": "=1+1",
+            "priority": "P0",
+            "precondition": "@bad",
+            "remark": "\tINDENT",
+            "steps": [{"action": "-cmd", "expected": "ok"}],
+        },
+    )
+    resp = client.get(f"/api/projects/{pid}/export/excel")
+    assert resp.status_code == 200
+    wb = load_workbook(io.BytesIO(resp.content))
+
+    # 测试概述:项目名 "=SUM(1,1)" 应为字符串,非公式
+    overview = wb["测试概述"]
+    cells = {overview.cell(row=r, column=1).value: overview.cell(row=r, column=2).value for r in range(1, overview.max_row + 1)}
+    project_cell = overview.cell(row=1, column=2)
+    assert project_cell.value == "=SUM(1,1)"
+    assert project_cell.data_type != "f"
+
+    # 功能点清单:功能名 "-INJECT" 和模块路径含 "+DANGER" 应为字符串
+    ws_fp = wb["功能点清单"]
+    fp_name_cell = ws_fp.cell(row=2, column=2)
+    assert fp_name_cell.value == "-INJECT"
+    assert fp_name_cell.data_type != "f"
+
+    # 测试用例:标题 "=1+1" 应为字符串,非公式
+    ws_case = wb["测试用例"]
+    title_cell = ws_case.cell(row=2, column=3)
+    assert title_cell.value == "=1+1"
+    assert title_cell.data_type != "f"
+    # 前置条件 "@bad" 也应安全
+    precell = ws_case.cell(row=2, column=5)
+    assert precell.value == "@bad"
+    assert precell.data_type != "f"

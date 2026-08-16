@@ -20,6 +20,16 @@ _HEADER_FILL = PatternFill(start_color="409EFF", end_color="409EFF", fill_type="
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _DATA_ALIGN = Alignment(wrap_text=True, vertical="top")
 
+# 公式注入危险前缀:值以这些字符开头时可能被 Excel 解释为公式
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe_cell(ws, row: int, column: int, value) -> None:
+    """写入单元格,用户可控字符串做公式注入防护:危险前缀强制文本类型。"""
+    cell = ws.cell(row=row, column=column, value=value)
+    if isinstance(value, str) and value and value[0] in _FORMULA_PREFIXES:
+        cell.data_type = "s"
+
 
 def _build_module_path(module: Module, module_map: dict[int, Module]) -> str:
     """递归向上拼模块路径,如 父模块/子模块。"""
@@ -50,7 +60,7 @@ def _write_overview(ws, project: Project, case_count: int, fp_count: int) -> Non
     ]
     for i, (label, value) in enumerate(rows, start=1):
         ws.cell(row=i, column=1, value=label)
-        ws.cell(row=i, column=2, value=value)
+        _safe_cell(ws, i, 2, value)
     ws.column_dimensions["A"].width = 15
     ws.column_dimensions["B"].width = 40
 
@@ -65,8 +75,8 @@ def _write_feature_points(ws, fp_data: list[dict]) -> None:
         cell.alignment = _DATA_ALIGN
     for r, fp in enumerate(fp_data, start=2):
         for c, val in enumerate([fp["id"], fp["name"], fp["module_path"], fp["case_count"]], start=1):
-            cell = ws.cell(row=r, column=c, value=val)
-            cell.alignment = _DATA_ALIGN
+            _safe_cell(ws, r, c, val)
+            ws.cell(row=r, column=c).alignment = _DATA_ALIGN
     ws.column_dimensions["A"].width = 12
     ws.column_dimensions["B"].width = 20
     ws.column_dimensions["C"].width = 30
@@ -88,8 +98,8 @@ def _write_cases(ws, case_rows: list[dict]) -> None:
         vals = [case["id"], case["fp_id"], case["title"], case["priority"],
                 case["precondition"], case["steps"], case["remark"], case["exec_result"]]
         for c, val in enumerate(vals, start=1):
-            cell = ws.cell(row=r, column=c, value=val)
-            cell.alignment = _DATA_ALIGN
+            _safe_cell(ws, r, c, val)
+            ws.cell(row=r, column=c).alignment = _DATA_ALIGN
     ws.freeze_panes = "A2"
 
 

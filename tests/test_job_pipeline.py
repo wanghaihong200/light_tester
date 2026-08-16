@@ -55,7 +55,11 @@ async def test_process_job_success(monkeypatch, tmp_path):
         assert staged[0].feature_point_name == "账号登录"
         assert staged[0].steps[0]["action"] == "输入"
         assert any(e["type"] == "status" and e["status"] == "running" for e in events)
-        assert any(e["type"] == "delta" for e in events)
+        # delta 事件必须携带 text 载荷(与 _fake_stream_ok 的第一个 delta 对齐)
+        delta_events = [e for e in events if e["type"] == "delta"]
+        assert len(delta_events) == 2
+        assert delta_events[0]["text"] == '{"feature_points": [{"name": "账号登录", "cases": ['
+        assert delta_events[1]["text"] == '{"title": "登录成功", "priority": "P0", "precondition": "已注册", "remark": null, "steps": [{"action": "输入", "expected": "成功"}]}]}]}'
         assert any(e["type"] == "done" and e["staged_count"] == 1 for e in events)
     finally:
         db.close()

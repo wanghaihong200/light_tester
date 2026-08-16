@@ -44,13 +44,28 @@ class StagedPayload(BaseModel):
 JOBS_QUEUE: asyncio.Queue[int] = asyncio.Queue()
 _project_locks: dict[int, asyncio.Lock] = {}
 
+# 事件循环引用,用于跨线程安全地向 asyncio.Queue 投递任务。
+# FastAPI 默认用线程池执行 sync def 端点,enqueue_job 会在非 asyncio 线程中调用,
+# 直接操作 asyncio.Queue 不安全(依赖 CPython 实现细节)。
+_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """记录主事件循环,供 enqueue_job 跨线程调用。应在 lifespan 中无条件调用。"""
+    global _loop
+    _loop = loop
+
 
 def _lock_for(project_id: int) -> asyncio.Lock:
     return _project_locks.setdefault(project_id, asyncio.Lock())
 
 
 def enqueue_job(job_id: int) -> None:
-    JOBS_QUEUE.put_nowait(job_id)
+    """向队列投递任务。若主事件循环可用则线程安全投递,否则直接操作(兼容测试路径)。"""
+    if _loop is not None and _loop.is_running():
+        _loop.call_soon_threadsafe(JOBS_QUEUE.put_nowait, job_id)
+    else:
+        JOBS_QUEUE.put_nowait(job_id)
 
 
 async def worker_loop() -> None:
@@ -93,7 +108,7 @@ async def process_job(job_id: int) -> None:
         async for kind, value in stream_case_generation(job.project.name, module.name, content):
             if kind == "delta":
                 chunks.append(value)
-                await bus.publish(job.id, {"type": "delta"})
+                await bus.publish(job.id, {"type": "delta", "text": value})
             elif kind == "usage":
                 input_tokens, output_tokens = value  # type: ignore[misc]
 

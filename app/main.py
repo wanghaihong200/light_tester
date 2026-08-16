@@ -14,6 +14,9 @@ import app.models  # noqa: F401 — ensure Base.metadata knows all tables
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # 无条件注册主事件循环,使 enqueue_job 可跨线程安全投递(线程安全)
+    from app.jobs.pipeline import set_loop
+    set_loop(asyncio.get_running_loop())
     workers: list[asyncio.Task] = []
     if settings.anthropic_api_key:  # 无 key 的环境(测试/离线)不启动 worker
         from app.jobs.pipeline import worker_loop

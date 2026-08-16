@@ -5,6 +5,9 @@ os.environ.setdefault(
     "mysql+pymysql://root:root123@127.0.0.1:3307/test_platform_test?charset=utf8mb4",
 )
 
+# 强制清空 AI API key,防止用户 .env 填真 key 后跑 pytest 启动真 worker 烧钱
+os.environ["ANTHROPIC_API_KEY"] = ""
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
