@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Project
 from app.schemas import ProjectCreate, ProjectOut, ProjectUpdate
+from app.excel_export import build_excel_bytes
 from app.xmind_export import build_xmind_bytes
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -70,5 +71,17 @@ def export_xmind(project_id: int, db: Session = Depends(get_db)):
     return Response(
         content=payload,
         media_type="application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
+
+
+@router.get("/{project_id}/export/excel")
+def export_excel(project_id: int, db: Session = Depends(get_db)):
+    project = _get_or_404(db, project_id)
+    payload = build_excel_bytes(db, project)
+    filename = quote(f"{project.name}.xlsx")  # RFC 5987,支持中文项目名
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )
