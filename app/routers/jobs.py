@@ -4,14 +4,15 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
 from app.jobs.bus import bus
 from app.jobs.pipeline import enqueue_job
-from app.models import Document, GenerationJob, Module, Project
-from app.schemas import GenerationJobOut
+from app.models import Case, Document, FeaturePoint, GenerationJob, Module, Project, Step, StagedCase
+from app.schemas import GenerationJobOut, StagedCaseOut
 
 router = APIRouter(prefix="/api", tags=["jobs"])
 
@@ -93,3 +94,121 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
     if job is None:
         raise HTTPException(404, "job not found")
     return job
+
+
+# ── 暂存区三端点 ──────────────────────────────────────────────
+
+
+class StagingAccept(BaseModel):
+    ids: list[int]
+
+
+@router.get("/jobs/{job_id}/staging")
+def staging_list(job_id: int, db: Session = Depends(get_db)):
+    """暂存区分组列表:按功能点名分组,组内按 id 升序,组按首次出现序"""
+    job = db.get(GenerationJob, job_id)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    rows = (
+        db.query(StagedCase)
+        .filter(StagedCase.job_id == job_id)
+        .order_by(StagedCase.id)
+        .all()
+    )
+    groups: list[dict] = []
+    order_map: dict[str, int] = {}  # 功能点名 → 组序号
+    for row in rows:
+        name = row.feature_point_name
+        if name not in order_map:
+            order_map[name] = len(groups)
+            groups.append({"feature_point_name": name, "cases": []})
+        groups[order_map[name]]["cases"].append(StagedCaseOut.model_validate(row).model_dump())
+    return {"job_id": job_id, "groups": groups}
+
+
+@router.post("/jobs/{job_id}/staging/accept")
+def staging_accept(job_id: int, payload: StagingAccept, db: Session = Depends(get_db)):
+    """勾选转正:找或建功能点,插 Case+Steps,删暂存行;全部完成后一次 commit"""
+    job = db.get(GenerationJob, job_id)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    if job.status != "completed":
+        raise HTTPException(400, "job not completed")
+
+    # 校验 ids 去重后是否全部命中
+    unique_ids = list(dict.fromkeys(payload.ids))
+    matched = (
+        db.query(StagedCase)
+        .filter(StagedCase.job_id == job_id, StagedCase.id.in_(unique_ids))
+        .order_by(StagedCase.id)
+        .all()
+    )
+    if len(matched) != len(unique_ids):
+        raise HTTPException(400, "部分 id 不属于该 job 或已不存在")
+
+    feature_point_ids: dict[str, int] = {}
+    fp_sort_cache: dict[str, int] = {}  # 功能点名 → 当前 sort_order
+    accepted = 0
+
+    for staged in matched:
+        fp_name = staged.feature_point_name
+        # 找或建功能点(名字精确匹配)
+        fp = (
+            db.query(FeaturePoint)
+            .filter_by(module_id=job.target_module_id, name=fp_name)
+            .first()
+        )
+        if fp is None:
+            fp = FeaturePoint(module_id=job.target_module_id, name=fp_name)
+            db.add(fp)
+            db.flush()
+        feature_point_ids[fp_name] = fp.id
+
+        # sort_order 顺延
+        if fp_name not in fp_sort_cache:
+            max_so = (
+                db.query(func.max(Case.sort_order))
+                .filter(Case.feature_point_id == fp.id)
+                .scalar()
+            )
+            fp_sort_cache[fp_name] = (max_so or 0) + 1
+        else:
+            fp_sort_cache[fp_name] += 1
+
+        # 插 Case
+        case = Case(
+            feature_point_id=fp.id,
+            title=staged.title,
+            priority=staged.priority,
+            precondition=staged.precondition,
+            remark=staged.remark,
+            sort_order=fp_sort_cache[fp_name],
+        )
+        db.add(case)
+        db.flush()
+
+        # 插 Steps
+        for idx, step_data in enumerate(staged.steps, start=1):
+            db.add(Step(
+                case_id=case.id,
+                step_no=idx,
+                action=step_data["action"],
+                expected=step_data["expected"],
+            ))
+
+        # 删除暂存行
+        db.delete(staged)
+        accepted += 1
+
+    db.commit()
+    return {"accepted": accepted, "feature_point_ids": feature_point_ids}
+
+
+@router.delete("/staged/{staged_id}", status_code=204)
+def staging_reject(staged_id: int, db: Session = Depends(get_db)):
+    """拒绝:物理删除暂存行"""
+    staged = db.get(StagedCase, staged_id)
+    if staged is None:
+        raise HTTPException(404, "staged case not found")
+    db.delete(staged)
+    db.commit()
