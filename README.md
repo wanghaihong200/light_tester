@@ -15,6 +15,9 @@ FastAPI + SQLAlchemy 2.x + MySQL
 
 接口文档:http://127.0.0.1:8000/docs
 
+Windows 下也可直接双击 `start.bat`(从任何目录启动都有效,自动切到 backend 并用 .venv 启动;
+默认不带 --reload,避免 AI 生成任务进行中因文件变动重启 worker——开发期想自动重启可自行加上)。
+
 ### 测试
 
     pytest -v   # 使用 DATABASE_URL 指向的测试库(默认 test_platform_test)
