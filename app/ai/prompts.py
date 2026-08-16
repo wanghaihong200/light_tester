@@ -13,7 +13,11 @@ CASE_SYSTEM_PROMPT = """你是资深功能测试工程师。根据用户提供�
 
 ## 输出契约
 
-只输出符合给定 JSON Schema 的 JSON,不输出任何解释性文字、markdown 代码块标记或注释。功能点名称用简洁中文短语(将作为用例树节点名)。"""
+只输出一个符合以下结构的 JSON 对象,不输出任何解释性文字、markdown 代码块标记(```)或注释:
+
+{"feature_points": [{"name": "功能点名称(简洁中文短语,将作为用例树节点名)", "cases": [{"title": "用例标题", "priority": "P0", "precondition": "前置条件,无则为 null", "remark": "备注,无则为 null", "steps": [{"action": "操作", "expected": "预期结果"}]}]}]}
+
+约束:顶层只有 feature_points 一个键;priority 只能取 "P0"、"P1"、"P2";steps 为有序的操作+预期对,无步骤时为空数组;所有字符串用中文。"""
 
 
 def build_user_prompt(project_name: str, module_name: str, doc_content: str) -> str:

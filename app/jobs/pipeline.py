@@ -41,6 +41,31 @@ class StagedPayload(BaseModel):
     feature_points: list[StagedFeature]
 
 
+def _strip_code_fence(text: str) -> str:
+    """剥离 markdown 代码围栏(```json ... ```)——不强制结构化输出的端点上模型常见输出。"""
+    t = text.strip()
+    if t.startswith("```"):
+        first_nl = t.find("\n")
+        if first_nl != -1:
+            t = t[first_nl + 1:]
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+    return t.strip()
+
+
+def _parse_staged_payload(text: str) -> StagedPayload:
+    """解析 AI 输出并归一化后做 pydantic 校验。
+
+    output_config 的服务端 schema 强约束依端点而异(部分兼容端点静默丢弃该参数),
+    因此解析层兜底:剥围栏、顶层数组归一化为 {"feature_points": [...]};形状
+    仍不符时由 pydantic 校验报错落 job.error。
+    """
+    data = json.loads(_strip_code_fence(text))
+    if isinstance(data, list):
+        data = {"feature_points": data}
+    return StagedPayload.model_validate(data)
+
+
 JOBS_QUEUE: asyncio.Queue[int] = asyncio.Queue()
 _project_locks: dict[int, asyncio.Lock] = {}
 
@@ -112,8 +137,8 @@ async def process_job(job_id: int) -> None:
             elif kind == "usage":
                 input_tokens, output_tokens = value  # type: ignore[misc]
 
-        # 校验并入库
-        payload = StagedPayload.model_validate(json.loads("".join(chunks)))
+        # 校验并入库(解析层防御:端点可能不强制结构化输出,见 _parse_staged_payload)
+        payload = _parse_staged_payload("".join(chunks))
         staged_count = 0
         for fp in payload.feature_points:
             for case in fp.cases:
