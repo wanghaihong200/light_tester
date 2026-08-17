@@ -99,6 +99,7 @@ class GenerationJobOut(BaseModel):
     error: str | None
     created_at: datetime
     document_name: str | None
+    artifacts: list[dict] | None
 
 
 class StagedCaseOut(BaseModel):

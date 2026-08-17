@@ -168,6 +168,9 @@ class GenerationJob(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    artifacts: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment="接口生成产物文件清单:[{\"path\":...,\"action\":\"created|overwritten\"}];用例生成任务为NULL"
+    )
 
     project: Mapped[Project] = relationship(back_populates="jobs")
     document: Mapped[Document | None] = relationship(
