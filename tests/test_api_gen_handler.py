@@ -86,3 +86,25 @@ def test_collect_project_summary_with_pom(tmp_path):
     assert s["has_junit5"] is True
     assert "com.example.api" in s["test_packages"]
     assert s["has_base_class"] is True
+
+
+def test_run_mvn_compile_resolves_mvn_via_which(tmp_path, monkeypatch):
+    """回归(2026-08-17 E2E 实测):Windows 下 mvn 是 .cmd,subprocess 直调 "mvn" 找不到。
+    必须用 shutil.which 解析全路径。"""
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["argv0"] = args[0]
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(api_gen.shutil, "which", lambda name: "C:/tools/mvn.cmd")
+    monkeypatch.setattr(api_gen.subprocess, "run", fake_run)
+    r = run_mvn_compile(tmp_path)
+    assert r.success is True
+    assert seen["argv0"] == "C:/tools/mvn.cmd"
+
+
+def test_run_mvn_compile_mvn_not_on_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(api_gen.shutil, "which", lambda name: None)
+    with pytest.raises(api_gen.GitError):
+        run_mvn_compile(tmp_path)

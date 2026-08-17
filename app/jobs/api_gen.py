@@ -6,6 +6,7 @@ mvn 自检:失败喂编译错误回 AI 修复,≤2 轮仍败→job failed(已写
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -88,10 +89,13 @@ def _decode_mvn(b: bytes) -> str:
 
 
 def run_mvn_compile(wc: Path) -> MvnResult:
-    try:
-        r = subprocess.run(["mvn", "-q", "test-compile"], cwd=wc, capture_output=True, timeout=MVN_TIMEOUT)
-    except FileNotFoundError:
+    # Windows 下 mvn 是 .cmd 批处理,subprocess 不经 shell 直调 "mvn" 会 FileNotFoundError,
+    # 必须用 shutil.which 按 PATHEXT 解析全路径(E2E 实测缺陷)
+    mvn_bin = shutil.which("mvn")
+    if mvn_bin is None:
         raise GitError("mvn", "Maven 不可用,请检查宿主机环境")
+    try:
+        r = subprocess.run([mvn_bin, "-q", "test-compile"], cwd=wc, capture_output=True, timeout=MVN_TIMEOUT)
     except subprocess.TimeoutExpired:
         return MvnResult(success=False, output="mvn test-compile 超时(>300s)")
     out = _decode_mvn(r.stdout) + _decode_mvn(r.stderr)
