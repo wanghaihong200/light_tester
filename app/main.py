@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import Base, engine
-from app.routers import cases, documents, jobs, modules, projects
+from app.routers import cases, documents, jobs, modules, projects, repo
 
 import app.models  # noqa: F401 — ensure Base.metadata knows all tables
 
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(cases.router)
     app.include_router(documents.router)
     app.include_router(jobs.router)
+    app.include_router(repo.router)
 
     @app.get("/api/health")
     def health() -> dict:
