@@ -172,17 +172,25 @@ def git_status(project) -> list[ChangeFile]:
     wc = working_copy_path(project)
     if not (wc.exists() and (wc / ".git").exists()):
         raise GitError("repo", "working copy 不存在,请先同步")
-    tracked = set(_run(["git", "ls-files"], cwd=wc).split())
-    out = _run(["git", "status", "--porcelain"], cwd=wc)
     result: list[ChangeFile] = []
+    # 未跟踪:porcelain 会把整个目录折叠成 "dir/"(E2E 实测 src/、target/ 混入推送列表),
+    # 改用 ls-files --others 展开到具体文件,并过滤构建产物目录(_FILTER_DIRS)
+    others = _run(["git", "ls-files", "--others", "--exclude-standard"], cwd=wc)
+    for path in others.splitlines():
+        if not path:
+            continue
+        first = Path(path).parts[0] if Path(path).parts else ""
+        if first in _FILTER_DIRS:
+            continue
+        result.append(ChangeFile(path=path, status="added", tracked=False))
+    # 已跟踪变更:M/D/A(关闭未跟踪枚举,?? 分支已由上面处理)
+    out = _run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=wc)
     for line in out.splitlines():
         if not line:
             continue
         xy, path = line[:2], line[3:]
-        # porcelain v1: 两个状态码 XY;未跟踪 ?? ;修改  M;删除  D 等
-        if xy == "??":
-            result.append(ChangeFile(path=path, status="added", tracked=False))
-        elif "D" in xy:
+        # porcelain v1: 两个状态码 XY;修改  M;删除  D;新增 A 等
+        if "D" in xy:
             result.append(ChangeFile(path=path, status="deleted", tracked=True))
         elif "M" in xy or "A" in xy:
             result.append(ChangeFile(path=path, status="modified" if "M" in xy else "added", tracked=True))

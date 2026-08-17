@@ -136,3 +136,21 @@ def test_ensure_repo_relative_repos_dir_clones_once(tmp_path, monkeypatch):
     assert wc1 == wc2
     assert (wc1 / ".git").exists()
     assert not (tmp_path / "repos" / "repos").exists()
+
+
+def test_git_status_expands_untracked_dirs_and_filters_target(repos_dir, tmp_path):
+    """回归(2026-08-17 E2E 实测):porcelain 把未跟踪目录折叠成 "src/"/"target/",
+    且 mvn 编译产物 target/ 混入变更列表。未跟踪须展开到具体文件并过滤构建产物目录。"""
+    bare = _make_bare_origin(tmp_path)
+    proj = _project(f"file:///{bare.as_posix()}")
+    git_service.sync_repo(proj)
+    wc = working_copy_path(proj)
+    (wc / "src/test/java").mkdir(parents=True)
+    (wc / "src/test/java/A.java").write_text("a", encoding="utf-8")
+    (wc / "target").mkdir()
+    (wc / "target/x.class").write_text("x", encoding="utf-8")
+    changes = git_service.git_status(proj)
+    paths = [c.path for c in changes]
+    assert "src/test/java/A.java" in paths
+    assert "src/" not in paths
+    assert not any(p == "target" or p.startswith("target/") for p in paths)
