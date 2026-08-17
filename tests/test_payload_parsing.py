@@ -45,3 +45,10 @@ def test_parse_rejects_garbage():
         _parse_staged_payload('{"totally": "wrong"}')
     with pytest.raises(Exception):
         _parse_staged_payload("not json at all")
+
+
+def test_parse_rejects_invalid_priority():
+    """priority 枚举必须在本地校验(端点 schema 强约束不可依赖)。"""
+    bad = '{"feature_points": [{"name": "登录", "cases": [{"title": "成功", "priority": "高", "steps": []}]}]}'
+    with pytest.raises(ValidationError):
+        _parse_staged_payload(bad)

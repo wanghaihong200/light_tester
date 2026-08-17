@@ -7,7 +7,7 @@ AI 调用失败不重抛:任务落 failed + error,SSE 推 error。
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -26,7 +26,7 @@ class StagedStepItem(BaseModel):
 
 class StagedCaseItem(BaseModel):
     title: str = Field(min_length=1, max_length=500)
-    priority: str  # P0/P1/P2,由 schema enum 约束
+    priority: Literal["P0", "P1", "P2"]  # 枚举在本地校验——端点可能不强制 output_config(schema enum 不可依赖)
     precondition: str | None = None
     remark: str | None = None
     steps: list[StagedStepItem] = Field(default_factory=list)
