@@ -89,9 +89,9 @@ def _decode_mvn(b: bytes) -> str:
 
 
 def run_mvn_compile(wc: Path) -> MvnResult:
-    # Windows 下 mvn 是 .cmd 批处理,subprocess 不经 shell 直调 "mvn" 会 FileNotFoundError,
-    # 必须用 shutil.which 按 PATHEXT 解析全路径(E2E 实测缺陷)
-    mvn_bin = shutil.which("mvn")
+    # Windows 下 mvn 是 .cmd 批处理,且 Maven bin 同时含无扩展名 Unix sh 脚本 "mvn",
+    # shutil.which("mvn") 会先命中后者导致 WinError 193;必须优先解析 mvn.cmd
+    mvn_bin = shutil.which("mvn.cmd") or shutil.which("mvn")
     if mvn_bin is None:
         raise GitError("mvn", "Maven 不可用,请检查宿主机环境")
     try:

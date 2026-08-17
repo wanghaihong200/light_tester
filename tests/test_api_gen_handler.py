@@ -108,3 +108,22 @@ def test_run_mvn_compile_mvn_not_on_path(tmp_path, monkeypatch):
     monkeypatch.setattr(api_gen.shutil, "which", lambda name: None)
     with pytest.raises(api_gen.GitError):
         run_mvn_compile(tmp_path)
+
+
+def test_run_mvn_compile_prefers_mvn_cmd_over_extensionless(tmp_path, monkeypatch):
+    """回归(WinError 193,2026-08-17 E2E):Maven bin 含无扩展名 Unix sh 脚本 "mvn",
+    shutil.which("mvn") 在 Windows 先命中它而无法执行。必须优先 mvn.cmd。"""
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["argv0"] = args[0]
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    def fake_which(name):
+        return "C:/maven/bin/mvn.cmd" if name == "mvn.cmd" else "C:/maven/bin/mvn"
+
+    monkeypatch.setattr(api_gen.shutil, "which", fake_which)
+    monkeypatch.setattr(api_gen.subprocess, "run", fake_run)
+    r = run_mvn_compile(tmp_path)
+    assert r.success is True
+    assert seen["argv0"] == "C:/maven/bin/mvn.cmd"
