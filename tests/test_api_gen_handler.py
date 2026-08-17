@@ -16,6 +16,17 @@ def test_parse_api_files_strips_fence_and_validates():
     assert p.files[0].path == "src/test/java/T.java"
 
 
+def test_parse_api_files_wraps_top_level_array():
+    """E2E 实测:模型会输出顶层数组 + 围栏(结构化输出端点不强制 schema),解析层归一化。
+
+    与 pipeline._parse_staged_payload 的顶层数组归一化同构(计划 3 的既有教训)。
+    """
+    text = '```json\n[{"path":"src/test/java/T.java","content":"class T{}"},{"path":"src/test/resources/test.properties","content":"k=v"}]\n```'
+    p = parse_api_files(text)
+    assert len(p.files) == 2
+    assert p.files[0].path == "src/test/java/T.java"
+
+
 def test_write_files_rejects_traversal(tmp_path):
     with pytest.raises(Exception):
         write_files(tmp_path, [{"path": "../x.java", "content": "x"}])

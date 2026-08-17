@@ -41,8 +41,15 @@ class MvnResult(BaseModel):
 
 
 def parse_api_files(text: str) -> ApiFilesPayload:
+    """解析 AI 输出并归一化后做 pydantic 校验。
+
+    与 pipeline._parse_staged_payload 同构:结构化输出端点不强制 schema 时模型会
+    输出围栏 + 顶层数组(2026-08-17 E2E 实测),解析层兜底归一化为 {"files": [...]}。
+    """
     import json
     data = json.loads(_strip_code_fence(text))
+    if isinstance(data, list):
+        data = {"files": data}
     return ApiFilesPayload.model_validate(data)
 
 
