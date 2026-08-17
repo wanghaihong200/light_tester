@@ -1,0 +1,202 @@
+"""Git 服务层:subprocess 直调 git.exe。token 拼入 URL,绝不落日志。"""
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Literal
+from urllib.parse import urlparse
+
+from pydantic import BaseModel
+
+from app.config import settings
+
+
+class GitError(Exception):
+    def __init__(self, stage: str, message: str):
+        self.stage = stage
+        self.message = message
+        super().__init__(f"[{stage}] {message}")
+
+
+class SyncResult(BaseModel):
+    cloned: bool = False
+    updated: bool = False
+    failed: bool = False
+    branch: str = ""
+    commit_short: str = ""
+    error: str | None = None
+
+
+class FileNode(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+    children: list["FileNode"] | None = None
+
+
+class ChangeFile(BaseModel):
+    path: str
+    status: Literal["added", "modified", "deleted"]
+    tracked: bool
+
+
+_FILTER_DIRS = {".git", "target", ".idea", ".mvn", "node_modules"}
+_TIMEOUT_DEFAULT = 30
+_TIMEOUT_CLONE = 120
+
+
+def working_copy_path(project) -> Path:
+    return settings.repos_dir / f"repo_{project.id}"
+
+
+def validate_repo_url(url: str) -> None:
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not p.netloc:
+        raise GitError("url", "git_repo_url 必须是 http(s) 且 host 非空")
+
+
+def _sanitize(text: str, token: str | None) -> str:
+    if token:
+        text = text.replace(token, "***")
+    return text
+
+
+def build_remote_url(project) -> str:
+    """拼装访问远程仓库的 URL。
+
+    内部使用,不落日志。scheme 分流:
+    - file://  : 本地仓库(测试/本地),无需 token,原样返回。
+    - http(s):// : 远程 GitLab,要求配置 git_token,token 拼入 userinfo。
+    - 其他    : 抛 GitError(stage=url)。
+
+    注:此处不复用 validate_repo_url,因其严格禁止 file 协议;在生产 API 入口
+    (create_job,Task 6)会调用 validate_repo_url 强制 http(s)。本地 file://
+    仅在测试 ensure_repo/sync_repo 路径出现。
+    """
+    url = project.git_repo_url or ""
+    p = urlparse(url)
+    scheme = p.scheme.lower()
+    if scheme == "file":
+        return url
+    if scheme in ("http", "https"):
+        if not p.netloc:
+            raise GitError("url", "git_repo_url 必须是 http(s) 或 file 且 host 非空")
+        if not project.git_token:
+            raise GitError("auth", "项目未配置 git_token")
+        return f"{p.scheme}://oauth2:{project.git_token}@{p.netloc}{p.path}"
+    raise GitError("url", "git_repo_url 必须是 http(s) 或 file 且 host 非空")
+
+
+def _run(args: list[str], cwd: Path, token: str | None = None, timeout: int = _TIMEOUT_DEFAULT) -> str:
+    """跑 git 子进程,失败 raise GitError(stderr 脱敏)。"""
+    try:
+        r = subprocess.run(args, cwd=cwd, capture_output=True, timeout=timeout, text=True, encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        raise GitError("git", "git 不可用,请检查宿主机环境")
+    if r.returncode != 0:
+        raise GitError(args[0] if args else "git", _sanitize(r.stderr or r.stdout, token))
+    return r.stdout
+
+
+def ensure_repo(project) -> Path:
+    wc = working_copy_path(project)
+    if wc.exists() and (wc / ".git").exists():
+        return wc
+    url = build_remote_url(project)
+    wc.parent.mkdir(parents=True, exist_ok=True)
+    _run(["git", "clone", "-q", url, str(wc)], cwd=settings.repos_dir, token=project.git_token, timeout=_TIMEOUT_CLONE)
+    return wc
+
+
+def _current_branch(wc: Path) -> str:
+    return _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=wc).strip()
+
+
+def sync_repo(project) -> SyncResult:
+    wc = working_copy_path(project)
+    if not (wc.exists() and (wc / ".git").exists()):
+        ensure_repo(project)
+        branch = _current_branch(wc)
+        commit = _run(["git", "rev-parse", "--short", "HEAD"], cwd=wc).strip()
+        return SyncResult(cloned=True, branch=branch, commit_short=commit)
+    url = build_remote_url(project)
+    # 显式 refspec:`git fetch <url>` 仅写 FETCH_HEAD,不更新 refs/remotes/origin/*;
+    # 后续 reset --hard origin/<branch> 依赖 remote-tracking ref,故须显式映射。
+    _run(["git", "fetch", "-q", url, "+refs/heads/*:refs/remotes/origin/*"], cwd=wc, token=project.git_token)
+    branch = _current_branch(wc)
+    _run(["git", "reset", "--hard", "-q", f"origin/{branch}"], cwd=wc)
+    commit = _run(["git", "rev-parse", "--short", "HEAD"], cwd=wc).strip()
+    return SyncResult(updated=True, branch=branch, commit_short=commit)
+
+
+def list_files(project) -> FileNode:
+    wc = working_copy_path(project)
+    if not (wc.exists() and (wc / ".git").exists()):
+        raise GitError("repo", "working copy 不存在,请先同步")
+
+    def build(rel: Path) -> FileNode:
+        full = wc / rel
+        name = rel.name or str(wc.name)
+        if full.is_dir():
+            children = []
+            for child in sorted(full.iterdir()):
+                if child.name in _FILTER_DIRS:
+                    continue
+                children.append(build(rel / child.name))
+            return FileNode(name=name, path=rel.as_posix(), is_dir=True, children=children)
+        return FileNode(name=name, path=rel.as_posix(), is_dir=False, children=None)
+
+    return build(Path(""))
+
+
+def read_file(project, rel_path: str) -> str:
+    wc = working_copy_path(project)
+    full = (wc / rel_path).resolve()
+    try:
+        full.relative_to(wc.resolve())
+    except ValueError:
+        raise GitError("path", "路径越界")
+    if ".git" in Path(rel_path).parts:
+        raise GitError("path", "禁止访问 .git")
+    if not full.exists() or not full.is_file():
+        raise GitError("path", "文件不存在")
+    data = full.read_bytes()
+    if b"\x00" in data:
+        raise GitError("path", "二进制文件不支持预览")
+    return data.decode("utf-8", errors="replace")
+
+
+def git_status(project) -> list[ChangeFile]:
+    wc = working_copy_path(project)
+    if not (wc.exists() and (wc / ".git").exists()):
+        raise GitError("repo", "working copy 不存在,请先同步")
+    tracked = set(_run(["git", "ls-files"], cwd=wc).split())
+    out = _run(["git", "status", "--porcelain"], cwd=wc)
+    result: list[ChangeFile] = []
+    for line in out.splitlines():
+        if not line:
+            continue
+        xy, path = line[:2], line[3:]
+        # porcelain v1: 两个状态码 XY;未跟踪 ?? ;修改  M;删除  D 等
+        if xy == "??":
+            result.append(ChangeFile(path=path, status="added", tracked=False))
+        elif "D" in xy:
+            result.append(ChangeFile(path=path, status="deleted", tracked=True))
+        elif "M" in xy or "A" in xy:
+            result.append(ChangeFile(path=path, status="modified" if "M" in xy else "added", tracked=True))
+    return result
+
+
+def list_remote_branches(project) -> list[str]:
+    wc = working_copy_path(project)
+    if not (wc.exists() and (wc / ".git").exists()):
+        raise GitError("repo", "working copy 不存在,请先同步")
+    out = _run(["git", "branch", "-r"], cwd=wc)
+    branches = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or "->" in line:
+            continue
+        if line.startswith("origin/"):
+            branches.append(line[len("origin/"):])
+    return branches
