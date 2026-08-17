@@ -46,7 +46,9 @@ _TIMEOUT_CLONE = 120
 
 
 def working_copy_path(project) -> Path:
-    return settings.repos_dir / f"repo_{project.id}"
+    # 必须归一为绝对路径:settings.repos_dir 默认是相对路径("../data/repos"),
+    # 若以相对形式拼进 clone 的 cwd+target 会被二次拼接成 data/data/repos(E2E 实测缺陷)
+    return settings.repos_dir.resolve() / f"repo_{project.id}"
 
 
 def validate_repo_url(url: str) -> None:
@@ -104,7 +106,7 @@ def ensure_repo(project) -> Path:
         return wc
     url = build_remote_url(project)
     wc.parent.mkdir(parents=True, exist_ok=True)
-    _run(["git", "clone", "-q", url, str(wc)], cwd=settings.repos_dir, token=project.git_token, timeout=_TIMEOUT_CLONE)
+    _run(["git", "clone", "-q", url, str(wc)], cwd=wc.parent, token=project.git_token, timeout=_TIMEOUT_CLONE)
     return wc
 
 

@@ -110,3 +110,29 @@ def test_list_remote_branches(repos_dir, tmp_path):
     git_service.sync_repo(proj)
     branches = git_service.list_remote_branches(proj)
     assert "master" in branches
+
+
+def test_working_copy_path_relative_repos_dir_no_double_nest(tmp_path, monkeypatch):
+    """回归(2026-08-17 E2E 实测):repos_dir 为相对路径时 clone 目标被相对 cwd 二次拼接,
+    落到 data/data/repos/repo_N。working_copy_path 必须归一为绝对路径。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(git_service.settings, "repos_dir", Path("repos"))
+    from app.models import Project
+
+    proj = Project(id=99, name="p", git_repo_url="https://x.git", git_token="t")
+    wc = working_copy_path(proj)
+    assert wc.is_absolute()
+    assert wc == (tmp_path / "repos" / "repo_99").resolve()  # 恰好一层 repos,无嵌套
+
+
+def test_ensure_repo_relative_repos_dir_clones_once(tmp_path, monkeypatch):
+    """回归:相对 repos_dir 下 ensure_repo 两次调用幂等,clone 只落一层 repos/repo_N。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(git_service.settings, "repos_dir", Path("repos"))
+    bare = _make_bare_origin(tmp_path)
+    proj = _project(f"file:///{bare.as_posix()}")
+    wc1 = git_service.ensure_repo(proj)
+    wc2 = git_service.ensure_repo(proj)  # 第二次应直接返回,不得再 clone 报"目录非空"
+    assert wc1 == wc2
+    assert (wc1 / ".git").exists()
+    assert not (tmp_path / "repos" / "repos").exists()
