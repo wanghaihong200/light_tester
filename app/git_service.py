@@ -200,3 +200,69 @@ def list_remote_branches(project) -> list[str]:
         if line.startswith("origin/"):
             branches.append(line[len("origin/"):])
     return branches
+
+
+class PushConflict(GitError):
+    def __init__(self, message: str):
+        super().__init__("rebase", message)
+
+
+class NothingToCommit(GitError):
+    def __init__(self):
+        super().__init__("nothing_to_commit", "没有变更可提交")
+
+
+class PushResult(BaseModel):
+    ok: bool
+    branch: str
+    commit_short: str
+    pushed_files: list[str]
+
+
+def push_files(project, files: list[str], branch: str, commit_msg: str) -> PushResult:
+    wc = working_copy_path(project)
+    if not (wc.exists() and (wc / ".git").exists()):
+        raise GitError("repo", "working copy 不存在,请先同步")
+    token = project.git_token
+    # 路径越界校验
+    for f in files:
+        full = (wc / f).resolve()
+        try:
+            full.relative_to(wc.resolve())
+        except ValueError:
+            raise GitError("path", f"路径越界:{f}")
+    if not files:
+        raise NothingToCommit()
+    # checkout 分支:本地有则切,无则从 origin 创建 track
+    branches_out = _run(["git", "branch", "--list", branch], cwd=wc)
+    if branches_out.strip():
+        _run(["git", "checkout", "-q", branch], cwd=wc)
+    else:
+        # 远程是否有该分支
+        remote_branches = list_remote_branches(project)
+        if branch in remote_branches:
+            _run(["git", "fetch", "-q", "origin", branch], cwd=wc, token=token)
+            _run(["git", "checkout", "-q", "-B", branch, f"origin/{branch}"], cwd=wc)
+        else:
+            _run(["git", "checkout", "-q", "-b", branch], cwd=wc)
+    # pull --rebase(远程分支存在时)
+    if branch in list_remote_branches(project):
+        r = subprocess.run(["git", "pull", "-q", "--rebase", "origin", branch], cwd=wc, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            # 冲突→abort
+            subprocess.run(["git", "rebase", "--abort"], cwd=wc, capture_output=True)
+            raise PushConflict("与远程有冲突,请检查 API 文档或重试同步")
+    # add + commit
+    for f in files:
+        _run(["git", "add", "--", f], cwd=wc)
+    # 是否有暂存变更
+    diff = _run(["git", "diff", "--cached", "--name-only"], cwd=wc)
+    if not diff.strip():
+        raise NothingToCommit()
+    _run(["git", "commit", "-qm", commit_msg], cwd=wc)
+    commit_short = _run(["git", "rev-parse", "--short", "HEAD"], cwd=wc).strip()
+    # push
+    r = subprocess.run(["git", "push", "-q", "origin", branch], cwd=wc, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise GitError("push", _sanitize(r.stderr or r.stdout, token))
+    return PushResult(ok=True, branch=branch, commit_short=commit_short, pushed_files=files)
