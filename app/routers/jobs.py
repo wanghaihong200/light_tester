@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -52,6 +53,7 @@ async def job_events(job_id: int, db: Session = Depends(get_db)):
 class JobCreate(BaseModel):
     document_id: int
     target_module_id: int
+    job_type: Literal["case_generation", "api_generation"] = "case_generation"
 
 
 @router.post("/projects/{project_id}/jobs", response_model=GenerationJobOut, status_code=201)
@@ -65,10 +67,18 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
     module = db.get(Module, payload.target_module_id)
     if module is None or module.project_id != project_id:
         raise HTTPException(400, "invalid target_module_id")
+    # api_generation 必须有有效 http(s) git_repo_url(case_generation 不要求)
+    if payload.job_type == "api_generation":
+        from app.git_service import GitError, validate_repo_url
+        try:
+            validate_repo_url(project.git_repo_url or "")
+        except GitError:
+            raise HTTPException(400, "项目未配置有效的 git_repo_url")
     job = GenerationJob(
         project_id=project_id,
         document_id=payload.document_id,
         target_module_id=payload.target_module_id,
+        job_type=payload.job_type,
         model=settings.ai_model,
     )
     db.add(job)

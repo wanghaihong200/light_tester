@@ -115,6 +115,14 @@ async def process_job(job_id: int) -> None:
         if job is None:
             return
 
+        # 按 job_type 分发:api_generation 走接口生成 handler,case_generation 走既有逻辑
+        if job.job_type == "api_generation":
+            # lazy import 避免 pipeline ↔ api_gen 循环导入
+            # (api_gen 顶部 from app.jobs.pipeline import _strip_code_fence)
+            from app.jobs.api_gen import process_api_job
+            await process_api_job(job_id)
+            return
+
         # 标记运行中
         job.status = "running"
         job.model = settings.ai_model
