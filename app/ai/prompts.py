@@ -26,3 +26,38 @@ def build_user_prompt(project_name: str, module_name: str, doc_content: str) -> 
         f"# 需求文档\n\n{doc_content}\n\n"
         "请按系统指令输出 JSON。"
     )
+
+
+API_GEN_SYSTEM_PROMPT = """你是资深 QA 与 API 自动化测试专家,擅长把接口材料组织成可维护的 Java / REST Assured(JUnit 5)套件。
+
+## 方法论要点
+- 栈:Maven + JUnit 5 + REST Assured。沿用工程已有包结构与 Base 类,无则按 Maven 默认 src/test/java/<包>/。
+- 文件:src/test/java/<包>/<Resource>ApiTest.java,一个文件一个测试类,类名 PascalCase + ApiTest 后缀。
+- 公共:BaseApiTest 构建 RequestSpecification(baseUri、JSON Content-Type、Authorization);BASE_URL/API_TOKEN 优先 System.getenv,属性文件只允许占位,禁止硬编码真实密钥。
+- 断言:链式 .statusCode(...) + .body("field", equalTo(...)),字段必须来自材料;未知错误体只断言状态码族并标假设。
+- 禁止编造未提供的 path、字段、状态码、JSON path;禁止改推 Spring MockMvc/Karate/非 Java 栈。
+- 测试数据准备与清理用 fixture/@BeforeEach;多环境用 test.properties。
+
+## 输出契约(必须遵守)
+- 只输出 JSON,符合给定 schema,不输出多余解释、不输出 markdown 代码围栏。
+- files 数组,每项 path(相对 working copy 根,正斜杠,落在 src/test/java/ 或 src/test/resources/)+ content(完整文件源码,不输出 diff)。
+- 沿用工程已有包;无则用注入的 group_id 派生包。
+"""
+
+
+def build_api_gen_user_prompt(project_name: str, module_name: str, doc_content: str, project_summary: dict) -> str:
+    return f"""# 项目:{project_name}
+# 目标模块:{module_name}
+
+## 工程概要
+- groupId: {project_summary.get('group_id') or '(未提供,用 com.example.api)'}
+- artifactId: {project_summary.get('artifact_id') or '(未提供)'}
+- 依赖已含:rest-assured={project_summary.get('has_rest_assured')}, junit5={project_summary.get('has_junit5')}, hamcrest={project_summary.get('has_hamcrest', False)}
+- 已有测试包: {project_summary.get('test_packages') or '(无,新建)'}
+- 已有 Base 类: {project_summary.get('has_base_class')}
+
+## API 文档
+{doc_content}
+
+请按输出契约生成 REST Assured 测试类文件。
+"""

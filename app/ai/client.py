@@ -8,7 +8,12 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
-from app.ai.prompts import CASE_SYSTEM_PROMPT, build_user_prompt
+from app.ai.prompts import (
+    API_GEN_SYSTEM_PROMPT,
+    CASE_SYSTEM_PROMPT,
+    build_api_gen_user_prompt,
+    build_user_prompt,
+)
 from app.config import settings
 
 _client = AsyncAnthropic()  # 从 env ANTHROPIC_API_KEY 解析
@@ -80,6 +85,44 @@ async def stream_case_generation(
         system=CASE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_user_prompt(project_name, module_name, doc_content)}],
         output_config={"format": {"type": "json_schema", "schema": CASE_JSON_SCHEMA}},
+    )
+    async with _stream_call(**params) as stream:
+        async for t in stream.text_stream:
+            yield ("delta", t)
+        final = await stream.get_final_message()
+        yield ("usage", (final.usage.input_tokens, final.usage.output_tokens))
+
+
+API_FILES_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "files": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "pattern": r"^src/test/(java|resources)/.+$"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["files"],
+    "additionalProperties": False,
+}
+
+
+async def stream_api_generation(
+    project_name: str, module_name: str, doc_content: str, project_summary: dict
+) -> AsyncIterator[tuple[str, Any]]:
+    params = dict(
+        model=settings.ai_model,
+        max_tokens=64000,
+        system=API_GEN_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": build_api_gen_user_prompt(project_name, module_name, doc_content, project_summary)}],
+        output_config={"format": {"type": "json_schema", "schema": API_FILES_JSON_SCHEMA}},
     )
     async with _stream_call(**params) as stream:
         async for t in stream.text_stream:
