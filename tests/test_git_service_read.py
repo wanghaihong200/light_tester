@@ -8,8 +8,8 @@ from app import git_service
 from app.git_service import GitError, working_copy_path, validate_repo_url
 
 
-def _make_bare_origin(tmp_path: Path) -> Path:
-    """造一个 bare 仓库作为 origin,含一个初始 commit。"""
+def _make_bare_origin(tmp_path: Path, name: str = "origin.git") -> Path:
+    """造一个 bare 仓库作为 origin,含一个初始 commit。name 用于模拟仓库项目名。"""
     work = tmp_path / "origin_work"
     work.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=work, check=True)
@@ -18,7 +18,7 @@ def _make_bare_origin(tmp_path: Path) -> Path:
     (work / "README.md").write_text("hello", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=work, check=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=work, check=True)
-    bare = tmp_path / "origin.git"
+    bare = tmp_path / name
     subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
     return bare
 
@@ -154,3 +154,30 @@ def test_git_status_expands_untracked_dirs_and_filters_target(repos_dir, tmp_pat
     assert "src/test/java/A.java" in paths
     assert "src/" not in paths
     assert not any(p == "target" or p.startswith("target/") for p in paths)
+
+
+def test_list_files_root_name_from_repo_url(repos_dir, tmp_path):
+    """文件树根节点显示 GitLab 项目名(取 git_repo_url 末段去 .git),而非本地目录名 repo_N。"""
+    bare = _make_bare_origin(tmp_path, name="my-api-repo.git")
+    proj = _project(f"file:///{bare.as_posix()}")
+    git_service.sync_repo(proj)
+    tree = git_service.list_files(proj)
+    assert tree.name == "my-api-repo"
+
+
+def test_list_files_root_name_url_without_dotgit(repos_dir, tmp_path):
+    bare = _make_bare_origin(tmp_path, name="plain-name")
+    proj = _project(f"file:///{bare.as_posix()}")
+    git_service.sync_repo(proj)
+    tree = git_service.list_files(proj)
+    assert tree.name == "plain-name"
+
+
+def test_list_files_root_name_fallback_when_no_url(repos_dir, tmp_path):
+    """git_repo_url 为空(历史数据/异常)时回退本地目录名,不得抛错。"""
+    bare = _make_bare_origin(tmp_path)
+    proj = _project(f"file:///{bare.as_posix()}")
+    git_service.sync_repo(proj)
+    proj.git_repo_url = None  # 克隆后再清空,模拟 URL 缺失
+    tree = git_service.list_files(proj)
+    assert tree.name == "repo_1"

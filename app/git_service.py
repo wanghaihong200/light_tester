@@ -131,6 +131,16 @@ def sync_repo(project) -> SyncResult:
     return SyncResult(updated=True, branch=branch, commit_short=commit)
 
 
+def _repo_display_name(project, wc: Path) -> str:
+    """文件树根节点显示名:取 git_repo_url 末段项目名(去 .git 后缀),
+    与 GitLab 页面上的仓库名一致;URL 缺失/解析不出时回退本地目录名。"""
+    path = urlparse(project.git_repo_url or "").path.rstrip("/")
+    last = path.rsplit("/", 1)[-1] if path else ""
+    if last.endswith(".git"):
+        last = last[: -len(".git")]
+    return last or wc.name
+
+
 def list_files(project) -> FileNode:
     wc = working_copy_path(project)
     if not (wc.exists() and (wc / ".git").exists()):
@@ -138,7 +148,7 @@ def list_files(project) -> FileNode:
 
     def build(rel: Path) -> FileNode:
         full = wc / rel
-        name = rel.name or str(wc.name)
+        name = rel.name or _repo_display_name(project, wc)
         if full.is_dir():
             children = []
             for child in sorted(full.iterdir()):
