@@ -186,7 +186,11 @@ def test_sse_endpoint_snapshot_and_404(client):
         p = Project(name="SSE项目")
         db.add(p)
         db.flush()
-        job = GenerationJob(project_id=p.id, document_id=None, target_module_id=None, status="completed")
+        job = GenerationJob(
+            project_id=p.id, document_id=None, target_module_id=None, status="completed",
+            output_text="历史任务流式输出", input_tokens=11, output_tokens=22,
+            artifacts=[{"path": "a.java", "action": "created"}, {"path": "b.java", "action": "overwritten"}],
+        )
         db.add(job)
         db.commit()
         jid = job.id
@@ -196,6 +200,11 @@ def test_sse_endpoint_snapshot_and_404(client):
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/event-stream")
         lines = [ln for ln in r.iter_lines() if ln.strip()]
-    assert len(lines) == 1
-    assert lines[0].startswith("data: ")
+    assert len(lines) == 2  # 终态:status 快照 + 完整 snapshot 后关流
     assert json.loads(lines[0][len("data: "):]) == {"type": "status", "status": "completed"}
+    snap = json.loads(lines[1][len("data: "):])
+    assert snap["type"] == "snapshot"
+    assert snap["status"] == "completed" and snap["error"] is None
+    assert snap["output_text"] == "历史任务流式输出"
+    assert snap["input_tokens"] == 11 and snap["output_tokens"] == 22
+    assert snap["files_count"] == 2 and snap["staged_count"] == 0

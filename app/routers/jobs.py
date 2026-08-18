@@ -29,11 +29,29 @@ async def job_events(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
     queue = bus.subscribe(job_id)
     snapshot_status = job.status
+    # ORM 陷阱:Depends 的 db 在生成器执行时可能已关闭,先取值存局部变量
+    _job_status = job.status
+    _job_error = job.error
+    _job_output_text = job.output_text
+    _job_input_tokens = job.input_tokens
+    _job_output_tokens = job.output_tokens
+    _files_count = len(job.artifacts or [])
+    _staged_count = db.query(StagedCase).filter(StagedCase.job_id == job_id, StagedCase.is_deleted.is_(False)).count()
 
     async def event_stream():
         try:
             yield _sse({"type": "status", "status": snapshot_status})
             if snapshot_status in ("completed", "failed"):
+                yield _sse({
+                    "type": "snapshot",
+                    "status": _job_status,
+                    "error": _job_error,
+                    "output_text": _job_output_text,
+                    "input_tokens": _job_input_tokens,
+                    "output_tokens": _job_output_tokens,
+                    "files_count": _files_count,
+                    "staged_count": _staged_count,
+                })
                 return
             while True:
                 event = await queue.get()
