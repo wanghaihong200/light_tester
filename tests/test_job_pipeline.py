@@ -179,6 +179,65 @@ async def test_case_job_tokens_survive_parse_failure(monkeypatch, tmp_path):
         db.close()
 
 
+async def _fake_stream_with_thinking(project_name, module_name, doc_content):
+    yield ("thinking", "分析:文档含登录需求,拆为功能点…")
+    yield ("delta", '{"feature_points": [{"name": "登录", "cases": [')
+    yield ("delta", '{"title": "登录成功", "priority": "P0", "steps": [{"action": "输入", "expected": "成功"}]}]}]}')
+    yield ("usage", (100, 50))
+
+
+async def test_case_job_persists_thinking_text(monkeypatch, tmp_path):
+    """计划6:思考摘要随流落库,completed 后 thinking_text 为思考全文。"""
+    import app.jobs.pipeline as pl
+
+    doc_file = tmp_path / "需求.md"
+    doc_file.write_text("# 登录需求\n", encoding="utf-8")
+    monkeypatch.setattr(pl, "stream_case_generation", _fake_stream_with_thinking)
+    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 1.5)
+    db = SessionLocal()
+    try:
+        p, m, d = _seed(db, str(doc_file))
+        job = GenerationJob(project_id=p.id, document_id=d.id, target_module_id=m.id)
+        db.add(job)
+        db.commit()
+        await pl.process_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "completed"
+        assert got.thinking_text == "分析:文档含登录需求,拆为功能点…"
+        assert got.output_text is not None and '"feature_points"' in got.output_text
+    finally:
+        db.close()
+
+
+async def test_case_job_thinking_survives_parse_failure(monkeypatch, tmp_path):
+    """计划6:思考先于产物流到达,解析抛异常时 thinking_text 也必须已落库(与 A3 同理)。"""
+    import app.jobs.pipeline as pl
+
+    async def garbage_with_thinking(project_name, module_name, doc_content):
+        yield ("thinking", "思考中…")
+        yield ("delta", "不是合法 JSON")
+        yield ("usage", (150, 250))
+
+    doc_file = tmp_path / "需求.md"
+    doc_file.write_text("# 需求", encoding="utf-8")
+    monkeypatch.setattr(pl, "stream_case_generation", garbage_with_thinking)
+    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 2.5)
+    db = SessionLocal()
+    try:
+        p, m, d = _seed(db, str(doc_file))
+        job = GenerationJob(project_id=p.id, document_id=d.id, target_module_id=m.id)
+        db.add(job)
+        db.commit()
+        await pl.process_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "failed"
+        assert got.thinking_text == "思考中…"
+    finally:
+        db.close()
+
+
 def test_sse_endpoint_snapshot_and_404(client):
     assert client.get("/api/jobs/999999/events").status_code == 404
     db = SessionLocal()

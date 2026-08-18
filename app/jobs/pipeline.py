@@ -73,12 +73,21 @@ STREAM_FLUSH_THRESHOLD = 4096
 
 def flush_output_text(db: Session, job_id: int, buf: list[str]) -> None:
     """把缓冲的流文本增量拼进 generation_jobs.output_text(SQL 侧 CONCAT,不做读改写)。"""
+    _append_column(db, job_id, buf, "output_text")
+
+
+def flush_thinking_text(db: Session, job_id: int, buf: list[str]) -> None:
+    """思考摘要增量拼接,与 output_text 同构(计划6)。"""
+    _append_column(db, job_id, buf, "thinking_text")
+
+
+def _append_column(db: Session, job_id: int, buf: list[str], column: str) -> None:
     if not buf:
         return
     chunk = "".join(buf)
     buf.clear()
     db.execute(
-        sql_text("UPDATE generation_jobs SET output_text = CONCAT(COALESCE(output_text, ''), :c) WHERE id = :id"),
+        sql_text(f"UPDATE generation_jobs SET {column} = CONCAT(COALESCE({column}, ''), :c) WHERE id = :id"),
         {"c": chunk, "id": job_id},
     )
     db.commit()
@@ -134,6 +143,7 @@ async def process_job(job_id: int) -> None:
             return
 
         stream_buf: list[str] = []
+        thinking_buf: list[str] = []
 
         # 按 job_type 分发:api_generation 走接口生成 handler,case_generation 走既有逻辑
         if job.job_type == "api_generation":
@@ -159,7 +169,12 @@ async def process_job(job_id: int) -> None:
         # AI 流式生成
         chunks: list[str] = []
         async for kind, value in stream_case_generation(job.project.name, module_name, content):
-            if kind == "delta":
+            if kind == "thinking":
+                thinking_buf.append(value)
+                await bus.publish(job.id, {"type": "thinking_delta", "text": value})
+                if sum(len(s) for s in thinking_buf) >= STREAM_FLUSH_THRESHOLD:
+                    flush_thinking_text(db, job.id, thinking_buf)
+            elif kind == "delta":
                 chunks.append(value)
                 stream_buf.append(value)
                 await bus.publish(job.id, {"type": "delta", "text": value})
@@ -192,6 +207,7 @@ async def process_job(job_id: int) -> None:
 
         # 完成
         flush_output_text(db, job.id, stream_buf)
+        flush_thinking_text(db, job.id, thinking_buf)
         job.finished_at = datetime.now()
         job.status = "completed"
         db.commit()
@@ -205,6 +221,7 @@ async def process_job(job_id: int) -> None:
             job.error = str(exc)[:2000]
             job.finished_at = datetime.now()
             flush_output_text(db, job.id, stream_buf)
+            flush_thinking_text(db, job.id, thinking_buf)
             db.commit()
         await bus.publish(job_id, {"type": "error", "message": str(exc)[:500]})
 
