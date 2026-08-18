@@ -18,7 +18,9 @@ from app.ai.client import estimate_cost, stream_api_generation
 from app.config import settings
 from app.database import SessionLocal
 from app.jobs.bus import bus
-from app.jobs.pipeline import _strip_code_fence
+from datetime import datetime
+
+from app.jobs.pipeline import _strip_code_fence, STREAM_FLUSH_THRESHOLD, flush_output_text
 from app.models import GenerationJob, Module
 from app.git_service import working_copy_path, ensure_repo, GitError
 
@@ -174,6 +176,7 @@ async def process_api_job(job_id: int) -> None:
     """接口生成核心 handler。供 pipeline.process_job 按 job_type 分发调用。"""
     db = SessionLocal()
     try:
+        stream_buf: list[str] = []  # 跨轮+异常路径共用
         job = db.get(GenerationJob, job_id)
         if job is None:
             return
@@ -186,6 +189,7 @@ async def process_api_job(job_id: int) -> None:
             await bus.publish(job_id, event)
 
         job.status = "running"
+        job.started_at = datetime.now()
         job.model = settings.ai_model
         db.commit()
         await publish({"type": "status", "status": "running"})
@@ -200,13 +204,20 @@ async def process_api_job(job_id: int) -> None:
 
         # AI 生成(第 0 轮)
         chunks: list[str] = []
-        in_tok = out_tok = 0
         async for kind, value in stream_api_generation(project.name, module_name, content, summary):
             if kind == "delta":
                 chunks.append(value)
+                stream_buf.append(value)
                 await publish({"type": "delta", "text": value})
+                if sum(len(s) for s in stream_buf) >= STREAM_FLUSH_THRESHOLD:
+                    flush_output_text(db, job_id, stream_buf)
             elif kind == "usage":
-                in_tok, out_tok = value
+                in_t, out_t = value
+                # 累计,不再覆盖;ORM 侧 None 先归零(column default 在 DB 层)
+                job.input_tokens = (job.input_tokens or 0) + in_t
+                job.output_tokens = (job.output_tokens or 0) + out_t
+                job.cost_usd = estimate_cost(job.model, job.input_tokens, job.output_tokens)
+                db.commit()
 
         artifacts: list[dict] = []
         last_error: str | None = None
@@ -231,30 +242,42 @@ async def process_api_job(job_id: int) -> None:
                 break
             # 修复轮
             await publish({"type": "stage", "stage": "fixing", "round": round_idx + 1})
+            flush_output_text(db, job_id, stream_buf)
+            stream_buf.append("\n\n===== 修复轮 %d =====\n\n" % (round_idx + 1))
+            flush_output_text(db, job_id, stream_buf)
             fix_prompt_extra = f"\n## 上次编译失败,错误如下(尾部)\n{mvn.output[-6000:]}\n本次写的文件:{[a['path'] for a in artifacts]}\n请只输出需要修改的文件,path 必须与原文件一致。"
             # 把修复提示拼进新一轮 AI 调用(复用 stream_api_generation,在文档后追加)
             chunks = []
             async for kind, value in stream_api_generation(project.name, module_name, content + fix_prompt_extra, summary):
                 if kind == "delta":
                     chunks.append(value)
+                    stream_buf.append(value)
                     await publish({"type": "delta", "text": value})
+                    if sum(len(s) for s in stream_buf) >= STREAM_FLUSH_THRESHOLD:
+                        flush_output_text(db, job_id, stream_buf)
                 elif kind == "usage":
-                    in_tok, out_tok = value
+                    in_t, out_t = value
+                    # 累计,不再覆盖;ORM 侧 None 先归零(column default 在 DB 层)
+                    job.input_tokens = (job.input_tokens or 0) + in_t
+                    job.output_tokens = (job.output_tokens or 0) + out_t
+                    job.cost_usd = estimate_cost(job.model, job.input_tokens, job.output_tokens)
+                    db.commit()
 
-        job.input_tokens = in_tok
-        job.output_tokens = out_tok
-        job.cost_usd = estimate_cost(job.model, in_tok, out_tok)
         job.artifacts = [{"path": p, "action": a} for p, a in written_by_path.items()]
         artifacts = job.artifacts
 
         if not mvn.success:
             job.status = "failed"
             job.error = (last_error or "mvn 失败")[-2000:]
+            job.finished_at = datetime.now()
+            flush_output_text(db, job_id, stream_buf)
             db.commit()
             await publish({"type": "error", "message": (last_error or "mvn 失败")[:500]})
             return
 
         job.status = "completed"
+        job.finished_at = datetime.now()
+        flush_output_text(db, job_id, stream_buf)
         db.commit()
         await publish({"type": "done", "files_count": len(artifacts)})
 
@@ -264,6 +287,8 @@ async def process_api_job(job_id: int) -> None:
         if job is not None:
             job.status = "failed"
             job.error = str(exc)[:2000]
+            job.finished_at = datetime.now()
+            flush_output_text(db, job_id, stream_buf)
             db.commit()
         await bus.publish(job_id, {"type": "error", "message": str(exc)[:500]})
     finally:

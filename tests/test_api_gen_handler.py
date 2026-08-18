@@ -5,12 +5,31 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import app.jobs.api_gen as ag
+from app.database import SessionLocal
 from app.jobs import api_gen
-from app.jobs.api_gen import ApiFilesPayload, parse_api_files, write_files, run_mvn_compile, collect_project_summary
+from app.jobs.api_gen import ApiFilesPayload, MvnResult, parse_api_files, write_files, run_mvn_compile, collect_project_summary
+from app.models import Document, GenerationJob, Project
+
+_EMPTY_SUMMARY = {"group_id": None, "artifact_id": None, "has_rest_assured": True,
+                  "has_junit5": True, "has_hamcrest": False, "test_packages": [], "has_base_class": False}
+
+
+def _seed_api_job(db, storage_path):
+    p = Project(name="api任务测试项目", git_repo_url="http://x/repo.git")
+    db.add(p)
+    db.flush()
+    d = Document(project_id=p.id, filename="api.md", storage_path=storage_path)
+    db.add(d)
+    db.commit()
+    job = GenerationJob(project_id=p.id, document_id=d.id, job_type="api_generation")
+    db.add(job)
+    db.commit()
+    return job
 
 
 def test_parse_api_files_strips_fence_and_validates():
-    text = '```json\n{"files":[{"path":"src/test/java/T.java","content":"class T{}"}]}\n```'
+    text = '```json\n{"files":[{"path":"src/test/java/T.java","content":"class T{}"}]}'  + '```'
     p = parse_api_files(text)
     assert len(p.files) == 1
     assert p.files[0].path == "src/test/java/T.java"
@@ -167,8 +186,6 @@ def test_write_files_still_rejects_foreign_tracked(tmp_path):
 
 def test_ai_owned_paths_aggregates_history():
     """_ai_owned_paths 聚合本项目历史 api_generation 任务的 artifacts 路径。"""
-    from app.database import SessionLocal
-    from app.models import GenerationJob, Project
     from app.jobs.api_gen import _ai_owned_paths
 
     db = SessionLocal()
@@ -187,5 +204,76 @@ def test_ai_owned_paths_aggregates_history():
         owned = _ai_owned_paths(db, proj.id)
         assert owned == {"src/test/java/A.java", "src/test/java/B.java",
                          "src/test/resources/test.properties"}
+    finally:
+        db.close()
+
+
+async def test_api_job_accumulates_tokens_across_rounds(monkeypatch, tmp_path):
+    """A3:第 0 轮 + 修复轮两次 AI 调用,tokens 必须是两轮之和(修'末轮覆盖'缺陷)。"""
+    doc_file = tmp_path / "api.md"
+    doc_file.write_text("# API 文档", encoding="utf-8")
+    wc = tmp_path / "wc"
+    (wc / "src/test/java").mkdir(parents=True)
+    calls = {"n": 0}
+
+    async def fake_stream(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield ("delta", '{"files": [{"path": "src/test/java/T.java", "content": "class T{}"}]}')
+            yield ("usage", (1000, 500))
+        else:
+            yield ("delta", '{"files": []}')
+            yield ("usage", (800, 300))
+
+    monkeypatch.setattr(ag, "stream_api_generation", fake_stream)
+    monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
+    monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
+    monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
+    mvn_results = [MvnResult(success=False, output="boom"), MvnResult(success=True, output="ok"), MvnResult(success=True, output="ok")]
+    monkeypatch.setattr(ag, "run_mvn_compile", lambda w: mvn_results.pop(0))
+    monkeypatch.setattr(ag, "estimate_cost", lambda m, i, o: 3.0)
+
+    db = SessionLocal()
+    try:
+        job = _seed_api_job(db, str(doc_file))
+        await ag.process_api_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "completed"
+        assert got.input_tokens == 1800 and got.output_tokens == 800  # 1000+800 / 500+300
+        assert got.output_text.count("===== 修复轮 1 =====") == 1  # A1:两轮输出都被持久化
+        assert "class T{}" in got.output_text
+        assert got.started_at is not None and got.finished_at is not None
+    finally:
+        db.close()
+
+
+async def test_api_job_tokens_survive_mvn_failure(monkeypatch, tmp_path):
+    """A3:mvn 三轮皆败 → failed,但每轮 tokens 都累计落库(E2E job6-9 显示 0/0 的根因)。"""
+    doc_file = tmp_path / "api.md"
+    doc_file.write_text("# API 文档", encoding="utf-8")
+    wc = tmp_path / "wc"
+    (wc / "src/test/java").mkdir(parents=True)
+
+    async def fake_stream(*a, **kw):
+        yield ("delta", '{"files": [{"path": "src/test/java/T.java", "content": "bad"}]}')
+        yield ("usage", (600, 400))
+
+    monkeypatch.setattr(ag, "stream_api_generation", fake_stream)
+    monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
+    monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
+    monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
+    monkeypatch.setattr(ag, "run_mvn_compile", lambda w: MvnResult(success=False, output="编译失败"))
+    monkeypatch.setattr(ag, "estimate_cost", lambda m, i, o: 4.0)
+
+    db = SessionLocal()
+    try:
+        job = _seed_api_job(db, str(doc_file))
+        await ag.process_api_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "failed"
+        assert got.input_tokens == 600 * 3 and got.output_tokens == 400 * 3  # 第0+2 修复轮共三次调用
+        assert got.finished_at is not None
     finally:
         db.close()
