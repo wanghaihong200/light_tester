@@ -59,7 +59,13 @@ def _is_tracked(wc: Path, path: str) -> bool:
     return bool(r.stdout.strip())
 
 
-def write_files(wc: Path, files: list[dict]) -> list[dict]:
+def write_files(wc: Path, files: list[dict], ai_owned: set[str] = frozenset()) -> list[dict]:
+    """AI 产物写盘。
+
+    拒绝越界/.git/覆盖用户手写的已跟踪文件;ai_owned(本项目历史 api_generation
+    任务的 artifacts 路径)中的文件即使已推送变为已跟踪,也允许覆盖——否则
+    生成→推送→再生成的迭代闭环会被"拒绝覆盖已跟踪文件"卡死(job#11 实测)。
+    """
     result = []
     for f in files:
         path = f["path"]
@@ -71,12 +77,34 @@ def write_files(wc: Path, files: list[dict]) -> list[dict]:
         if ".git" in Path(path).parts:
             raise GitError("path", f"禁止写入 .git:{path}")
         action = "overwritten" if full.exists() else "created"
-        if _is_tracked(wc, path):
+        if _is_tracked(wc, path) and path not in ai_owned:
             raise GitError("path", f"拒绝覆盖已跟踪文件:{path}")
         full.parent.mkdir(parents=True, exist_ok=True)
         full.write_text(f["content"], encoding="utf-8", newline="\n")
         result.append({"path": path, "action": action})
     return result
+
+
+def _ai_owned_paths(db, project_id: int) -> set[str]:
+    """聚合本项目历史 api_generation 任务写过的文件路径(artifacts)。
+
+    用于 write_files 的 ai_owned 判定:AI 自己生成过的文件允许再次生成覆盖。
+    """
+    rows = (
+        db.query(GenerationJob.artifacts)
+        .filter(
+            GenerationJob.project_id == project_id,
+            GenerationJob.job_type == "api_generation",
+            GenerationJob.artifacts.isnot(None),
+        )
+        .all()
+    )
+    owned: set[str] = set()
+    for (artifacts,) in rows:
+        for item in artifacts or []:
+            if isinstance(item, dict) and item.get("path"):
+                owned.add(item["path"])
+    return owned
 
 
 def _decode_mvn(b: bytes) -> str:
@@ -182,9 +210,11 @@ async def process_api_job(job_id: int) -> None:
         artifacts: list[dict] = []
         last_error: str | None = None
 
+        # AI 历史产物集合:这些文件即使推送后已跟踪也允许覆盖(再生成迭代)
+        ai_owned = _ai_owned_paths(db, project.id)
         for round_idx in range(MAX_FIX_ROUNDS + 1):  # 0,1,2 = 初始 + 2 修复
             payload = parse_api_files("".join(chunks))
-            artifacts = write_files(wc, [f.model_dump() for f in payload.files])
+            artifacts = write_files(wc, [f.model_dump() for f in payload.files], ai_owned=ai_owned)
             await publish({"type": "stage", "stage": "compiling"})
             mvn = run_mvn_compile(wc)
             if mvn.success:

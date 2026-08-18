@@ -127,3 +127,65 @@ def test_run_mvn_compile_prefers_mvn_cmd_over_extensionless(tmp_path, monkeypatc
     r = run_mvn_compile(tmp_path)
     assert r.success is True
     assert seen["argv0"] == "C:/maven/bin/mvn.cmd"
+
+
+def test_write_files_allows_overwrite_when_ai_owned(tmp_path):
+    """回归(2026-08-18 job#11 实测):AI 生成并推送过的文件再次生成时已变为 git 已跟踪,
+    write_files 拒绝导致任务失败。path 在 ai_owned(AI 历史产物)集合中时应允许覆盖。"""
+    import subprocess as sp
+
+    sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "src/test/resources").mkdir(parents=True)
+    prop = tmp_path / "src/test/resources/test.properties"
+    prop.write_text("old", encoding="utf-8")
+    sp.run(["git", "add", "."], cwd=tmp_path, check=True)
+    sp.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, check=True)
+    sp.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    sp.run(["git", "commit", "-qm", "i"], cwd=tmp_path, check=True)
+    result = write_files(
+        tmp_path,
+        [{"path": "src/test/resources/test.properties", "content": "new"}],
+        ai_owned={"src/test/resources/test.properties"},
+    )
+    assert result == [{"path": "src/test/resources/test.properties", "action": "overwritten"}]
+    assert prop.read_text(encoding="utf-8") == "new"
+
+
+def test_write_files_still_rejects_foreign_tracked(tmp_path):
+    """ai_owned 之外的已跟踪文件(用户手写)仍拒绝覆盖——保护语义不变。"""
+    import subprocess as sp
+
+    sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "T.java").write_text("old", encoding="utf-8")
+    sp.run(["git", "add", "."], cwd=tmp_path, check=True)
+    sp.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, check=True)
+    sp.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    sp.run(["git", "commit", "-qm", "i"], cwd=tmp_path, check=True)
+    with pytest.raises(Exception):
+        write_files(tmp_path, [{"path": "T.java", "content": "new"}], ai_owned={"other/path.java"})
+
+
+def test_ai_owned_paths_aggregates_history():
+    """_ai_owned_paths 聚合本项目历史 api_generation 任务的 artifacts 路径。"""
+    from app.database import SessionLocal
+    from app.models import GenerationJob, Project
+    from app.jobs.api_gen import _ai_owned_paths
+
+    db = SessionLocal()
+    try:
+        proj = Project(name="ai_owned 聚合测试")
+        db.add(proj)
+        db.flush()
+        j1 = GenerationJob(project_id=proj.id, job_type="api_generation",
+                           artifacts=[{"path": "src/test/java/A.java", "action": "created"}])
+        j2 = GenerationJob(project_id=proj.id, job_type="api_generation",
+                           artifacts=[{"path": "src/test/java/B.java", "action": "overwritten"},
+                                      {"path": "src/test/resources/test.properties", "action": "created"}])
+        case = GenerationJob(project_id=proj.id, job_type="case_generation")  # 用例任务不计入
+        db.add_all([j1, j2, case])
+        db.commit()
+        owned = _ai_owned_paths(db, proj.id)
+        assert owned == {"src/test/java/A.java", "src/test/java/B.java",
+                         "src/test/resources/test.properties"}
+    finally:
+        db.close()
