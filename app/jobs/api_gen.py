@@ -179,6 +179,7 @@ async def process_api_job(job_id: int) -> None:
             return
         project = job.project
         module = db.get(Module, job.target_module_id)
+        module_name = module.name if module else "(未指定)"
 
         # bus.publish 闭包绑定 job_id(覆盖 _ai_generate 里的占位 0)
         async def publish(event):
@@ -200,7 +201,7 @@ async def process_api_job(job_id: int) -> None:
         # AI 生成(第 0 轮)
         chunks: list[str] = []
         in_tok = out_tok = 0
-        async for kind, value in stream_api_generation(project.name, module.name, content, summary):
+        async for kind, value in stream_api_generation(project.name, module_name, content, summary):
             if kind == "delta":
                 chunks.append(value)
                 await publish({"type": "delta", "text": value})
@@ -233,7 +234,7 @@ async def process_api_job(job_id: int) -> None:
             fix_prompt_extra = f"\n## 上次编译失败,错误如下(尾部)\n{mvn.output[-6000:]}\n本次写的文件:{[a['path'] for a in artifacts]}\n请只输出需要修改的文件,path 必须与原文件一致。"
             # 把修复提示拼进新一轮 AI 调用(复用 stream_api_generation,在文档后追加)
             chunks = []
-            async for kind, value in stream_api_generation(project.name, module.name, content + fix_prompt_extra, summary):
+            async for kind, value in stream_api_generation(project.name, module_name, content + fix_prompt_extra, summary):
                 if kind == "delta":
                     chunks.append(value)
                     await publish({"type": "delta", "text": value})

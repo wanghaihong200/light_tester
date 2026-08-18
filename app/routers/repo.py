@@ -31,11 +31,16 @@ def _get_project(project_id: int, db: Session) -> Project:
 # 会拒绝 file:// 协议导致本地 bare 仓测试失败。生产 API 入口 create_job
 # (Task 6)已强制 http(s);此处 sync_repo→ensure_repo→build_remote_url 内部
 # 已分流 file://(原样)/http(s)(注入 token)/其他(抛 GitError stage=url)。
+class SyncRequest(BaseModel):
+    branch: str | None = None  # 指定则切换到该远程分支再同步
+
+
 @router.post("/sync", response_model=SyncResult)
-def repo_sync(project_id: int, db: Session = Depends(get_db)):
+def repo_sync(project_id: int, payload: SyncRequest | None = None, db: Session = Depends(get_db)):
     p = _get_project(project_id, db)
     try:
-        return sync_repo(p)
+        branch = payload.branch if payload else None
+        return sync_repo(p, branch)
     except GitError as e:
         if e.stage == "url":
             raise HTTPException(400, e.message)

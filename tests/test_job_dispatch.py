@@ -62,3 +62,76 @@ def test_create_job_api_generation_requires_git_repo_url(client):
         assert "git_repo_url" in r.json()["detail"]
     finally:
         db.close()
+
+
+def test_create_job_with_module_name_creates_module(client):
+    """模块手输文本:项目下无同名顶层模块则新建,job 挂到新模块。"""
+    from app.database import SessionLocal
+    from app.models import Project, Document, Module, GenerationJob
+    db = SessionLocal()
+    try:
+        proj = Project(name="手输模块项目")
+        db.add(proj)
+        db.flush()
+        doc = Document(project_id=proj.id, filename="需求.md", storage_path="/tmp/fake.md")
+        db.add(doc)
+        db.commit()
+        r = client.post(
+            f"/api/projects/{proj.id}/jobs",
+            json={"document_id": doc.id, "target_module_name": "手输的新模块", "job_type": "case_generation"},
+        )
+        assert r.status_code == 201
+        created = db.query(Module).filter_by(project_id=proj.id, name="手输的新模块").first()
+        assert created is not None
+        job = db.get(GenerationJob, r.json()["id"])
+        assert job.target_module_id == created.id
+    finally:
+        db.close()
+
+
+def test_create_job_with_existing_module_name_reuses(client):
+    """模块手输文本与已有顶层模块同名:复用不新建。"""
+    from app.database import SessionLocal
+    from app.models import Project, Document, Module
+    db = SessionLocal()
+    try:
+        proj = Project(name="复用模块项目")
+        db.add(proj)
+        db.flush()
+        doc = Document(project_id=proj.id, filename="需求.md", storage_path="/tmp/fake.md")
+        db.add(doc)
+        db.flush()
+        mod = Module(project_id=proj.id, name="已有模块", parent_id=None)
+        db.add(mod)
+        db.commit()
+        r = client.post(
+            f"/api/projects/{proj.id}/jobs",
+            json={"document_id": doc.id, "target_module_name": "已有模块", "job_type": "case_generation"},
+        )
+        assert r.status_code == 201
+        assert r.json()["target_module_id"] == mod.id
+        assert db.query(Module).filter_by(project_id=proj.id).count() == 1
+    finally:
+        db.close()
+
+
+def test_create_job_without_module_ok(client):
+    """模块留空:任务可发起,target_module_id 为 NULL。"""
+    from app.database import SessionLocal
+    from app.models import Project, Document
+    db = SessionLocal()
+    try:
+        proj = Project(name="空模块项目")
+        db.add(proj)
+        db.flush()
+        doc = Document(project_id=proj.id, filename="需求.md", storage_path="/tmp/fake.md")
+        db.add(doc)
+        db.commit()
+        r = client.post(
+            f"/api/projects/{proj.id}/jobs",
+            json={"document_id": doc.id, "job_type": "case_generation"},
+        )
+        assert r.status_code == 201
+        assert r.json()["target_module_id"] is None
+    finally:
+        db.close()

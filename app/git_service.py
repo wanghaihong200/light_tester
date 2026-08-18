@@ -114,21 +114,39 @@ def _current_branch(wc: Path) -> str:
     return _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=wc).strip()
 
 
-def sync_repo(project) -> SyncResult:
+def _switch_branch(wc: Path, project, branch: str) -> None:
+    """切到远程已存在的分支(checkout -B 到 origin/<branch>)。远程没有则报错。"""
+    out = _run(["git", "branch", "-r"], cwd=wc)
+    remote_names = {ln.strip()[len("origin/"):] for ln in out.splitlines()
+                    if ln.strip().startswith("origin/") and "->" not in ln}
+    if branch not in remote_names:
+        raise GitError("branch", f"远程不存在分支:{branch}")
+    _run(["git", "checkout", "-q", "-B", branch, f"origin/{branch}"], cwd=wc)
+
+
+def sync_repo(project, branch: str | None = None) -> SyncResult:
+    """同步 working copy;branch 指定时先切到该远程分支(不存在则报错)。
+
+    untracked 文件(AI 未推送产物)不受 reset --hard 影响,切分支后保留。
+    """
     wc = working_copy_path(project)
     if not (wc.exists() and (wc / ".git").exists()):
         ensure_repo(project)
-        branch = _current_branch(wc)
+        if branch:
+            _switch_branch(wc, project, branch)
+        cur = _current_branch(wc)
         commit = _run(["git", "rev-parse", "--short", "HEAD"], cwd=wc).strip()
-        return SyncResult(cloned=True, branch=branch, commit_short=commit)
+        return SyncResult(cloned=True, branch=cur, commit_short=commit)
     url = build_remote_url(project)
     # 显式 refspec:`git fetch <url>` 仅写 FETCH_HEAD,不更新 refs/remotes/origin/*;
     # 后续 reset --hard origin/<branch> 依赖 remote-tracking ref,故须显式映射。
     _run(["git", "fetch", "-q", url, "+refs/heads/*:refs/remotes/origin/*"], cwd=wc, token=project.git_token)
-    branch = _current_branch(wc)
-    _run(["git", "reset", "--hard", "-q", f"origin/{branch}"], cwd=wc)
+    if branch and branch != _current_branch(wc):
+        _switch_branch(wc, project, branch)
+    cur = _current_branch(wc)
+    _run(["git", "reset", "--hard", "-q", f"origin/{cur}"], cwd=wc)
     commit = _run(["git", "rev-parse", "--short", "HEAD"], cwd=wc).strip()
-    return SyncResult(updated=True, branch=branch, commit_short=commit)
+    return SyncResult(updated=True, branch=cur, commit_short=commit)
 
 
 def _repo_display_name(project, wc: Path) -> str:

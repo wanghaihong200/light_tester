@@ -181,3 +181,29 @@ def test_list_files_root_name_fallback_when_no_url(repos_dir, tmp_path):
     proj.git_repo_url = None  # 克隆后再清空,模拟 URL 缺失
     tree = git_service.list_files(proj)
     assert tree.name == "repo_1"
+
+
+def test_sync_repo_switches_branch(repos_dir, tmp_path):
+    """sync_repo 指定 branch:切到远程已有分支并同步其内容。"""
+    bare = _make_bare_origin(tmp_path)
+    work = tmp_path / "origin_work"
+    (work / "dev.txt").write_text("d", encoding="utf-8")
+    subprocess.run(["git", "checkout", "-q", "-b", "dev"], cwd=work, check=True)
+    subprocess.run(["git", "add", "."], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-qm", "dev"], cwd=work, check=True)
+    subprocess.run(["git", "push", "-q", str(bare), "dev"], cwd=work, check=True)
+    proj = _project(f"file:///{bare.as_posix()}")
+    r1 = git_service.sync_repo(proj)
+    assert r1.branch == "master"
+    r2 = git_service.sync_repo(proj, "dev")
+    assert r2.branch == "dev"
+    assert (working_copy_path(proj) / "dev.txt").exists()
+
+
+def test_sync_repo_unknown_branch_raises(repos_dir, tmp_path):
+    bare = _make_bare_origin(tmp_path)
+    proj = _project(f"file:///{bare.as_posix()}")
+    git_service.sync_repo(proj)
+    with pytest.raises(GitError) as e:
+        git_service.sync_repo(proj, "no-such-branch")
+    assert e.value.stage == "branch"

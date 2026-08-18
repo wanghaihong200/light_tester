@@ -52,8 +52,33 @@ async def job_events(job_id: int, db: Session = Depends(get_db)):
 
 class JobCreate(BaseModel):
     document_id: int
-    target_module_id: int
+    # 模块三选一:id(下拉选中)/ name(手输文本,项目下同名顶层模块复用,无则新建)/ 均空(不挂模块)
+    target_module_id: int | None = None
+    target_module_name: str | None = None
     job_type: Literal["case_generation", "api_generation"] = "case_generation"
+
+
+def _resolve_module_id(db: Session, project_id: int, payload: JobCreate) -> int | None:
+    """解析目标模块:id 优先校验沿用;仅手输名字时复用/新建同名顶层模块;均空返回 None。"""
+    if payload.target_module_id is not None:
+        module = db.get(Module, payload.target_module_id)
+        if module is None or module.project_id != project_id:
+            raise HTTPException(400, "invalid target_module_id")
+        return payload.target_module_id
+    name = (payload.target_module_name or "").strip()
+    if not name:
+        return None
+    existing = (
+        db.query(Module)
+        .filter(Module.project_id == project_id, Module.name == name, Module.parent_id.is_(None))
+        .first()
+    )
+    if existing is not None:
+        return existing.id
+    created = Module(project_id=project_id, name=name, parent_id=None)
+    db.add(created)
+    db.flush()
+    return created.id
 
 
 @router.post("/projects/{project_id}/jobs", response_model=GenerationJobOut, status_code=201)
@@ -64,9 +89,7 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
     doc = db.get(Document, payload.document_id)
     if doc is None or doc.project_id != project_id:
         raise HTTPException(400, "invalid document_id")
-    module = db.get(Module, payload.target_module_id)
-    if module is None or module.project_id != project_id:
-        raise HTTPException(400, "invalid target_module_id")
+    module_id = _resolve_module_id(db, project_id, payload)
     # api_generation 必须有有效 http(s) git_repo_url(case_generation 不要求)
     if payload.job_type == "api_generation":
         from app.git_service import GitError, validate_repo_url
@@ -77,7 +100,7 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
     job = GenerationJob(
         project_id=project_id,
         document_id=payload.document_id,
-        target_module_id=payload.target_module_id,
+        target_module_id=module_id,
         job_type=payload.job_type,
         model=settings.ai_model,
     )

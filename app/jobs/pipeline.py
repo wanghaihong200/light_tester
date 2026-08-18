@@ -132,13 +132,14 @@ async def process_job(job_id: int) -> None:
         # 读取文档内容
         doc = job.document
         module = db.get(Module, job.target_module_id)
+        module_name = module.name if module else "(未指定)"
         content = Path(doc.storage_path).read_text(encoding="utf-8")
 
         # AI 流式生成
         chunks: list[str] = []
         input_tokens = 0
         output_tokens = 0
-        async for kind, value in stream_case_generation(job.project.name, module.name, content):
+        async for kind, value in stream_case_generation(job.project.name, module_name, content):
             if kind == "delta":
                 chunks.append(value)
                 await bus.publish(job.id, {"type": "delta", "text": value})
