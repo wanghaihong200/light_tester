@@ -114,6 +114,71 @@ def test_create_job_endpoint_and_validation(client):
     assert detail.status_code == 200 and detail.json()["status"] == "pending"
 
 
+async def _fake_stream_valid_long(project_name, module_name, doc_content):
+    yield ("delta", '{"feature_points": [{"name": "账号登录", "cases": [')
+    yield ("delta", '{"title": "登录成功", "priority": "P0", "precondition": null, "remark": null, "steps": [{"action": "输入", "expected": "成功"}]}]}]}')
+    yield ("usage", (100, 50))
+
+
+async def _fake_stream_garbage_then_usage(project_name, module_name, doc_content):
+    yield ("delta", "不是合法 JSON")
+    yield ("usage", (150, 250))
+
+
+async def test_case_job_persists_stream_text_and_times(monkeypatch, tmp_path):
+    """A1+A2:delta 全部落 output_text;completed 后 started/finished 均非空且有序。"""
+    import app.jobs.pipeline as pl
+
+    doc_file = tmp_path / "需求.md"
+    doc_file.write_text("# 登录需求\n输入账号密码后登录成功。", encoding="utf-8")
+    monkeypatch.setattr(pl, "stream_case_generation", _fake_stream_valid_long)
+    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 1.5)
+    db = SessionLocal()
+    try:
+        p, m, d = _seed(db, str(doc_file))
+        job = GenerationJob(project_id=p.id, document_id=d.id, target_module_id=m.id)
+        db.add(job)
+        db.commit()
+        await pl.process_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "completed"
+        assert got.output_text == (
+            '{"feature_points": [{"name": "账号登录", "cases": ['
+            '{"title": "登录成功", "priority": "P0", "precondition": null, "remark": null, "steps": [{"action": "输入", "expected": "成功"}]}]}]}'
+        )
+        assert got.started_at is not None and got.finished_at is not None
+        assert got.started_at <= got.finished_at
+    finally:
+        db.close()
+
+
+async def test_case_job_tokens_survive_parse_failure(monkeypatch, tmp_path):
+    """A3 核心:AI 流已消耗 tokens,随后解析抛异常 → tokens/cost 必须已落库;失败也写终态时间。"""
+    import app.jobs.pipeline as pl
+
+    doc_file = tmp_path / "需求.md"
+    doc_file.write_text("# 需求", encoding="utf-8")
+    monkeypatch.setattr(pl, "stream_case_generation", _fake_stream_garbage_then_usage)
+    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 2.5)
+    db = SessionLocal()
+    try:
+        p, m, d = _seed(db, str(doc_file))
+        job = GenerationJob(project_id=p.id, document_id=d.id, target_module_id=m.id)
+        db.add(job)
+        db.commit()
+        await pl.process_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "failed"
+        assert got.input_tokens == 150 and got.output_tokens == 250
+        assert got.cost_usd == 2.5
+        assert got.finished_at is not None
+        assert got.output_text == "不是合法 JSON"  # 异常路径 flush 已写部分
+    finally:
+        db.close()
+
+
 def test_sse_endpoint_snapshot_and_404(client):
     assert client.get("/api/jobs/999999/events").status_code == 404
     db = SessionLocal()

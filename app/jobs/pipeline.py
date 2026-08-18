@@ -6,10 +6,12 @@ AI 调用失败不重抛:任务落 failed + error,SSE 推 error。
 
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.ai.client import estimate_cost, stream_case_generation
@@ -66,6 +68,22 @@ def _parse_staged_payload(text: str) -> StagedPayload:
     return StagedPayload.model_validate(data)
 
 
+STREAM_FLUSH_THRESHOLD = 4096
+
+
+def flush_output_text(db: Session, job_id: int, buf: list[str]) -> None:
+    """把缓冲的流文本增量拼进 generation_jobs.output_text(SQL 侧 CONCAT,不做读改写)。"""
+    if not buf:
+        return
+    chunk = "".join(buf)
+    buf.clear()
+    db.execute(
+        sql_text("UPDATE generation_jobs SET output_text = CONCAT(COALESCE(output_text, ''), :c) WHERE id = :id"),
+        {"c": chunk, "id": job_id},
+    )
+    db.commit()
+
+
 JOBS_QUEUE: asyncio.Queue[int] = asyncio.Queue()
 _project_locks: dict[int, asyncio.Lock] = {}
 
@@ -115,6 +133,8 @@ async def process_job(job_id: int) -> None:
         if job is None:
             return
 
+        stream_buf: list[str] = []
+
         # 按 job_type 分发:api_generation 走接口生成 handler,case_generation 走既有逻辑
         if job.job_type == "api_generation":
             # lazy import 避免 pipeline ↔ api_gen 循环导入
@@ -125,6 +145,7 @@ async def process_job(job_id: int) -> None:
 
         # 标记运行中
         job.status = "running"
+        job.started_at = datetime.now()
         job.model = settings.ai_model
         db.commit()
         await bus.publish(job.id, {"type": "status", "status": "running"})
@@ -137,14 +158,21 @@ async def process_job(job_id: int) -> None:
 
         # AI 流式生成
         chunks: list[str] = []
-        input_tokens = 0
-        output_tokens = 0
         async for kind, value in stream_case_generation(job.project.name, module_name, content):
             if kind == "delta":
                 chunks.append(value)
+                stream_buf.append(value)
                 await bus.publish(job.id, {"type": "delta", "text": value})
+                if sum(len(s) for s in stream_buf) >= STREAM_FLUSH_THRESHOLD:
+                    flush_output_text(db, job.id, stream_buf)
             elif kind == "usage":
-                input_tokens, output_tokens = value  # type: ignore[misc]
+                in_t, out_t = value
+                # A3:usage 到达即累计落库——后续解析抛异常也不丢。
+                # 注意 ORM 侧新 job 的 input_tokens 是 None(column default 在 DB 层),先归零再累加
+                job.input_tokens = (job.input_tokens or 0) + in_t
+                job.output_tokens = (job.output_tokens or 0) + out_t
+                job.cost_usd = estimate_cost(job.model, job.input_tokens, job.output_tokens)
+                db.commit()
 
         # 校验并入库(解析层防御:端点可能不强制结构化输出,见 _parse_staged_payload)
         payload = _parse_staged_payload("".join(chunks))
@@ -162,13 +190,9 @@ async def process_job(job_id: int) -> None:
                 ))
                 staged_count += 1
 
-        # tokens / 费用
-        job.input_tokens = input_tokens
-        job.output_tokens = output_tokens
-        job.cost_usd = estimate_cost(job.model, input_tokens, output_tokens)
-        db.commit()
-
         # 完成
+        flush_output_text(db, job.id, stream_buf)
+        job.finished_at = datetime.now()
         job.status = "completed"
         db.commit()
         await bus.publish(job.id, {"type": "done", "staged_count": staged_count})
@@ -179,6 +203,8 @@ async def process_job(job_id: int) -> None:
         if job is not None:
             job.status = "failed"
             job.error = str(exc)[:2000]
+            job.finished_at = datetime.now()
+            flush_output_text(db, job.id, stream_buf)
             db.commit()
         await bus.publish(job_id, {"type": "error", "message": str(exc)[:500]})
 
