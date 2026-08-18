@@ -20,7 +20,7 @@ from app.database import SessionLocal
 from app.jobs.bus import bus
 from datetime import datetime
 
-from app.jobs.pipeline import _strip_code_fence, STREAM_FLUSH_THRESHOLD, flush_output_text
+from app.jobs.pipeline import _strip_code_fence, STREAM_FLUSH_THRESHOLD, flush_output_text, flush_thinking_text
 from app.models import GenerationJob, Module
 from app.git_service import working_copy_path, ensure_repo, GitError
 
@@ -177,6 +177,7 @@ async def process_api_job(job_id: int) -> None:
     db = SessionLocal()
     try:
         stream_buf: list[str] = []  # 跨轮+异常路径共用
+        thinking_buf: list[str] = []
         job = db.get(GenerationJob, job_id)
         if job is None:
             return
@@ -205,7 +206,12 @@ async def process_api_job(job_id: int) -> None:
         # AI 生成(第 0 轮)
         chunks: list[str] = []
         async for kind, value in stream_api_generation(project.name, module_name, content, summary):
-            if kind == "delta":
+            if kind == "thinking":
+                thinking_buf.append(value)
+                await publish({"type": "thinking_delta", "text": value})
+                if sum(len(s) for s in thinking_buf) >= STREAM_FLUSH_THRESHOLD:
+                    flush_thinking_text(db, job_id, thinking_buf)
+            elif kind == "delta":
                 chunks.append(value)
                 stream_buf.append(value)
                 await publish({"type": "delta", "text": value})
@@ -245,11 +251,19 @@ async def process_api_job(job_id: int) -> None:
             flush_output_text(db, job_id, stream_buf)
             stream_buf.append("\n\n===== 修复轮 %d =====\n\n" % (round_idx + 1))
             flush_output_text(db, job_id, stream_buf)
+            flush_thinking_text(db, job_id, thinking_buf)
+            thinking_buf.append("\n\n===== 修复轮 %d =====\n\n" % (round_idx + 1))
+            flush_thinking_text(db, job_id, thinking_buf)
             fix_prompt_extra = f"\n## 上次编译失败,错误如下(尾部)\n{mvn.output[-6000:]}\n本次写的文件:{[a['path'] for a in artifacts]}\n请只输出需要修改的文件,path 必须与原文件一致。"
             # 把修复提示拼进新一轮 AI 调用(复用 stream_api_generation,在文档后追加)
             chunks = []
             async for kind, value in stream_api_generation(project.name, module_name, content + fix_prompt_extra, summary):
-                if kind == "delta":
+                if kind == "thinking":
+                    thinking_buf.append(value)
+                    await publish({"type": "thinking_delta", "text": value})
+                    if sum(len(s) for s in thinking_buf) >= STREAM_FLUSH_THRESHOLD:
+                        flush_thinking_text(db, job_id, thinking_buf)
+                elif kind == "delta":
                     chunks.append(value)
                     stream_buf.append(value)
                     await publish({"type": "delta", "text": value})
@@ -271,6 +285,7 @@ async def process_api_job(job_id: int) -> None:
             job.error = (last_error or "mvn 失败")[-2000:]
             job.finished_at = datetime.now()
             flush_output_text(db, job_id, stream_buf)
+            flush_thinking_text(db, job_id, thinking_buf)
             db.commit()
             await publish({"type": "error", "message": (last_error or "mvn 失败")[:500]})
             return
@@ -278,6 +293,7 @@ async def process_api_job(job_id: int) -> None:
         job.status = "completed"
         job.finished_at = datetime.now()
         flush_output_text(db, job_id, stream_buf)
+        flush_thinking_text(db, job_id, thinking_buf)
         db.commit()
         await publish({"type": "done", "files_count": len(artifacts)})
 
@@ -289,6 +305,7 @@ async def process_api_job(job_id: int) -> None:
             job.error = str(exc)[:2000]
             job.finished_at = datetime.now()
             flush_output_text(db, job_id, stream_buf)
+            flush_thinking_text(db, job_id, thinking_buf)
             db.commit()
         await bus.publish(job_id, {"type": "error", "message": str(exc)[:500]})
     finally:
