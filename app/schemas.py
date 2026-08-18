@@ -100,6 +100,9 @@ class GenerationJobOut(BaseModel):
     created_at: datetime
     document_name: str | None
     artifacts: list[dict] | None
+    output_text: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
 
 
 class StagedCaseOut(BaseModel):

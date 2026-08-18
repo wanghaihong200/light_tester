@@ -171,6 +171,11 @@ class GenerationJob(Base):
     artifacts: Mapped[list | None] = mapped_column(
         JSON, nullable=True, comment="接口生成产物文件清单:[{\"path\":...,\"action\":\"created|overwritten\"}];用例生成任务为NULL"
     )
+    output_text: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="AI 流式输出全文(跨修复轮累积,终态回放用)"
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="任务开始执行时间")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="任务终态(完成/失败)时间")
 
     project: Mapped[Project] = relationship(back_populates="jobs")
     document: Mapped[Document | None] = relationship(
