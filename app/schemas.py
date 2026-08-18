@@ -101,6 +101,7 @@ class GenerationJobOut(BaseModel):
     document_name: str | None
     artifacts: list[dict] | None
     output_text: str | None = None
+    thinking_text: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
 

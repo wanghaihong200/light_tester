@@ -174,6 +174,9 @@ class GenerationJob(Base):
     output_text: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="AI 流式输出全文(跨修复轮累积,终态回放用)"
     )
+    thinking_text: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="AI 思考摘要全文(display=summarized,跨修复轮累积,终态回放用)"
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="任务开始执行时间")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="任务终态(完成/失败)时间")
 
