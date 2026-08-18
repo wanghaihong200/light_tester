@@ -82,13 +82,20 @@ async def stream_case_generation(
     params = dict(
         model=settings.ai_model,
         max_tokens=64000,
+        # opus-5 默认已在思考且按 output 计费;display=summarized 把已付费思考变为可读摘要(计划6)
+        thinking={"type": "adaptive", "display": "summarized"},
         system=CASE_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_user_prompt(project_name, module_name, doc_content)}],
         output_config={"format": {"type": "json_schema", "schema": CASE_JSON_SCHEMA}},
     )
     async with _stream_call(**params) as stream:
-        async for t in stream.text_stream:
-            yield ("delta", t)
+        async for event in stream:
+            if event.type != "content_block_delta":
+                continue
+            if event.delta.type == "thinking_delta":
+                yield ("thinking", event.delta.thinking)
+            elif event.delta.type == "text_delta":
+                yield ("delta", event.delta.text)
         final = await stream.get_final_message()
         yield ("usage", (final.usage.input_tokens, final.usage.output_tokens))
 
@@ -120,12 +127,18 @@ async def stream_api_generation(
     params = dict(
         model=settings.ai_model,
         max_tokens=64000,
+        thinking={"type": "adaptive", "display": "summarized"},
         system=API_GEN_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_api_gen_user_prompt(project_name, module_name, doc_content, project_summary)}],
         output_config={"format": {"type": "json_schema", "schema": API_FILES_JSON_SCHEMA}},
     )
     async with _stream_call(**params) as stream:
-        async for t in stream.text_stream:
-            yield ("delta", t)
+        async for event in stream:
+            if event.type != "content_block_delta":
+                continue
+            if event.delta.type == "thinking_delta":
+                yield ("thinking", event.delta.thinking)
+            elif event.delta.type == "text_delta":
+                yield ("delta", event.delta.text)
         final = await stream.get_final_message()
         yield ("usage", (final.usage.input_tokens, final.usage.output_tokens))

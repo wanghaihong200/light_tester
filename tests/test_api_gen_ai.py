@@ -16,24 +16,15 @@ class _FakeStream:
     async def __aexit__(self, *a):
         return False
 
-    @property
-    def text_stream(self):
-        class _It:
-            def __init__(self, chunks):
-                self._chunks = chunks
-
-            def __aiter__(self):
-                self._i = 0
-                return self
-
-            async def __anext__(self):
-                if self._i >= len(self._chunks):
-                    raise StopAsyncIteration
-                c = self._chunks[self._i]
-                self._i += 1
-                return c
-
-        return _It(self._text.splitlines(keepends=True))
+    async def __aiter__(self):
+        """支持事件级迭代,只产 text_delta 事件。"""
+        chunks = self._text.splitlines(keepends=True)
+        for chunk in chunks:
+            from types import SimpleNamespace
+            yield SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text=chunk)
+            )
 
     async def get_final_message(self):
         class _U:

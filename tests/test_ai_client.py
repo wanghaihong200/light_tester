@@ -34,13 +34,13 @@ class FakeCtx:
     async def __aexit__(self, *args):
         pass
 
-    async def _text_stream(self):
+    async def __aiter__(self):
+        """支持事件级迭代,只产 text_delta 事件。"""
         for chunk in self.chunks:
-            yield chunk
-
-    @property
-    def text_stream(self):
-        return self._text_stream()
+            yield SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text=chunk)
+            )
 
     async def get_final_message(self):
         return SimpleNamespace(
