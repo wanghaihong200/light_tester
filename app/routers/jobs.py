@@ -33,6 +33,7 @@ async def job_events(job_id: int, db: Session = Depends(get_db)):
     _job_status = job.status
     _job_error = job.error
     _job_output_text = job.output_text
+    _job_thinking_text = job.thinking_text
     _job_input_tokens = job.input_tokens
     _job_output_tokens = job.output_tokens
     _files_count = len(job.artifacts or [])
@@ -47,6 +48,7 @@ async def job_events(job_id: int, db: Session = Depends(get_db)):
                     "status": _job_status,
                     "error": _job_error,
                     "output_text": _job_output_text,
+                    "thinking_text": _job_thinking_text,
                     "input_tokens": _job_input_tokens,
                     "output_tokens": _job_output_tokens,
                     "files_count": _files_count,

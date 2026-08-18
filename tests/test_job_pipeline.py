@@ -248,6 +248,7 @@ def test_sse_endpoint_snapshot_and_404(client):
         job = GenerationJob(
             project_id=p.id, document_id=None, target_module_id=None, status="completed",
             output_text="历史任务流式输出", input_tokens=11, output_tokens=22,
+            thinking_text="历史思考摘要全文",
             artifacts=[{"path": "a.java", "action": "created"}, {"path": "b.java", "action": "overwritten"}],
         )
         db.add(job)
@@ -265,5 +266,6 @@ def test_sse_endpoint_snapshot_and_404(client):
     assert snap["type"] == "snapshot"
     assert snap["status"] == "completed" and snap["error"] is None
     assert snap["output_text"] == "历史任务流式输出"
+    assert snap["thinking_text"] == "历史思考摘要全文"
     assert snap["input_tokens"] == 11 and snap["output_tokens"] == 22
     assert snap["files_count"] == 2 and snap["staged_count"] == 0
