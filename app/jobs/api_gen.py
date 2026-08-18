@@ -209,12 +209,18 @@ async def process_api_job(job_id: int) -> None:
 
         artifacts: list[dict] = []
         last_error: str | None = None
+        written_by_path: dict[str, str] = {}  # 跨修复轮累计(修复轮只重写部分文件)
 
         # AI 历史产物集合:这些文件即使推送后已跟踪也允许覆盖(再生成迭代)
         ai_owned = _ai_owned_paths(db, project.id)
         for round_idx in range(MAX_FIX_ROUNDS + 1):  # 0,1,2 = 初始 + 2 修复
             payload = parse_api_files("".join(chunks))
             artifacts = write_files(wc, [f.model_dump() for f in payload.files], ai_owned=ai_owned)
+            for item in artifacts:
+                written_by_path[item["path"]] = item["action"]
+            # 写盘即落库:失败任务也保留产物清单,保证 ai_owned 数据源完备(job#12 实测)
+            job.artifacts = [{"path": p, "action": a} for p, a in written_by_path.items()]
+            db.commit()
             await publish({"type": "stage", "stage": "compiling"})
             mvn = run_mvn_compile(wc)
             if mvn.success:
@@ -237,7 +243,8 @@ async def process_api_job(job_id: int) -> None:
         job.input_tokens = in_tok
         job.output_tokens = out_tok
         job.cost_usd = estimate_cost(job.model, in_tok, out_tok)
-        job.artifacts = artifacts
+        job.artifacts = [{"path": p, "action": a} for p, a in written_by_path.items()]
+        artifacts = job.artifacts
 
         if not mvn.success:
             job.status = "failed"
