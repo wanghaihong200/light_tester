@@ -5,10 +5,18 @@
 _run_query 是模块级薄封装,便于测试替换(monkeypatch)而不启动真子进程。
 """
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import ClaudeAgentOptions
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    ToolUseBlock,
+    query,
+)
+from claude_agent_sdk.types import StreamEvent
 
 from app.config import settings
 
@@ -119,3 +127,69 @@ def build_generation_options(
         env=env,
         add_dirs=[str(p) for p in (add_dirs or [])],
     )
+
+
+TOOL_INPUT_MAX = 200  # 过程记录里工具入参摘要截断长度
+
+
+def _summarize_tool_input(name: str, tool_input: dict[str, Any]) -> str:
+    """把工具调用压缩成一行人类可读记录(入参取首个命中的关键键,截断)。"""
+    for key in ("file_path", "path", "pattern", "command", "query", "prompt", "skill"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return f"{name} {value[:TOOL_INPUT_MAX]}"
+    return name
+
+
+def _run_query(prompt: str, options: ClaudeAgentOptions):
+    """SDK 薄封装 seam:测试 monkeypatch 此函数,不启动真子进程。"""
+    return query(prompt=prompt, options=options)
+
+
+async def stream_skill_generation(
+    prompt: str,
+    skill_name: str,
+    output_schema: dict[str, Any],
+    model: str | None = None,
+    add_dirs: list[str | Path] | None = None,
+) -> AsyncIterator[tuple[str, Any]]:
+    """驱动一次引擎会话,把 SDK 消息翻译成管道事件元组流。
+
+    事件协议见模块 docstring;error 终态抛 RuntimeError(管道落 job.failed)。
+    单次 query() 在 error 终态后 SDK 还会再抛普通 Exception——本函数在
+    循环内先按 subtype 抛出带语义的 RuntimeError,后者不会再到达。
+    """
+    options = build_generation_options(
+        skill_name, model or settings.ai_model, output_schema, add_dirs=add_dirs
+    )
+    async for message in _run_query(prompt, options):
+        if isinstance(message, StreamEvent):
+            event = message.event
+            if event.get("type") != "content_block_delta":
+                continue
+            delta = event.get("delta", {})
+            if delta.get("type") == "thinking_delta":
+                yield ("thinking", delta.get("thinking", ""))
+            elif delta.get("type") == "text_delta":
+                yield ("delta", delta.get("text", ""))
+        elif isinstance(message, AssistantMessage):
+            # 文本/思考已由 StreamEvent 增量覆盖,这里只提工具调用(避免重复)
+            for block in message.content:
+                if isinstance(block, ToolUseBlock):
+                    yield ("tool", _summarize_tool_input(block.name, block.input))
+        elif isinstance(message, ResultMessage):
+            if message.subtype != "success":
+                raise RuntimeError(
+                    f"引擎会话失败({message.subtype}):{';'.join(message.errors or [])}"[:2000]
+                )
+            usage = message.usage or {}
+            yield (
+                "usage",
+                (
+                    usage.get("input_tokens", 0),
+                    usage.get("output_tokens", 0),
+                    message.total_cost_usd or 0.0,
+                ),
+            )
+            if message.structured_output is not None:
+                yield ("result", message.structured_output)
