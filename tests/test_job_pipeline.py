@@ -238,6 +238,50 @@ async def test_case_job_thinking_survives_parse_failure(monkeypatch, tmp_path):
         db.close()
 
 
+async def test_stream_threshold_flush_mid_stream(monkeypatch, tmp_path):
+    """计划6收尾:超阈值(STREAM_FLUSH_THRESHOLD=4096)的 thinking/output 在流中途中途即落库,不等终态。"""
+    from sqlalchemy import text as sql_text
+    import app.jobs.pipeline as pl
+
+    probe = {}
+    doc_file = tmp_path / "需求.md"
+    doc_file.write_text("# 需求", encoding="utf-8")
+
+    async def big_then_probe(project_name, module_name, doc_content):
+        yield ("thinking", "T" * 5000)
+        yield ("delta", "X" * 5000)
+        # 生成器恢复时探查 DB:此时 process_job 已处理完上述两个大块并 flush
+        pdb = SessionLocal()
+        try:
+            row = pdb.execute(
+                sql_text("SELECT CHAR_LENGTH(thinking_text) AS t, CHAR_LENGTH(output_text) AS o FROM generation_jobs WHERE id = :i"),
+                {"i": job.id},
+            ).one()
+            probe["t"], probe["o"] = row[0], row[1]
+        finally:
+            pdb.close()
+        yield ("usage", (10, 10))
+
+    monkeypatch.setattr(pl, "stream_case_generation", big_then_probe)
+    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 1.0)
+    db = SessionLocal()
+    try:
+        p, m, d = _seed(db, str(doc_file))
+        job = GenerationJob(project_id=p.id, document_id=d.id, target_module_id=m.id)
+        db.add(job)
+        db.commit()
+        await pl.process_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "failed"  # "X"*5000 不是合法 JSON → 解析失败
+        assert probe["t"] >= 5000, f"thinking_text mid-stream flush: expected >=5000, got {probe['t']}"
+        assert probe["o"] >= 5000, f"output_text mid-stream flush: expected >=5000, got {probe['o']}"
+        assert len(got.thinking_text) >= 5000
+        assert len(got.output_text) >= 5000
+    finally:
+        db.close()
+
+
 def test_sse_endpoint_snapshot_and_404(client):
     assert client.get("/api/jobs/999999/events").status_code == 404
     db = SessionLocal()

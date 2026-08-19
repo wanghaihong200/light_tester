@@ -1,4 +1,6 @@
 # tests/test_api_gen_ai.py
+from types import SimpleNamespace
+
 import pytest
 
 from app.ai import client, prompts
@@ -20,7 +22,6 @@ class _FakeStream:
         """支持事件级迭代,只产 text_delta 事件。"""
         chunks = self._text.splitlines(keepends=True)
         for chunk in chunks:
-            from types import SimpleNamespace
             yield SimpleNamespace(
                 type="content_block_delta",
                 delta=SimpleNamespace(type="text_delta", text=chunk)

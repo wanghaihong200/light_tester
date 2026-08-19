@@ -279,6 +279,38 @@ async def test_api_job_tokens_survive_mvn_failure(monkeypatch, tmp_path):
         db.close()
 
 
+async def test_api_job_thinking_survives_parse_failure(monkeypatch, tmp_path):
+    """计划6收尾:api 侧解析失败(垃圾 JSON)→failed,但 thinking_text 已落库。
+    镜像 test_job_pipeline.test_case_job_thinking_survives_parse_failure。"""
+    doc_file = tmp_path / "api.md"
+    doc_file.write_text("# API 文档", encoding="utf-8")
+    wc = tmp_path / "wc"
+    (wc / "src/test/java").mkdir(parents=True)
+
+    async def garbage_with_thinking(*a, **kw):
+        yield ("thinking", "思考中…")
+        yield ("delta", "不是合法 JSON")
+        yield ("usage", (150, 250))
+
+    monkeypatch.setattr(ag, "stream_api_generation", garbage_with_thinking)
+    monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
+    monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
+    monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
+    monkeypatch.setattr(ag, "estimate_cost", lambda m, i, o: 2.5)
+
+    db = SessionLocal()
+    try:
+        job = _seed_api_job(db, str(doc_file))
+        await ag.process_api_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "failed"
+        assert got.thinking_text is not None
+        assert "思考中" in got.thinking_text
+    finally:
+        db.close()
+
+
 async def test_api_job_persists_thinking_across_rounds(monkeypatch, tmp_path):
     """计划6:两轮 AI 的思考都落 thinking_text,带与 output_text 同款修复轮分隔符。"""
     doc_file = tmp_path / "api.md"

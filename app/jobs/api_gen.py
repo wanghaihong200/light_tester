@@ -185,7 +185,7 @@ async def process_api_job(job_id: int) -> None:
         module = db.get(Module, job.target_module_id)
         module_name = module.name if module else "(未指定)"
 
-        # bus.publish 闭包绑定 job_id(覆盖 _ai_generate 里的占位 0)
+        # bus.publish 闭包绑定 job_id
         async def publish(event):
             await bus.publish(job_id, event)
 
