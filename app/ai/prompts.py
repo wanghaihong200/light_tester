@@ -20,12 +20,22 @@ CASE_SYSTEM_PROMPT = """你是资深功能测试工程师。根据用户提供�
 约束:顶层只有 feature_points 一个键;priority 只能取 "P0"、"P1"、"P2";steps 为有序的操作+预期对,无步骤时为空数组;所有字符串用中文。"""
 
 
-def build_user_prompt(project_name: str, module_name: str, doc_content: str) -> str:
-    return (
-        f"# 项目:{project_name}\n# 目标模块:{module_name}\n\n"
-        f"# 需求文档\n\n{doc_content}\n\n"
-        "请按系统指令输出 JSON。"
+SKILL_CASE_NAME = "functional-testing"
+SKILL_API_NAME = "api-test-restassure"
+
+
+def build_user_prompt(project_name: str, module_name: str, doc_content: str, supplementary_prompt: str | None = None) -> str:
+    parts = [
+        f"# 项目:{project_name}\n# 目标模块:{module_name}\n",
+        f"# 需求文档\n\n{doc_content}",
+    ]
+    if supplementary_prompt and supplementary_prompt.strip():
+        parts.append(f"\n# 补充指令\n\n{supplementary_prompt.strip()}")
+    parts.append(
+        f"\n请调用 {SKILL_CASE_NAME} 技能,按技能内方法论为上述需求文档的目标模块设计功能测试用例;"
+        "方法论与输出要求以技能内文件为准,产物按技能的平台 JSON 契约给出。"
     )
+    return "\n".join(parts)
 
 
 API_GEN_SYSTEM_PROMPT = """你是资深 QA 与 API 自动化测试专家,擅长把接口材料组织成可维护的 Java / REST Assured(JUnit 5)套件。
@@ -45,19 +55,24 @@ API_GEN_SYSTEM_PROMPT = """你是资深 QA 与 API 自动化测试专家,擅长�
 """
 
 
-def build_api_gen_user_prompt(project_name: str, module_name: str, doc_content: str, project_summary: dict) -> str:
-    return f"""# 项目:{project_name}
-# 目标模块:{module_name}
-
-## 工程概要
+def build_api_gen_user_prompt(project_name: str, module_name: str, doc_content: str, project_summary: dict, supplementary_prompt: str | None = None) -> str:
+    parts = [
+        f"# 项目:{project_name}\n# 目标模块:{module_name}\n",
+        f"""## 工程概要
 - groupId: {project_summary.get('group_id') or '(未提供,用 com.example.api)'}
 - artifactId: {project_summary.get('artifact_id') or '(未提供)'}
 - 依赖已含:rest-assured={project_summary.get('has_rest_assured')}, junit5={project_summary.get('has_junit5')}, hamcrest={project_summary.get('has_hamcrest', False)}
 - 已有测试包: {project_summary.get('test_packages') or '(无,新建)'}
 - 已有 Base 类: {project_summary.get('has_base_class')}
+- 自动化工程 working copy 已挂载为附加目录:可只读探索 pom.xml 与 src/test 结构
 
 ## API 文档
-{doc_content}
-
-请按输出契约生成 REST Assured 测试类文件。
-"""
+{doc_content}""",
+    ]
+    if supplementary_prompt and supplementary_prompt.strip():
+        parts.append(f"\n# 补充指令\n\n{supplementary_prompt.strip()}")
+    parts.append(
+        f"\n请调用 {SKILL_API_NAME} 技能,按技能内方法论生成 REST Assured 测试类文件;"
+        "产物按技能的平台 JSON 契约给出。"
+    )
+    return "\n".join(parts)

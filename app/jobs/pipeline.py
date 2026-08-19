@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
-from app.ai.client import estimate_cost, stream_case_generation
+from app.ai.engine import CASE_JSON_SCHEMA, SKILL_CASE, stream_skill_generation
+from app.ai.prompts import build_user_prompt
 from app.config import settings
 from app.database import SessionLocal
 from app.jobs.bus import bus
@@ -81,6 +82,14 @@ def flush_thinking_text(db: Session, job_id: int, buf: list[str]) -> None:
     _append_column(db, job_id, buf, "thinking_text")
 
 
+TOOL_TRACE_FLUSH_LINES = 32
+
+
+def flush_tool_trace(db: Session, job_id: int, buf: list[str]) -> None:
+    """过程记录增量拼接(按行累积,与 output_text/thinking_text 同构,计划7)。"""
+    _append_column(db, job_id, buf, "tool_trace")
+
+
 def _append_column(db: Session, job_id: int, buf: list[str], column: str) -> None:
     if not buf:
         return
@@ -144,6 +153,7 @@ async def process_job(job_id: int) -> None:
 
         stream_buf: list[str] = []
         thinking_buf: list[str] = []
+        tool_buf: list[str] = []
 
         # 按 job_type 分发:api_generation 走接口生成 handler,case_generation 走既有逻辑
         if job.job_type == "api_generation":
@@ -168,7 +178,12 @@ async def process_job(job_id: int) -> None:
 
         # AI 流式生成
         chunks: list[str] = []
-        async for kind, value in stream_case_generation(job.project.name, module_name, content):
+        result_payload: dict | None = None
+        async for kind, value in stream_skill_generation(
+            prompt=build_user_prompt(job.project.name, module_name, content, job.user_prompt),
+            skill_name=SKILL_CASE,
+            output_schema=CASE_JSON_SCHEMA,
+        ):
             if kind == "thinking":
                 thinking_buf.append(value)
                 await bus.publish(job.id, {"type": "thinking_delta", "text": value})
@@ -180,17 +195,27 @@ async def process_job(job_id: int) -> None:
                 await bus.publish(job.id, {"type": "delta", "text": value})
                 if sum(len(s) for s in stream_buf) >= STREAM_FLUSH_THRESHOLD:
                     flush_output_text(db, job.id, stream_buf)
+            elif kind == "tool":
+                tool_buf.append(value + "\n")
+                await bus.publish(job.id, {"type": "tool", "text": value + "\n"})
+                if len(tool_buf) >= TOOL_TRACE_FLUSH_LINES:
+                    flush_tool_trace(db, job.id, tool_buf)
             elif kind == "usage":
-                in_t, out_t = value
-                # A3:usage 到达即累计落库——后续解析抛异常也不丢。
-                # 注意 ORM 侧新 job 的 input_tokens 是 None(column default 在 DB 层),先归零再累加
+                in_t, out_t, cost = value
+                # A3 语义延续:usage 到达即累计落库;费用来自 SDK total_cost_usd(整树估算)
                 job.input_tokens = (job.input_tokens or 0) + in_t
                 job.output_tokens = (job.output_tokens or 0) + out_t
-                job.cost_usd = estimate_cost(job.model, job.input_tokens, job.output_tokens)
+                job.cost_usd = (job.cost_usd or 0.0) + cost
                 db.commit()
+            elif kind == "result":
+                result_payload = value
 
-        # 校验并入库(解析层防御:端点可能不强制结构化输出,见 _parse_staged_payload)
-        payload = _parse_staged_payload("".join(chunks))
+        # 校验并入库:result 优先(SDK 结构化输出),叙述文本解析兜底(防御旧姿态延续)
+        if result_payload is not None:
+            payload = StagedPayload.model_validate(result_payload)
+            stream_buf.append("\n\n===== 产物 JSON =====\n\n" + json.dumps(result_payload, ensure_ascii=False, indent=2) + "\n")
+        else:
+            payload = _parse_staged_payload("".join(chunks))
         staged_count = 0
         for fp in payload.feature_points:
             for case in fp.cases:
@@ -208,6 +233,7 @@ async def process_job(job_id: int) -> None:
         # 完成
         flush_output_text(db, job.id, stream_buf)
         flush_thinking_text(db, job.id, thinking_buf)
+        flush_tool_trace(db, job.id, tool_buf)
         job.finished_at = datetime.now()
         job.status = "completed"
         db.commit()
@@ -222,6 +248,7 @@ async def process_job(job_id: int) -> None:
             job.finished_at = datetime.now()
             flush_output_text(db, job.id, stream_buf)
             flush_thinking_text(db, job.id, thinking_buf)
+            flush_tool_trace(db, job.id, tool_buf)
             db.commit()
         await bus.publish(job_id, {"type": "error", "message": str(exc)[:500]})
 

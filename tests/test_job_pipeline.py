@@ -20,10 +20,19 @@ def _seed(db, storage_path):
     return p, m, d
 
 
-async def _fake_stream_ok(project_name, module_name, doc_content):
-    yield ("delta", '{"feature_points": [{"name": "账号登录", "cases": [')
-    yield ("delta", '{"title": "登录成功", "priority": "P0", "precondition": "已注册", "remark": null, "steps": [{"action": "输入", "expected": "成功"}]}]}]}')
-    yield ("usage", (100, 50))
+CASE_RESULT = {"feature_points": [{"name": "账号登录", "cases": [
+    {"title": "登录成功", "priority": "P0", "precondition": "已注册", "remark": None,
+     "steps": [{"action": "输入", "expected": "成功"}]}
+]}]}
+
+
+async def _fake_engine_ok(*args, **kwargs):
+    yield ("thinking", "先看技能方法论…")
+    yield ("delta", "我先解析文档,再按功能点归组。")
+    yield ("tool", "Skill functional-testing")
+    yield ("tool", "Read .claude/skills/functional-testing/prompts/functional-testing.md")
+    yield ("usage", (100, 50, 0.42))
+    yield ("result", CASE_RESULT)
 
 
 async def test_process_job_success(monkeypatch, tmp_path):
@@ -33,8 +42,7 @@ async def test_process_job_success(monkeypatch, tmp_path):
     doc_file = tmp_path / "需求.md"
     doc_file.write_text("# 登录需求\n输入账号密码后登录成功。", encoding="utf-8")
 
-    monkeypatch.setattr(pl, "stream_case_generation", _fake_stream_ok)
-    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 1.5)
+    monkeypatch.setattr(pl, "stream_skill_generation", _fake_engine_ok)
     db = SessionLocal()
     try:
         p, m, d = _seed(db, str(doc_file))
@@ -49,17 +57,24 @@ async def test_process_job_success(monkeypatch, tmp_path):
         db.refresh(job)
         assert job.status == "completed"
         assert job.input_tokens == 100 and job.output_tokens == 50
-        assert job.cost_usd == 1.5
+        assert job.cost_usd == 0.42  # 费用来自 SDK total_cost_usd
+        # 过程记录落库
+        assert job.tool_trace == (
+            "Skill functional-testing\n"
+            "Read .claude/skills/functional-testing/prompts/functional-testing.md\n"
+        )
+        # SSE 侧:tool 事件逐条推送
+        tool_events = [e for e in events if e["type"] == "tool"]
+        assert len(tool_events) == 2
+        assert tool_events[0]["text"] == "Skill functional-testing\n"
         staged = db.query(StagedCase).filter(StagedCase.job_id == job.id).all()
         assert len(staged) == 1
         assert staged[0].feature_point_name == "账号登录"
         assert staged[0].steps[0]["action"] == "输入"
         assert any(e["type"] == "status" and e["status"] == "running" for e in events)
-        # delta 事件必须携带 text 载荷(与 _fake_stream_ok 的第一个 delta 对齐)
         delta_events = [e for e in events if e["type"] == "delta"]
-        assert len(delta_events) == 2
-        assert delta_events[0]["text"] == '{"feature_points": [{"name": "账号登录", "cases": ['
-        assert delta_events[1]["text"] == '{"title": "登录成功", "priority": "P0", "precondition": "已注册", "remark": null, "steps": [{"action": "输入", "expected": "成功"}]}]}]}'
+        assert len(delta_events) == 1
+        assert delta_events[0]["text"] == "我先解析文档,再按功能点归组。"
         assert any(e["type"] == "done" and e["staged_count"] == 1 for e in events)
     finally:
         db.close()
@@ -76,7 +91,7 @@ async def test_process_job_failure_sets_failed(monkeypatch, tmp_path):
         raise RuntimeError("api down")
         yield  # pragma: no cover
 
-    monkeypatch.setattr(pl, "stream_case_generation", boom)
+    monkeypatch.setattr(pl, "stream_skill_generation", boom)
     db = SessionLocal()
     try:
         p, m, d = _seed(db, str(doc_file))
@@ -114,15 +129,9 @@ def test_create_job_endpoint_and_validation(client):
     assert detail.status_code == 200 and detail.json()["status"] == "pending"
 
 
-async def _fake_stream_valid_long(project_name, module_name, doc_content):
-    yield ("delta", '{"feature_points": [{"name": "账号登录", "cases": [')
-    yield ("delta", '{"title": "登录成功", "priority": "P0", "precondition": null, "remark": null, "steps": [{"action": "输入", "expected": "成功"}]}]}]}')
-    yield ("usage", (100, 50))
-
-
-async def _fake_stream_garbage_then_usage(project_name, module_name, doc_content):
+async def _fake_stream_garbage_then_usage(*a, **kw):
     yield ("delta", "不是合法 JSON")
-    yield ("usage", (150, 250))
+    yield ("usage", (150, 250, 2.5))
 
 
 async def test_case_job_persists_stream_text_and_times(monkeypatch, tmp_path):
@@ -131,8 +140,7 @@ async def test_case_job_persists_stream_text_and_times(monkeypatch, tmp_path):
 
     doc_file = tmp_path / "需求.md"
     doc_file.write_text("# 登录需求\n输入账号密码后登录成功。", encoding="utf-8")
-    monkeypatch.setattr(pl, "stream_case_generation", _fake_stream_valid_long)
-    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 1.5)
+    monkeypatch.setattr(pl, "stream_skill_generation", _fake_engine_ok)
     db = SessionLocal()
     try:
         p, m, d = _seed(db, str(doc_file))
@@ -143,10 +151,10 @@ async def test_case_job_persists_stream_text_and_times(monkeypatch, tmp_path):
         db.expire_all()
         got = db.get(GenerationJob, job.id)
         assert got.status == "completed"
-        assert got.output_text == (
-            '{"feature_points": [{"name": "账号登录", "cases": ['
-            '{"title": "登录成功", "priority": "P0", "precondition": null, "remark": null, "steps": [{"action": "输入", "expected": "成功"}]}]}]}'
-        )
+        assert "我先解析文档,再按功能点归组。" in got.output_text
+        assert "===== 产物 JSON =====" in got.output_text
+        assert '"feature_points"' in got.output_text  # 结构化产物追加进回放文本
+        assert got.tool_trace is not None
         assert got.started_at is not None and got.finished_at is not None
         assert got.started_at <= got.finished_at
     finally:
@@ -159,8 +167,7 @@ async def test_case_job_tokens_survive_parse_failure(monkeypatch, tmp_path):
 
     doc_file = tmp_path / "需求.md"
     doc_file.write_text("# 需求", encoding="utf-8")
-    monkeypatch.setattr(pl, "stream_case_generation", _fake_stream_garbage_then_usage)
-    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 2.5)
+    monkeypatch.setattr(pl, "stream_skill_generation", _fake_stream_garbage_then_usage)
     db = SessionLocal()
     try:
         p, m, d = _seed(db, str(doc_file))
@@ -179,21 +186,13 @@ async def test_case_job_tokens_survive_parse_failure(monkeypatch, tmp_path):
         db.close()
 
 
-async def _fake_stream_with_thinking(project_name, module_name, doc_content):
-    yield ("thinking", "分析:文档含登录需求,拆为功能点…")
-    yield ("delta", '{"feature_points": [{"name": "登录", "cases": [')
-    yield ("delta", '{"title": "登录成功", "priority": "P0", "steps": [{"action": "输入", "expected": "成功"}]}]}]}')
-    yield ("usage", (100, 50))
-
-
 async def test_case_job_persists_thinking_text(monkeypatch, tmp_path):
     """计划6:思考摘要随流落库,completed 后 thinking_text 为思考全文。"""
     import app.jobs.pipeline as pl
 
     doc_file = tmp_path / "需求.md"
     doc_file.write_text("# 登录需求\n", encoding="utf-8")
-    monkeypatch.setattr(pl, "stream_case_generation", _fake_stream_with_thinking)
-    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 1.5)
+    monkeypatch.setattr(pl, "stream_skill_generation", _fake_engine_ok)
     db = SessionLocal()
     try:
         p, m, d = _seed(db, str(doc_file))
@@ -204,7 +203,7 @@ async def test_case_job_persists_thinking_text(monkeypatch, tmp_path):
         db.expire_all()
         got = db.get(GenerationJob, job.id)
         assert got.status == "completed"
-        assert got.thinking_text == "分析:文档含登录需求,拆为功能点…"
+        assert got.thinking_text == "先看技能方法论…"
         assert got.output_text is not None and '"feature_points"' in got.output_text
     finally:
         db.close()
@@ -214,15 +213,14 @@ async def test_case_job_thinking_survives_parse_failure(monkeypatch, tmp_path):
     """计划6:思考先于产物流到达,解析抛异常时 thinking_text 也必须已落库(与 A3 同理)。"""
     import app.jobs.pipeline as pl
 
-    async def garbage_with_thinking(project_name, module_name, doc_content):
+    async def garbage_with_thinking(*a, **kw):
         yield ("thinking", "思考中…")
         yield ("delta", "不是合法 JSON")
-        yield ("usage", (150, 250))
+        yield ("usage", (150, 250, 2.5))
 
     doc_file = tmp_path / "需求.md"
     doc_file.write_text("# 需求", encoding="utf-8")
-    monkeypatch.setattr(pl, "stream_case_generation", garbage_with_thinking)
-    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 2.5)
+    monkeypatch.setattr(pl, "stream_skill_generation", garbage_with_thinking)
     db = SessionLocal()
     try:
         p, m, d = _seed(db, str(doc_file))
@@ -247,7 +245,7 @@ async def test_stream_threshold_flush_mid_stream(monkeypatch, tmp_path):
     doc_file = tmp_path / "需求.md"
     doc_file.write_text("# 需求", encoding="utf-8")
 
-    async def big_then_probe(project_name, module_name, doc_content):
+    async def big_then_probe(*a, **kw):
         yield ("thinking", "T" * 5000)
         yield ("delta", "X" * 5000)
         # 生成器恢复时探查 DB:此时 process_job 已处理完上述两个大块并 flush
@@ -260,10 +258,9 @@ async def test_stream_threshold_flush_mid_stream(monkeypatch, tmp_path):
             probe["t"], probe["o"] = row[0], row[1]
         finally:
             pdb.close()
-        yield ("usage", (10, 10))
+        yield ("usage", (10, 10, 1.0))
 
-    monkeypatch.setattr(pl, "stream_case_generation", big_then_probe)
-    monkeypatch.setattr(pl, "estimate_cost", lambda m, i, o: 1.0)
+    monkeypatch.setattr(pl, "stream_skill_generation", big_then_probe)
     db = SessionLocal()
     try:
         p, m, d = _seed(db, str(doc_file))
@@ -293,6 +290,7 @@ def test_sse_endpoint_snapshot_and_404(client):
             project_id=p.id, document_id=None, target_module_id=None, status="completed",
             output_text="历史任务流式输出", input_tokens=11, output_tokens=22,
             thinking_text="历史思考摘要全文",
+            tool_trace="Read a.java\n",
             artifacts=[{"path": "a.java", "action": "created"}, {"path": "b.java", "action": "overwritten"}],
         )
         db.add(job)
@@ -313,3 +311,62 @@ def test_sse_endpoint_snapshot_and_404(client):
     assert snap["thinking_text"] == "历史思考摘要全文"
     assert snap["input_tokens"] == 11 and snap["output_tokens"] == 22
     assert snap["files_count"] == 2 and snap["staged_count"] == 0
+    assert snap["tool_trace"] == "Read a.java\n"
+
+
+async def test_case_job_fallback_parses_narration(monkeypatch, tmp_path):
+    """SDK result 缺失(理论上不该发生)→ 解析层兜底:叙述文本里的裸 JSON 仍可入库。"""
+    import app.jobs.pipeline as pl
+
+    async def narration_only(*a, **kw):
+        yield ("delta", '{"feature_points": [{"name": "登录", "cases": [')
+        yield ("delta", '{"title": "登录成功", "priority": "P0", "steps": [{"action": "输入", "expected": "成功"}]}]}]}')
+        yield ("usage", (100, 50, 0.5))
+
+    doc_file = tmp_path / "需求.md"
+    doc_file.write_text("# 需求", encoding="utf-8")
+    monkeypatch.setattr(pl, "stream_skill_generation", narration_only)
+    db = SessionLocal()
+    try:
+        p, m, d = _seed(db, str(doc_file))
+        job = GenerationJob(project_id=p.id, document_id=d.id, target_module_id=m.id)
+        db.add(job)
+        db.commit()
+        await pl.process_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "completed"
+        staged = db.query(StagedCase).filter(StagedCase.job_id == job.id).count()
+        assert staged == 1
+        assert "===== 产物 JSON =====" not in got.output_text  # 无 result 不追加分隔标记
+    finally:
+        db.close()
+
+
+async def test_case_job_passes_user_prompt_to_engine(monkeypatch, tmp_path):
+    """补充提示词随任务持久化并进入引擎提示词。"""
+    import app.jobs.pipeline as pl
+
+    captured = {}
+
+    async def capture_prompt(*a, **kw):
+        captured["prompt"] = kw.get("prompt") or (a[0] if a else "")
+        yield ("usage", (1, 1, 0.0))
+        yield ("result", CASE_RESULT)
+
+    doc_file = tmp_path / "需求.md"
+    doc_file.write_text("# 需求", encoding="utf-8")
+    monkeypatch.setattr(pl, "stream_skill_generation", capture_prompt)
+    db = SessionLocal()
+    try:
+        p, m, d = _seed(db, str(doc_file))
+        job = GenerationJob(project_id=p.id, document_id=d.id, target_module_id=m.id,
+                            user_prompt="只测登录")
+        db.add(job)
+        db.commit()
+        await pl.process_job(job.id)
+        assert "只测登录" in captured["prompt"]
+        assert "# 补充指令" in captured["prompt"]
+        assert "functional-testing" in captured["prompt"]  # 技能调度指令在提示词内
+    finally:
+        db.close()
