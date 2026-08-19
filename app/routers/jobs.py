@@ -4,7 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -34,6 +34,7 @@ async def job_events(job_id: int, db: Session = Depends(get_db)):
     _job_error = job.error
     _job_output_text = job.output_text
     _job_thinking_text = job.thinking_text
+    _job_tool_trace = job.tool_trace
     _job_input_tokens = job.input_tokens
     _job_output_tokens = job.output_tokens
     _files_count = len(job.artifacts or [])
@@ -49,6 +50,7 @@ async def job_events(job_id: int, db: Session = Depends(get_db)):
                     "error": _job_error,
                     "output_text": _job_output_text,
                     "thinking_text": _job_thinking_text,
+                    "tool_trace": _job_tool_trace,
                     "input_tokens": _job_input_tokens,
                     "output_tokens": _job_output_tokens,
                     "files_count": _files_count,
@@ -76,6 +78,8 @@ class JobCreate(BaseModel):
     target_module_id: int | None = None
     target_module_name: str | None = None
     job_type: Literal["case_generation", "api_generation"] = "case_generation"
+    # 用户发起生成时可选填写的自由指令,随任务持久化(计划7 补充提示词)
+    user_prompt: str | None = Field(default=None, max_length=2000)
 
 
 def _resolve_module_id(db: Session, project_id: int, payload: JobCreate) -> int | None:
@@ -123,6 +127,7 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
         target_module_id=module_id,
         job_type=payload.job_type,
         model=settings.ai_model,
+        user_prompt=(payload.user_prompt or "").strip() or None,
     )
     db.add(job)
     db.commit()

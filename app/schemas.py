@@ -102,6 +102,8 @@ class GenerationJobOut(BaseModel):
     artifacts: list[dict] | None
     output_text: str | None = None
     thinking_text: str | None = None
+    user_prompt: str | None = None
+    tool_trace: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
 

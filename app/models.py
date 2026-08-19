@@ -163,6 +163,9 @@ class GenerationJob(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0, comment="输出Token消耗数量")
     cost_usd: Mapped[float] = mapped_column(Float, default=0, comment="任务消耗费用(美元)")
     error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="执行失败时的错误信息")
+    user_prompt: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="用户补充提示词(发起生成时可选填写,随任务持久化)"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
@@ -176,6 +179,9 @@ class GenerationJob(Base):
     )
     thinking_text: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="AI 思考摘要全文(display=summarized,跨修复轮累积,终态回放用)"
+    )
+    tool_trace: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="过程记录:引擎工具调用的人类可读行(按序累积,终态回放用)"
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="任务开始执行时间")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="任务终态(完成/失败)时间")
