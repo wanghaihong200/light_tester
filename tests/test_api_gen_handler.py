@@ -220,18 +220,17 @@ async def test_api_job_accumulates_tokens_across_rounds(monkeypatch, tmp_path):
         calls["n"] += 1
         if calls["n"] == 1:
             yield ("delta", '{"files": [{"path": "src/test/java/T.java", "content": "class T{}"}]}')
-            yield ("usage", (1000, 500))
+            yield ("usage", (1000, 500, 1.2))
         else:
             yield ("delta", '{"files": []}')
-            yield ("usage", (800, 300))
+            yield ("usage", (800, 300, 0.8))
 
-    monkeypatch.setattr(ag, "stream_api_generation", fake_stream)
+    monkeypatch.setattr(ag, "stream_skill_generation", fake_stream)
     monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
     monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
     monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
     mvn_results = [MvnResult(success=False, output="boom"), MvnResult(success=True, output="ok"), MvnResult(success=True, output="ok")]
     monkeypatch.setattr(ag, "run_mvn_compile", lambda w: mvn_results.pop(0))
-    monkeypatch.setattr(ag, "estimate_cost", lambda m, i, o: 3.0)
 
     db = SessionLocal()
     try:
@@ -241,6 +240,7 @@ async def test_api_job_accumulates_tokens_across_rounds(monkeypatch, tmp_path):
         got = db.get(GenerationJob, job.id)
         assert got.status == "completed"
         assert got.input_tokens == 1800 and got.output_tokens == 800  # 1000+800 / 500+300
+        assert got.cost_usd == pytest.approx(2.0)
         assert got.output_text.count("===== 修复轮 1 =====") == 1  # A1:两轮输出都被持久化
         assert "class T{}" in got.output_text
         assert got.started_at is not None and got.finished_at is not None
@@ -257,14 +257,13 @@ async def test_api_job_tokens_survive_mvn_failure(monkeypatch, tmp_path):
 
     async def fake_stream(*a, **kw):
         yield ("delta", '{"files": [{"path": "src/test/java/T.java", "content": "bad"}]}')
-        yield ("usage", (600, 400))
+        yield ("usage", (600, 400, 1.0))
 
-    monkeypatch.setattr(ag, "stream_api_generation", fake_stream)
+    monkeypatch.setattr(ag, "stream_skill_generation", fake_stream)
     monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
     monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
     monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
     monkeypatch.setattr(ag, "run_mvn_compile", lambda w: MvnResult(success=False, output="编译失败"))
-    monkeypatch.setattr(ag, "estimate_cost", lambda m, i, o: 4.0)
 
     db = SessionLocal()
     try:
@@ -274,6 +273,7 @@ async def test_api_job_tokens_survive_mvn_failure(monkeypatch, tmp_path):
         got = db.get(GenerationJob, job.id)
         assert got.status == "failed"
         assert got.input_tokens == 600 * 3 and got.output_tokens == 400 * 3  # 第0+2 修复轮共三次调用
+        assert got.cost_usd == pytest.approx(3.0)
         assert got.finished_at is not None
     finally:
         db.close()
@@ -290,13 +290,12 @@ async def test_api_job_thinking_survives_parse_failure(monkeypatch, tmp_path):
     async def garbage_with_thinking(*a, **kw):
         yield ("thinking", "思考中…")
         yield ("delta", "不是合法 JSON")
-        yield ("usage", (150, 250))
+        yield ("usage", (150, 250, 0.5))
 
-    monkeypatch.setattr(ag, "stream_api_generation", garbage_with_thinking)
+    monkeypatch.setattr(ag, "stream_skill_generation", garbage_with_thinking)
     monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
     monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
     monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
-    monkeypatch.setattr(ag, "estimate_cost", lambda m, i, o: 2.5)
 
     db = SessionLocal()
     try:
@@ -324,19 +323,18 @@ async def test_api_job_persists_thinking_across_rounds(monkeypatch, tmp_path):
         if calls["n"] == 1:
             yield ("thinking", "第0轮思考:设计测试类结构…")
             yield ("delta", '{"files": [{"path": "src/test/java/T.java", "content": "class T{}"}]}')
-            yield ("usage", (1000, 500))
+            yield ("usage", (1000, 500, 1.0))
         else:
             yield ("thinking", "修复轮思考:修编译错误…")
             yield ("delta", '{"files": []}')
-            yield ("usage", (800, 300))
+            yield ("usage", (800, 300, 0.5))
 
-    monkeypatch.setattr(ag, "stream_api_generation", fake_stream)
+    monkeypatch.setattr(ag, "stream_skill_generation", fake_stream)
     monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
     monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
     monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
     mvn_results = [MvnResult(success=False, output="boom"), MvnResult(success=True, output="ok"), MvnResult(success=True, output="ok")]
     monkeypatch.setattr(ag, "run_mvn_compile", lambda w: mvn_results.pop(0))
-    monkeypatch.setattr(ag, "estimate_cost", lambda m, i, o: 3.0)
 
     db = SessionLocal()
     try:
@@ -348,5 +346,48 @@ async def test_api_job_persists_thinking_across_rounds(monkeypatch, tmp_path):
         assert got.thinking_text is not None
         assert "第0轮思考" in got.thinking_text and "修复轮思考" in got.thinking_text
         assert got.thinking_text.count("===== 修复轮 1 =====") == 1
+    finally:
+        db.close()
+
+
+async def test_api_job_uses_structured_result_and_persists_tool_trace(monkeypatch, tmp_path):
+    """计划7:result dict 直接校验入库(不走叙述解析);过程记录落库并推 SSE。"""
+    from app.jobs.bus import bus
+
+    doc_file = tmp_path / "api.md"
+    doc_file.write_text("# API 文档", encoding="utf-8")
+    wc = tmp_path / "wc"
+    (wc / "src/test/java").mkdir(parents=True)
+
+    async def fake_stream(*a, **kw):
+        yield ("tool", "Read pom.xml")
+        yield ("tool", "Skill api-test-restassure")
+        yield ("usage", (100, 40, 0.3))
+        yield ("result", {"files": [{"path": "src/test/java/T.java", "content": "class T{}"}]})
+
+    monkeypatch.setattr(ag, "stream_skill_generation", fake_stream)
+    monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
+    monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
+    monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
+    monkeypatch.setattr(ag, "run_mvn_compile", lambda w: MvnResult(success=True, output="ok"))
+
+    db = SessionLocal()
+    try:
+        job = _seed_api_job(db, str(doc_file))
+        q = bus.subscribe(job.id)
+        await ag.process_api_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "completed"
+        assert got.tool_trace == "Read pom.xml\nSkill api-test-restassure\n"
+        assert got.cost_usd == pytest.approx(0.3)
+        assert "===== 产物 JSON =====" in got.output_text
+        assert "class T{}" in got.output_text  # 文件全文随 JSON 产物进入回放文本
+        tool_events = []
+        while not q.empty():
+            e = q.get_nowait()
+            if e.get("type") == "tool":
+                tool_events.append(e)
+        assert len(tool_events) == 2
     finally:
         db.close()

@@ -14,13 +14,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.ai.client import estimate_cost, stream_api_generation
+import json
+
+from app.ai.engine import API_FILES_JSON_SCHEMA, SKILL_API, stream_skill_generation
+from app.ai.prompts import build_api_gen_user_prompt
 from app.config import settings
 from app.database import SessionLocal
 from app.jobs.bus import bus
 from datetime import datetime
 
-from app.jobs.pipeline import _strip_code_fence, STREAM_FLUSH_THRESHOLD, flush_output_text, flush_thinking_text
+from app.jobs.pipeline import _strip_code_fence, STREAM_FLUSH_THRESHOLD, flush_output_text, flush_thinking_text, flush_tool_trace
 from app.models import GenerationJob, Module
 from app.git_service import working_copy_path, ensure_repo, GitError
 
@@ -49,7 +52,6 @@ def parse_api_files(text: str) -> ApiFilesPayload:
     与 pipeline._parse_staged_payload 同构:结构化输出端点不强制 schema 时模型会
     输出围栏 + 顶层数组(2026-08-17 E2E 实测),解析层兜底归一化为 {"files": [...]}。
     """
-    import json
     data = json.loads(_strip_code_fence(text))
     if isinstance(data, list):
         data = {"files": data}
@@ -178,6 +180,7 @@ async def process_api_job(job_id: int) -> None:
     try:
         stream_buf: list[str] = []  # 跨轮+异常路径共用
         thinking_buf: list[str] = []
+        tool_buf: list[str] = []
         job = db.get(GenerationJob, job_id)
         if job is None:
             return
@@ -203,9 +206,15 @@ async def process_api_job(job_id: int) -> None:
         wc = working_copy_path(project)
         summary = collect_project_summary(wc)
 
-        # AI 生成(第 0 轮)
+        # AI 生成(第 0 轮;修复轮在循环内重调)
         chunks: list[str] = []
-        async for kind, value in stream_api_generation(project.name, module_name, content, summary):
+        round_result: dict | None = None
+        async for kind, value in stream_skill_generation(
+            prompt=build_api_gen_user_prompt(project.name, module_name, content, summary, job.user_prompt),
+            skill_name=SKILL_API,
+            output_schema=API_FILES_JSON_SCHEMA,
+            add_dirs=[wc],
+        ):
             if kind == "thinking":
                 thinking_buf.append(value)
                 await publish({"type": "thinking_delta", "text": value})
@@ -217,13 +226,19 @@ async def process_api_job(job_id: int) -> None:
                 await publish({"type": "delta", "text": value})
                 if sum(len(s) for s in stream_buf) >= STREAM_FLUSH_THRESHOLD:
                     flush_output_text(db, job_id, stream_buf)
+            elif kind == "tool":
+                tool_buf.append(value + "\n")
+                await publish({"type": "tool", "text": value + "\n"})
+                if len(tool_buf) >= 32:
+                    flush_tool_trace(db, job_id, tool_buf)
             elif kind == "usage":
-                in_t, out_t = value
-                # 累计,不再覆盖;ORM 侧 None 先归零(column default 在 DB 层)
+                in_t, out_t, cost = value
                 job.input_tokens = (job.input_tokens or 0) + in_t
                 job.output_tokens = (job.output_tokens or 0) + out_t
-                job.cost_usd = estimate_cost(job.model, job.input_tokens, job.output_tokens)
+                job.cost_usd = (job.cost_usd or 0.0) + cost
                 db.commit()
+            elif kind == "result":
+                round_result = value
 
         artifacts: list[dict] = []
         last_error: str | None = None
@@ -232,7 +247,12 @@ async def process_api_job(job_id: int) -> None:
         # AI 历史产物集合:这些文件即使推送后已跟踪也允许覆盖(再生成迭代)
         ai_owned = _ai_owned_paths(db, project.id)
         for round_idx in range(MAX_FIX_ROUNDS + 1):  # 0,1,2 = 初始 + 2 修复
-            payload = parse_api_files("".join(chunks))
+            if round_result is not None:
+                payload = ApiFilesPayload.model_validate(round_result)
+                stream_buf.append("\n\n===== 产物 JSON =====\n\n" + json.dumps(round_result, ensure_ascii=False, indent=2) + "\n")
+                flush_output_text(db, job_id, stream_buf)
+            else:
+                payload = parse_api_files("".join(chunks))
             artifacts = write_files(wc, [f.model_dump() for f in payload.files], ai_owned=ai_owned)
             for item in artifacts:
                 written_by_path[item["path"]] = item["action"]
@@ -255,9 +275,16 @@ async def process_api_job(job_id: int) -> None:
             thinking_buf.append("\n\n===== 修复轮 %d =====\n\n" % (round_idx + 1))
             flush_thinking_text(db, job_id, thinking_buf)
             fix_prompt_extra = f"\n## 上次编译失败,错误如下(尾部)\n{mvn.output[-6000:]}\n本次写的文件:{[a['path'] for a in artifacts]}\n请只输出需要修改的文件,path 必须与原文件一致。"
-            # 把修复提示拼进新一轮 AI 调用(复用 stream_api_generation,在文档后追加)
             chunks = []
-            async for kind, value in stream_api_generation(project.name, module_name, content + fix_prompt_extra, summary):
+            round_result = None
+            async for kind, value in stream_skill_generation(
+                prompt=build_api_gen_user_prompt(
+                    project.name, module_name, content + fix_prompt_extra, summary, job.user_prompt
+                ),
+                skill_name=SKILL_API,
+                output_schema=API_FILES_JSON_SCHEMA,
+                add_dirs=[wc],
+            ):
                 if kind == "thinking":
                     thinking_buf.append(value)
                     await publish({"type": "thinking_delta", "text": value})
@@ -269,13 +296,19 @@ async def process_api_job(job_id: int) -> None:
                     await publish({"type": "delta", "text": value})
                     if sum(len(s) for s in stream_buf) >= STREAM_FLUSH_THRESHOLD:
                         flush_output_text(db, job_id, stream_buf)
+                elif kind == "tool":
+                    tool_buf.append(value + "\n")
+                    await publish({"type": "tool", "text": value + "\n"})
+                    if len(tool_buf) >= 32:
+                        flush_tool_trace(db, job_id, tool_buf)
                 elif kind == "usage":
-                    in_t, out_t = value
-                    # 累计,不再覆盖;ORM 侧 None 先归零(column default 在 DB 层)
+                    in_t, out_t, cost = value
                     job.input_tokens = (job.input_tokens or 0) + in_t
                     job.output_tokens = (job.output_tokens or 0) + out_t
-                    job.cost_usd = estimate_cost(job.model, job.input_tokens, job.output_tokens)
+                    job.cost_usd = (job.cost_usd or 0.0) + cost
                     db.commit()
+                elif kind == "result":
+                    round_result = value
 
         job.artifacts = [{"path": p, "action": a} for p, a in written_by_path.items()]
         artifacts = job.artifacts
@@ -286,6 +319,7 @@ async def process_api_job(job_id: int) -> None:
             job.finished_at = datetime.now()
             flush_output_text(db, job_id, stream_buf)
             flush_thinking_text(db, job_id, thinking_buf)
+            flush_tool_trace(db, job_id, tool_buf)
             db.commit()
             await publish({"type": "error", "message": (last_error or "mvn 失败")[:500]})
             return
@@ -294,6 +328,7 @@ async def process_api_job(job_id: int) -> None:
         job.finished_at = datetime.now()
         flush_output_text(db, job_id, stream_buf)
         flush_thinking_text(db, job_id, thinking_buf)
+        flush_tool_trace(db, job_id, tool_buf)
         db.commit()
         await publish({"type": "done", "files_count": len(artifacts)})
 
@@ -306,6 +341,7 @@ async def process_api_job(job_id: int) -> None:
             job.finished_at = datetime.now()
             flush_output_text(db, job_id, stream_buf)
             flush_thinking_text(db, job_id, thinking_buf)
+            flush_tool_trace(db, job_id, tool_buf)
             db.commit()
         await bus.publish(job_id, {"type": "error", "message": str(exc)[:500]})
     finally:
