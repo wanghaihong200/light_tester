@@ -2,7 +2,6 @@
 
 原件(C:\\Users\\王海虹\\.claude\\skills\\)不受影响——本测试只读仓库内副本。
 """
-import pytest
 
 from pathlib import Path
 
@@ -13,7 +12,6 @@ def _read(*parts: str) -> str:
     return SKILLS_ROOT.joinpath(*parts).read_text(encoding="utf-8")
 
 
-@pytest.mark.skip_database
 def test_skill_copies_installed():
     assert (SKILLS_ROOT / "functional-testing" / "SKILL.md").is_file()
     assert (SKILLS_ROOT / "api-test-restassure" / "SKILL.md").is_file()
@@ -25,7 +23,6 @@ def test_skill_copies_installed():
         assert (SKILLS_ROOT / skill / "scripts").is_dir()
 
 
-@pytest.mark.skip_database
 def test_functional_copy_output_is_platform_json_contract():
     prompt = _read("functional-testing", "prompts", "functional-testing.md")
     assert '"feature_points"' in prompt
@@ -38,7 +35,6 @@ def test_functional_copy_output_is_platform_json_contract():
     assert "默认 Markdown" not in skill_md
 
 
-@pytest.mark.skip_database
 def test_restassure_copy_output_is_platform_json_contract():
     prompt = _read("api-test-restassure", "prompts", "api-test-restassure.md")
     assert '"files"' in prompt
