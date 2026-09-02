@@ -120,3 +120,22 @@ class StagedCaseOut(BaseModel):
     remark: str | None
     steps: list
     created_at: datetime
+
+
+# UI自动化脚本:录制的步骤 DSL JSON 文档({version,meta,variables,steps})
+class UiScriptSave(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+    script: dict
+
+
+class UiScriptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    name: str
+    description: str | None
+    script: dict
+    created_at: datetime
+    updated_at: datetime
