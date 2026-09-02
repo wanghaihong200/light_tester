@@ -223,3 +223,59 @@ class StagedCase(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
 
     job: Mapped[GenerationJob] = relationship(back_populates="staged")
+
+
+class UiScript(Base):
+    __tablename__ = "ui_scripts"
+    __table_args__ = {"comment": "UI自动化脚本表：录制的JSON步骤DSL，跨端中性"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="脚本主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    name: Mapped[str] = mapped_column(String(200), comment="脚本名称")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="脚本描述")
+    script: Mapped[dict] = mapped_column(JSON, default=dict, comment="脚本DSL文档:{version,meta,variables,steps}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+
+
+class UiRun(Base):
+    __tablename__ = "ui_runs"
+    __table_args__ = {"comment": "UI自动化执行记录表：一次脚本回放的步骤级结果"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="执行记录主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    status: Mapped[str] = mapped_column(String(20), default="pending", comment="状态：pending/running/completed/failed")
+    script_id: Mapped[int] = mapped_column(ForeignKey("ui_scripts.id"), comment="执行的脚本ID")
+    script_name: Mapped[str] = mapped_column(String(200), default="", comment="执行时的脚本名快照(脚本改名/删除不影响历史)")
+    mode: Mapped[str] = mapped_column(String(10), default="headless", comment="浏览器模式：headless/headed")
+    variables: Mapped[dict] = mapped_column(JSON, default=dict, comment="用户传入变量覆盖值")
+    step_results: Mapped[list] = mapped_column(JSON, default=list, comment="步骤结果列表:[{step_id,action,status,error,screenshot,elapsed_ms}]")
+    steps_total: Mapped[int] = mapped_column(Integer, default=0, comment="总步骤数")
+    steps_passed: Mapped[int] = mapped_column(Integer, default=0, comment="通过步骤数")
+    steps_failed: Mapped[int] = mapped_column(Integer, default=0, comment="失败步骤数")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="整体失败原因(环境级错误,非断言失败)")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="开始执行时间")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="终态时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+
+
+class UiAuthState(Base):
+    __tablename__ = "ui_auth_states"
+    __table_args__ = {"comment": "UI自动化登录态表：storage_state 文件的登记行"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="登录态主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    name: Mapped[str] = mapped_column(String(200), comment="登录态名称")
+    storage_path: Mapped[str] = mapped_column(String(1000), comment="storage_state JSON 文件存储路径")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")

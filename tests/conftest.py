@@ -14,9 +14,12 @@ from sqlalchemy import text
 
 from app.database import Base, SessionLocal, engine
 from app.main import create_app
-from app.models import Case, Document, FeaturePoint, GenerationJob, Module, Project, StagedCase, Step
+from app.models import (
+    Case, Document, FeaturePoint, GenerationJob, Module, Project, StagedCase,
+    Step, UiAuthState, UiRun, UiScript,
+)
 
-_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project)
+_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState)
 
 
 @pytest.fixture(scope="session", autouse=True)
