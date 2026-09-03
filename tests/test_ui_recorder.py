@@ -156,3 +156,39 @@ def test_assert_interleaves_at_before_len_and_matches_stream():
     ids = [x["id"] for x in draft["steps"]]
     assert ids.index(a1["id"]) == 2 and ids.index(a2["id"]) == 3
     assert draft["steps"] == _streamed_steps(events)
+
+
+# ── 预览帧采集(capture_frames,窗口抖动修复 2026-09-03)──────────────────
+
+
+def test_interactive_frames_on_by_default(page_url):
+    """默认推帧(录制面板依赖);帧改 CDP 直采后仍正常到达。"""
+    from app.ui_automation.session import InteractiveSession
+    frames: list[str] = []
+    sess = InteractiveSession(session_id=9910, headless=True, start_url=page_url,
+                              storage_state=None, on_raw=lambda e: None,
+                              on_frame=frames.append, on_close=lambda: None)
+    try:
+        sess.current_page(timeout=15)
+        time.sleep(2.0)  # ≥3 个帧周期(0.6s/帧)
+    finally:
+        sess.stop()
+        sess.join(timeout=10)
+    assert len(frames) >= 2
+
+
+def test_capture_frames_false_no_frames(page_url):
+    """无预览面板的会话(登录态采集)capture_frames=False:完全不采帧,窗口零扰动。"""
+    from app.ui_automation.session import InteractiveSession
+    frames: list[str] = []
+    sess = InteractiveSession(session_id=9911, headless=True, start_url=page_url,
+                              storage_state=None, on_raw=lambda e: None,
+                              on_frame=frames.append, on_close=lambda: None,
+                              capture_frames=False)
+    try:
+        sess.current_page(timeout=15)
+        time.sleep(2.0)  # 若仍在采帧,这里会有 ~3 帧
+    finally:
+        sess.stop()
+        sess.join(timeout=10)
+    assert frames == []

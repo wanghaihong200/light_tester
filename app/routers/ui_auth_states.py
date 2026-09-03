@@ -58,7 +58,7 @@ def start_collect(project_id: int, payload: CollectCreate, db: Session = Depends
         sess = InteractiveSession(cid, headless=False, start_url="about:blank",
                                   storage_state=None, on_raw=lambda e: None,
                                   on_frame=lambda b64: None, on_close=on_close,
-                                  with_toolbar=False)
+                                  with_toolbar=False, capture_frames=False)
         with _lock:
             _collects[cid] = CollectSession(sess, project_id, payload.name)
     except Exception:

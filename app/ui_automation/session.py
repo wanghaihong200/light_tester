@@ -9,7 +9,6 @@ binding 用 context.expose_binding → 所有 page 可调;会话线程持续推�
 ②事件只在 sync 调用进行中派发,纯 time.sleep 期间一条都不会到 ——
   所以主循环用 page.wait_for_timeout() 做协议级等待,期间持续派发
   点击/输入/跳转事件,预览帧同样在会话线程内取(跨线程截图同罪①)。"""
-import base64
 import concurrent.futures
 import queue
 import threading
@@ -58,9 +57,11 @@ def _wrap(value, call):
 class InteractiveSession:
     def __init__(self, session_id: int, *, headless: bool, start_url: str,
                  storage_state: str | None, on_raw, on_frame, on_close,
-                 with_toolbar: bool = True):
+                 with_toolbar: bool = True, capture_frames: bool = True):
         self.session_id = session_id
         self._context = None
+        self._capture_frames = capture_frames  # 无预览面板的会话(登录态采集)不采帧
+        self._cdp: dict = {}              # page → CDP 会话(预览帧直采,抖动修复)
         self._ready = threading.Event()   # 首个页面就绪(start_url 已加载)
         self._closed = threading.Event()  # 会话线程已退出
         self._stop = threading.Event()    # 请求停止(stop 后 ≤_PUMP_MS 内生效)
@@ -104,6 +105,26 @@ class InteractiveSession:
         self._thread.join(timeout)
 
     # ── 会话线程内部 ──
+    def _frame_b64(self, page) -> str:
+        """预览帧直发 CDP captureScreenshot(不带 captureBeyondViewport)。
+        playwright 的 page.screenshot 对可滚动页面强制走 beyond-viewport 路径
+        (captureBeyondViewport: !fitsViewport),有头窗口每次捕获都把渲染面临时
+        扩到内容全高再复位 —— 用户看到 600ms 一次的持续抖动;
+        CDP 纯读当前可见表面,零视觉扰动。只允许在会话线程调用。"""
+        cdp = self._cdp.get(page)
+        if cdp is None:
+            cdp = page.context.new_cdp_session(page)
+            self._cdp[page] = cdp
+        try:
+            return cdp.send("Page.captureScreenshot",
+                            {"format": "jpeg", "quality": 55})["data"]
+        except Exception:  # 页面已关闭/会话失效:弃缓存重建一次
+            self._cdp.pop(page, None)
+            cdp = page.context.new_cdp_session(page)
+            self._cdp[page] = cdp
+            return cdp.send("Page.captureScreenshot",
+                            {"format": "jpeg", "quality": 55})["data"]
+
     def _drain_calls(self) -> None:
         """执行外部线程投递的调用(目标页在调用内部经 _current_page_obj 解析)。"""
         while True:
@@ -174,11 +195,13 @@ class InteractiveSession:
                     now = time.monotonic()
                     if now >= next_frame:
                         next_frame = now + _FRAME_INTERVAL
-                        try:  # 帧同样只能在会话线程取
-                            on_frame(base64.b64encode(
-                                pages[-1].screenshot(type="jpeg", quality=55)).decode())
-                        except Exception:
-                            pass  # 导航中截图可能失败,跳过这一帧即可
+                        if self._capture_frames:
+                            for dead in [p for p in self._cdp if p not in pages]:
+                                self._cdp.pop(dead, None)  # 关掉的标签页弃缓存
+                            try:  # 帧同样只能在会话线程取
+                                on_frame(self._frame_b64(pages[-1]))
+                            except Exception:
+                                pass  # 导航中截图可能失败,跳过这一帧即可
                     try:
                         # 协议级等待:期间持续派发事件;纯 time.sleep 派发不了任何事件
                         pages[-1].wait_for_timeout(_PUMP_MS)

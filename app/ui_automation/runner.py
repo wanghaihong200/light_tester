@@ -79,12 +79,20 @@ async def _unhighlight(page, loc: dict | None) -> None:
         pass
 
 
-async def _shot_bytes(page) -> bytes:
-    return await page.screenshot(type="jpeg", quality=55)
-
-
 async def _shot_b64(page) -> str:
-    return base64.b64encode(await _shot_bytes(page)).decode()
+    """截图直发 CDP captureScreenshot(不带 captureBeyondViewport)。
+    playwright 截图对可滚动页强制走 beyond-viewport 路径,有头执行窗口每次
+    捕获可见地膨胀-复位(抖动);CDP 纯读当前可见表面,零视觉扰动。"""
+    cdp = await page.context.new_cdp_session(page)
+    try:
+        return (await cdp.send("Page.captureScreenshot",
+                               {"format": "jpeg", "quality": 55}))["data"]
+    finally:
+        await cdp.detach()
+
+
+async def _shot_bytes(page) -> bytes:
+    return base64.b64decode(await _shot_b64(page))
 
 
 async def _run_step(page, step: dict, variables: dict) -> tuple[str, str | None]:
