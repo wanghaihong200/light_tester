@@ -18,7 +18,7 @@ from app.ui_automation import dsl, runner
 
 router = APIRouter(prefix="/api", tags=["ui-runs"])
 
-# 截图文件名白名单:仅字母数字下划线点横线,防路径穿越
+# 截图文件名白名单:仅字母数字下划线点横线,防路径穿越;再挡 "."/".."(避免 FileResponse 读目录 500)
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -33,8 +33,7 @@ class RunCreate(BaseModel):
 
 
 def _run_thread(run_id: int, doc: dict, mode: str, variables: dict, auth_path: str | None):
-    if not runner.RUN_SLOT.acquire(blocking=False):
-        return  # 理论不可达:创建端已 409
+    """执行线程:锁的所有权由创建端移交而来,这里只负责用完释放。"""
     try:
         runner.execute_script(run_id, doc, mode=mode, variables=variables,
                               auth_state_path=auth_path,
@@ -56,15 +55,20 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
         raise HTTPException(400, "脚本不合法: " + ";".join(errs[:3]))
     if not runner.RUN_SLOT.acquire(blocking=False):
         raise HTTPException(409, "已有执行在进行中,请稍后")
-    runner.RUN_SLOT.release()  # 占用在 _run_thread 里真正发生,先探测后让位避免锁泄漏
-    run = UiRun(project_id=project_id, script_id=script.id, script_name=script.name,
-                mode=payload.mode, variables=payload.variables)
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    threading.Thread(target=_run_thread,
-                     args=(run.id, script.script, payload.mode, payload.variables, None),
-                     daemon=True).start()
+    # 占锁成功即拥有执行权,所有权随线程移交(线程 finally 释放),消灭「探测后让位」的竞态窗口:
+    # 落库/起线程一旦失败就地释放,避免锁泄漏把后续所有请求卡死在 409
+    try:
+        run = UiRun(project_id=project_id, script_id=script.id, script_name=script.name,
+                    mode=payload.mode, variables=payload.variables)
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        threading.Thread(target=_run_thread,
+                         args=(run.id, script.script, payload.mode, payload.variables, None),
+                         daemon=True).start()
+    except Exception:
+        runner.RUN_SLOT.release()
+        raise
     return run
 
 
@@ -116,7 +120,8 @@ async def run_events(run_id: int, db: Session = Depends(get_db)):
 
 @router.get("/ui-runs/{run_id}/screens/{name}")
 def run_screenshot(run_id: int, name: str):
-    if not _NAME_RE.fullmatch(name):
+    # 文件名恒为 step_<i>_<status>.jpg:非 .jpg 一律拒绝,顺带挡掉 "."/".." 目录名
+    if not _NAME_RE.fullmatch(name) or name in (".", "..") or not name.endswith(".jpg"):
         raise HTTPException(400, "bad name")
     path = settings.ui_data_dir / "runs" / str(run_id) / name
     if not path.exists():
