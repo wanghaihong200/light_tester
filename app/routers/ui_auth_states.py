@@ -3,6 +3,7 @@
 用户在弹出的浏览器里完成登录,save 时经 sess.call() 在会话线程内导出 storage_state。"""
 import itertools
 import threading
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -17,7 +18,17 @@ from app.ui_automation.session import INTERACTIVE_SLOT, InteractiveSession
 
 router = APIRouter(prefix="/api", tags=["ui-auth-states"])
 
-_collects: dict[int, InteractiveSession] = {}
+
+@dataclass
+class CollectSession:
+    """采集会话薄包装:项目/名字是采集业务的属性,不该挂到通用 InteractiveSession
+    实例上(替代旧的 sess._project_id / sess._name 私有属性幽灵)。"""
+    session: InteractiveSession
+    project_id: int
+    name: str
+
+
+_collects: dict[int, CollectSession] = {}
 _lock = threading.Lock()
 _ids = itertools.count(1)
 
@@ -48,10 +59,8 @@ def start_collect(project_id: int, payload: CollectCreate, db: Session = Depends
                                   storage_state=None, on_raw=lambda e: None,
                                   on_frame=lambda b64: None, on_close=on_close,
                                   with_toolbar=False)
-        sess._project_id = project_id  # save 时要用;挂在会话对象上与会话同生命周期
-        sess._name = payload.name
         with _lock:
-            _collects[cid] = sess
+            _collects[cid] = CollectSession(sess, project_id, payload.name)
     except Exception:
         on_close()  # 就地释放,避免锁泄漏把后续所有会话卡死在 409
         raise
@@ -60,26 +69,36 @@ def start_collect(project_id: int, payload: CollectCreate, db: Session = Depends
 
 @router.post("/ui-auth-collect/{cid}/save", response_model=UiAuthStateOut, status_code=201)
 def save_collect(cid: int, db: Session = Depends(get_db)):
-    sess = _collects.get(cid)
-    if sess is None:
+    # 所有权移交:开头 pop 到手才允许导出,并发的第二次 save 到此即为 404,
+    # 从根上排除两路 save 各落一行的可能;终态路径不回插
+    cs = _collects.pop(cid, None)
+    if cs is None:
         raise HTTPException(404, "collect session not found")
+    sess = cs.session
     auth_dir = settings.ui_data_dir / "auth"
     auth_dir.mkdir(parents=True, exist_ok=True)
     # 文件名用 DB 自增 id 而非进程内计数:行与文件都跨重启持久,进程内计数重启后从 1 重来,
     # 会命中旧文件静默覆盖,删旧行时 unlink 还会连带删掉新行正用的文件。
     # 先 flush 拿 id 再导出(未提交),导出失败回滚即不留 storage_path 为空的孤儿行
-    row = UiAuthState(project_id=sess._project_id, name=sess._name, storage_path="")
+    row = UiAuthState(project_id=cs.project_id, name=cs.name, storage_path="")
     db.add(row)
     db.flush()
-    path = (auth_dir / f"{sess._project_id}_{row.id}.json").resolve()
+    path = (auth_dir / f"{cs.project_id}_{row.id}.json").resolve()
     try:
         # 导出必须在会话线程内做(跨线程直调 context 会 greenlet 报错),经 call() 投递
         ctx = sess.browser_context()
         sess.call(lambda: ctx.storage_state(path=str(path)))
-    except Exception as e:
+    except RuntimeError as e:
+        # 会话/浏览器已关,重试必然再败:停掉并清理,用户须重新采集
         db.rollback()  # 显式回滚占位行
-        sess.stop()  # 会话已坏:交给 on_close 释放槽位,调用方需重新采集
+        sess.stop()  # 交给 on_close 释放槽位
         raise HTTPException(409, f"采集会话已结束,无法导出登录态: {e}") from e
+    except Exception as e:
+        # I/O 写盘等失败,会话本身仍健康:回滚占位行后放回,保留会话让用户重试 save
+        db.rollback()
+        with _lock:
+            _collects[cid] = cs
+        raise HTTPException(500, f"登录态导出失败,会话已保留可重试: {e}") from e
     row.storage_path = str(path)
     db.commit()
     db.refresh(row)
@@ -89,10 +108,10 @@ def save_collect(cid: int, db: Session = Depends(get_db)):
 
 @router.post("/ui-auth-collect/{cid}/cancel", status_code=204)
 def cancel_collect(cid: int):
-    sess = _collects.get(cid)
-    if sess is None:
+    cs = _collects.pop(cid, None)  # 同 save 的所有权移交:取消与保存互斥,先到先得
+    if cs is None:
         raise HTTPException(404, "collect session not found")
-    sess.stop()  # 丢弃不落库;槽位随 on_close 释放
+    cs.session.stop()  # 丢弃不落库;槽位随 on_close 释放
     return Response(status_code=204)
 
 

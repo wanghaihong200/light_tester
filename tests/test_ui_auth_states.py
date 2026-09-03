@@ -182,31 +182,58 @@ def test_recorder_emits_stopped_even_if_close_cb_raises():
 
 # ── save 命名回归:假会话注入 _collects,不起浏览器(修复 round 1) ──
 class _FakeCtx:
-    """假 context:storage_state 只按入参路径写 JSON,模拟真实导出落盘。"""
+    """假 context:storage_state 只按入参路径写 JSON,模拟真实导出落盘;
+    exc 非空时改为抛该异常(模拟会话已坏 / 写盘失败两类导出故障)。"""
 
-    @staticmethod
-    def storage_state(path):
+    def __init__(self, exc: BaseException | None = None):
+        self.exc = exc
+
+    def storage_state(self, path):
+        if self.exc is not None:
+            raise self.exc
         Path(path).write_text('{"cookies": [], "origins": []}', encoding="utf-8")
         return {"cookies": [], "origins": []}
 
 
 class _FakeSession:
-    """假采集会话:call 原地执行(等价会话线程),stop 自行弹出,全程不碰 playwright。"""
+    """假采集会话:call 原地执行(等价会话线程),stop 记标记并自清出册(模拟真实
+    on_close 回调),全程不碰 playwright。"""
 
-    def __init__(self, cid, project_id, name):
+    def __init__(self, cid: int, exc: BaseException | None = None):
         self._cid = cid
-        self._project_id = project_id
-        self._name = name
+        self.exc = exc
+        self.stopped = False
 
     def browser_context(self):
-        return _FakeCtx()
+        return _FakeCtx(self.exc)
 
     def call(self, fn):
         return fn()
 
     def stop(self):
-        with mod._lock:
+        self.stopped = True
+        with mod._lock:  # 真会话 stop 后由会话线程 on_close 出册,这里原地等价
             mod._collects.pop(self._cid, None)
+
+
+def _inject_collect(project_id: int, exc: BaseException | None = None):
+    """绕过 start_collect(不真开浏览器)直接占一个 collect_id 并注入假会话。
+    返回 (cid, 假会话本体),便于断言 stop 标记与切换故障注入。"""
+    cid = next(mod._ids)
+    fake = _FakeSession(cid, exc)
+    with mod._lock:
+        mod._collects[cid] = mod.CollectSession(fake, project_id, "n")
+    return cid, fake
+
+
+def _auth_rows(project_id: int) -> list[int]:
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        return [r.id for r in db.query(UiAuthState)
+                .filter(UiAuthState.project_id == project_id).all()]
+    finally:
+        db.close()
 
 
 def test_save_twice_no_filename_collision(client, tmp_path, monkeypatch):
@@ -215,9 +242,7 @@ def test_save_twice_no_filename_collision(client, tmp_path, monkeypatch):
     pid = _mk_project()
     ids = []
     for _ in range(2):  # 同一进程内连续两次采集 save(不同行 id)
-        cid = next(mod._ids)
-        with mod._lock:
-            mod._collects[cid] = _FakeSession(cid, pid, "n")
+        cid, _cs = _inject_collect(pid)
         r = client.post(f"/api/ui-auth-collect/{cid}/save")
         assert r.status_code == 201
         ids.append(r.json()["id"])
@@ -235,3 +260,80 @@ def test_save_twice_no_filename_collision(client, tmp_path, monkeypatch):
         assert paths[aid].endswith(f"{pid}_{aid}.json"), paths[aid]
         assert Path(paths[aid]).exists()
     assert paths[ids[0]] != paths[ids[1]]
+
+
+# ── save 异常分流 + 所有权移交(Task 11:A1 Important2 / A2 Minor3)──
+def test_save_runtime_error_409_cleans_session(client, tmp_path, monkeypatch):
+    """导出抛 RuntimeError(会话/浏览器已关,重试必然再败)→ 409 且停止清理会话。"""
+    monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
+    pid = _mk_project()
+    cid, fake = _inject_collect(pid, RuntimeError("session closed"))
+    r = client.post(f"/api/ui-auth-collect/{cid}/save")
+    assert r.status_code == 409
+    assert "已结束" in r.json()["detail"]
+    assert fake.stopped is True            # 会话已停止清理,用户须重新采集
+    assert mod._collects == {}             # 不留在册:save/cancel 再来都是 404
+    assert _auth_rows(pid) == []           # 占位行已回滚,不留孤儿
+
+
+def test_save_io_error_500_keeps_session_for_retry(client, tmp_path, monkeypatch):
+    """导出抛非 RuntimeError(写盘失败等,会话仍健康)→ 500 且保留会话,重试可成功。"""
+    monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
+    pid = _mk_project()
+    cid, fake = _inject_collect(pid, OSError("disk full"))
+    r = client.post(f"/api/ui-auth-collect/{cid}/save")
+    assert r.status_code == 500
+    assert "重试" in r.json()["detail"]
+    assert fake.stopped is False           # 会话未被打断
+    assert list(mod._collects) == [cid]    # 仍在册:save / cancel 都还能找到它
+    assert _auth_rows(pid) == []           # 占位行已回滚,不留孤儿
+    fake.exc = None                        # 故障解除,同一会话直接重试 save
+    r2 = client.post(f"/api/ui-auth-collect/{cid}/save")
+    assert r2.status_code == 201
+    assert _auth_rows(pid) == [r2.json()["id"]]  # 恰好一行:失败那次的占位行已回滚
+    assert mod._collects == {}
+
+
+def test_save_duplicate_second_404_single_row(client, tmp_path, monkeypatch):
+    """重复 save:所有权移交,第二次 save 404,库里只落一行。"""
+    monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
+    pid = _mk_project()
+    cid, _fake = _inject_collect(pid)
+    assert client.post(f"/api/ui-auth-collect/{cid}/save").status_code == 201
+    assert client.post(f"/api/ui-auth-collect/{cid}/save").status_code == 404
+    assert len(_auth_rows(pid)) == 1
+    assert mod._collects == {}
+
+
+def test_save_concurrent_only_one_wins(tmp_path, monkeypatch):
+    """并发 save 同一 cid:pop 所有权移交保证恰有一路落库,另一路 404(直接驱动路由函数,
+    绕开 TestClient 单 portal,两线程真实竞速)。"""
+    monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
+    pid = _mk_project()
+    cid, _fake = _inject_collect(pid)
+    from threading import Thread
+
+    from fastapi import HTTPException
+
+    from app.database import SessionLocal
+
+    outcomes: list[str] = []
+
+    def attempt():
+        db = SessionLocal()
+        try:
+            row = mod.save_collect(cid, db)
+            outcomes.append(f"201:{row.id}")
+        except HTTPException as e:
+            outcomes.append(str(e.status_code))
+        finally:
+            db.close()
+
+    ts = [Thread(target=attempt) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(10)
+    assert sorted(o.split(":")[0] for o in outcomes) == ["201", "404"]
+    assert len(_auth_rows(pid)) == 1
+    assert mod._collects == {}
