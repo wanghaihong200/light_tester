@@ -24,11 +24,27 @@ def render_text(value: str, variables: dict) -> str:
 
 
 def validate_script(doc: dict) -> list[str]:
-    """结构校验,返回错误列表(空列表 = 合法)。"""
+    """结构校验,返回错误列表(空列表 = 合法)。
+
+    对畸形输入(doc/steps/params/variables 类型不对)不抛异常,
+    一律记为错误条目,保证 API 层「返回 list[str]」的契约不被 500 打破。
+    """
     errs: list[str] = []
+    if not isinstance(doc, dict):
+        return ["脚本必须是对象"]
     if doc.get("version") != 1:
         errs.append("version 必须为 1")
-    for i, st in enumerate(doc.get("steps") or [], 1):
+
+    steps = doc.get("steps")
+    if steps is None:
+        steps = []
+    elif not isinstance(steps, list):
+        errs.append("steps 必须是数组")
+        steps = []
+    for i, st in enumerate(steps, 1):
+        if not isinstance(st, dict):
+            errs.append(f"步骤{i}: 必须是对象")
+            continue
         action = st.get("action")
         if action not in ACTIONS:
             errs.append(f"步骤{i}: 未知 action {action!r}")
@@ -36,14 +52,32 @@ def validate_script(doc: dict) -> list[str]:
         needs = ACTIONS[action]
         if "locator" in needs and not st.get("locator"):
             errs.append(f"步骤{i}: {action} 缺 locator")
-        for p in PARAM_REQUIRED.get(action, ()):
-            if st.get("params", {}).get(p) in (None, ""):
-                errs.append(f"步骤{i}: {action} 缺 params.{p}")
-        if action == "wait" and not isinstance(st.get("params", {}).get("ms"), int):
-            errs.append(f"步骤{i}: wait 的 ms 必须是整数毫秒")
-    for v in doc.get("variables") or []:
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", v.get("name", "")):
-            errs.append(f"变量名非法: {v.get('name')!r}")
+        params = st.get("params")
+        if params is None:
+            params = {}  # params 缺失或为 null 都视同缺参,走下方必填检查
+        elif not isinstance(params, dict):
+            errs.append(f"步骤{i}: params 必须是对象")
+            params = None  # 类型不对:跳过该步的 params 检查
+        if params is not None:
+            for p in PARAM_REQUIRED.get(action, ()):
+                if params.get(p) in (None, ""):
+                    errs.append(f"步骤{i}: {action} 缺 params.{p}")
+            if action == "wait" and not isinstance(params.get("ms"), int):
+                errs.append(f"步骤{i}: wait 的 ms 必须是整数毫秒")
+
+    variables = doc.get("variables")
+    if variables is None:
+        variables = []
+    elif not isinstance(variables, list):
+        errs.append("variables 必须是数组")
+        variables = []
+    for v in variables:
+        if not isinstance(v, dict):
+            errs.append(f"变量必须是对象: {v!r}")
+            continue
+        name = v.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            errs.append(f"变量名非法: {name!r}")
     return errs
 
 

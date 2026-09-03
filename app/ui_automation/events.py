@@ -47,10 +47,11 @@ def dedupe_and_map(raw_events: list[dict]) -> list[dict]:
             steps.append({"id": _next_id(), "action": "select_option",
                           "target": ev["target"], "params": {"value": str(ev.get("value", ""))}})
         elif kind == "keydown":
+            if ev.get("key") not in ("Enter", "Escape", "Tab"):
+                continue  # 非功能键(如 Shift/Ctrl)不打断同元素的输入合并
             flush_input()
-            if ev.get("key") in ("Enter", "Escape", "Tab"):
-                steps.append({"id": _next_id(), "action": "press",
-                              "target": ev["target"], "params": {"key": ev["key"]}})
+            steps.append({"id": _next_id(), "action": "press",
+                          "target": ev["target"], "params": {"key": ev["key"]}})
         elif kind == "click":
             # 点击目标若是当前输入框(input 后点击同元素)则只保留 fill
             if not (pending is not None and pending["target"] == ev.get("target")):

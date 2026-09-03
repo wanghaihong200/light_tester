@@ -114,10 +114,63 @@ def test_dedupe_edge_cases():
     assert steps[0]["params"]["value"] == "3"
 
 
+def test_validate_script_bad_params():
+    # params 为 null:视同缺参,返回错误而非崩溃
+    errs = dsl.validate_script({"version": 1, "steps": [
+        {"id": "s1", "action": "fill", "locator": {"strategy": "css", "value": "#u"}, "params": None}]})
+    assert any("params.text" in e for e in errs)
+    # params 为字符串:报类型错误,不抛 AttributeError
+    errs = dsl.validate_script({"version": 1, "steps": [
+        {"id": "s1", "action": "fill", "locator": {"strategy": "css", "value": "#u"}, "params": "oops"}]})
+    assert any("params 必须是对象" in e for e in errs)
+    # 合法脚本仍返回空列表
+    ok = {"version": 1, "steps": [{"id": "s1", "action": "click", "locator": {"strategy": "css", "value": "#a"}}]}
+    assert dsl.validate_script(ok) == []
+
+
+def test_validate_script_malformed_containers():
+    # steps 为字符串:报类型错误而非遍历字符
+    assert any("steps 必须是数组" in e for e in dsl.validate_script({"version": 1, "steps": "x"}))
+    # steps 项非对象:跳过该步检查并报错
+    assert any("步骤1" in e for e in dsl.validate_script({"version": 1, "steps": ["x"]}))
+    # variables 为字符串 / 变量项非对象 / 变量名非字符串
+    assert any("variables 必须是数组" in e
+               for e in dsl.validate_script({"version": 1, "steps": [], "variables": "x"}))
+    assert any("变量必须是对象" in e
+               for e in dsl.validate_script({"version": 1, "steps": [], "variables": ["x"]}))
+    assert any("变量名非法" in e
+               for e in dsl.validate_script({"version": 1, "steps": [], "variables": [{"name": 123}]}))
+    # doc 本身非对象:返回错误列表而非抛 AttributeError
+    assert dsl.validate_script("nope") == ["脚本必须是对象"]
+    # steps / variables 键缺失仍合法
+    assert dsl.validate_script({"version": 1}) == []
+
+
+def test_non_functional_key_keeps_input_pending():
+    tgt = {"id": "user", "tag": "input", "type": "text"}
+    # Shift(输大写字母必然出现)不应打断同元素的输入合并
+    steps = events.dedupe_and_map([
+        {"kind": "input", "target": tgt, "value": "h"},
+        {"kind": "keydown", "target": tgt, "key": "Shift"},
+        {"kind": "input", "target": tgt, "value": "hH"},
+    ])
+    assert [s["action"] for s in steps] == ["fill"]
+    assert steps[0]["params"]["text"] == "hH"
+    # 功能键仍打断合并并产生 press(行为不回退)
+    steps = events.dedupe_and_map([
+        {"kind": "input", "target": tgt, "value": "a"},
+        {"kind": "keydown", "target": tgt, "key": "Enter"},
+    ])
+    assert [s["action"] for s in steps] == ["fill", "press"]
+
+
 def test_finalize_steps_and_target_to_locator():
     # goto 无 target,不产 locator
     out = events.finalize_steps([{"id": "s1", "action": "goto", "params": {"url": "https://x.com"}}])
     assert out == [{"id": "s1", "action": "goto", "params": {"url": "https://x.com"}}]
+    # 仅 text 无 aria_label 的 role target:name 取 text(KeyError 回归)
+    loc = events.target_to_locator({"tag": "button", "role": "button", "text": "登录"})
+    assert loc["name"] == "登录"
     # test_id 优先作为 primary
     loc = events.target_to_locator({"tag": "input", "test_id": "username", "id": "u"})
     assert loc["strategy"] == "test_id" and loc["value"] == "username"
