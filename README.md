@@ -1,6 +1,6 @@
 # light_tester_backend
 
-AI 测试平台 **Light Tester** 后端:测试项目与用例树管理、两类 AI 生成任务(功能测试用例 / REST Assured 接口自动化脚本)、GitLab 集成(working copy 同步、产物落仓、推送)。
+AI 测试平台 **Light Tester** 后端:测试项目与用例树管理、两类 AI 生成任务(功能测试用例 / REST Assured 接口自动化脚本)、Web UI 自动化(Playwright 录制浏览器操作为步骤脚本,headless 执行实时预览截图流,支持断言/变量/批量执行/登录态复用)、GitLab 集成(working copy 同步、产物落仓、推送)。
 
 生成引擎基于 **claude-agent-sdk**(Anthropic 官方 Agent SDK):以仓库内平台技能副本(`.claude/skills/`)为方法论事实源,SDK 结构化输出(`output_format` JSON Schema 终态校验)优先、叙述文本解析兜底,引擎工具调用全程记录(tool_trace)可回看。
 
@@ -33,6 +33,7 @@ AI 测试平台 **Light Tester** 后端:测试项目与用例树管理、两类 
 5. **功能用例产物**:SDK 结构化输出按平台 JSON 契约校验(功能点 → 用例 → 步骤),入暂存区等待人工裁决;裁决入库后进用例树,支持 xmind/Excel 导出。
 6. **接口脚本产物**:Java 测试类全文写入自动化工程 working copy(`add_dirs` 只读挂载给引擎探索),mvn 编译校验,失败自动进入修复轮(带编译错误重开会话,最多多轮);产物变更可经平台推送 GitLab。
 7. **全过程可回看**:任务详情抽屉回放思考摘要、叙述文本、过程记录(引擎每一步工具调用)、tokens 与费用(SDK `total_cost_usd` 口径)。
+8. **Web UI 自动化**:弹出浏览器录制页面操作为 JSON 步骤脚本(支持断言/变量),headless 回放并经 SSE 实时推送截图流与步骤结果,登录态可采集复用让脚本免录登录步骤。
 
 ## 生成引擎与守卫
 
@@ -62,7 +63,7 @@ MySQL(SQLAlchemy 2.x)。启动时 `create_all` 建缺失表;**给已有表加列
 ## 测试
 
 ```bash
-pytest -q    # 119 条;使用 DATABASE_URL 指向的测试库(默认 test_platform_test),零 AI 调用
+pytest -q    # 163 条;使用 DATABASE_URL 指向的测试库(默认 test_platform_test),零 AI 调用
 ```
 
 ## 环境变量
@@ -78,5 +79,6 @@ pytest -q    # 119 条;使用 DATABASE_URL 指向的测试库(默认 test_platfo
 - `app/ai/engine.py` — SDK 适配层:选项构建(守卫/技能/结构化输出固化一处)+ 会话事件流翻译(`_run_query` 为 monkeypatch seam)
 - `app/ai/prompts.py` — 用户提示词构建器(动态上下文 + 补充指令 + 技能调度指令)
 - `app/jobs/pipeline.py` / `app/jobs/api_gen.py` — 两类任务管道:事件消费、流式落库、暂存/写盘、修复轮(api 侧)
-- `app/routers/` — projects/documents/jobs/modules/cases/staging/repo 等路由
+- `app/ui_automation/` — Web UI 自动化:交互会话基建(有头录制/采集)/录制器/执行器/DSL 纯函数层(Playwright sync API 跑后台线程,SSE 推流)
+- `app/routers/` — projects/documents/jobs/modules/cases/staging/repo/ui_scripts/ui_recordings/ui_runs/ui_auth_states 等路由
 - `app/models.py` / `app/schemas.py` — SQLAlchemy 模型与 pydantic 契约
