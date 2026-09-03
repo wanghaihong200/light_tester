@@ -3,11 +3,14 @@
 storage_state 加载走 runner 集成链路(headless 真开 chromium,补 Task 4 未实测的分支)。"""
 import itertools
 import time
+from pathlib import Path
 
 import pytest
 
+from app.config import settings
 from app.jobs.bus import JobEventBus
 from app.models import Project, UiAuthState, UiRun, UiScript
+from app.routers import ui_auth_states as mod
 from app.ui_automation import runner
 from app.ui_automation.recorder import RecordingSession
 from app.ui_automation.session import INTERACTIVE_SLOT
@@ -175,3 +178,60 @@ def test_recorder_emits_stopped_even_if_close_cb_raises():
     with pytest.raises(ZeroDivisionError):
         s._on_close()
     assert [e["type"] for e in events] == ["stopped"]
+
+
+# ── save 命名回归:假会话注入 _collects,不起浏览器(修复 round 1) ──
+class _FakeCtx:
+    """假 context:storage_state 只按入参路径写 JSON,模拟真实导出落盘。"""
+
+    @staticmethod
+    def storage_state(path):
+        Path(path).write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+        return {"cookies": [], "origins": []}
+
+
+class _FakeSession:
+    """假采集会话:call 原地执行(等价会话线程),stop 自行弹出,全程不碰 playwright。"""
+
+    def __init__(self, cid, project_id, name):
+        self._cid = cid
+        self._project_id = project_id
+        self._name = name
+
+    def browser_context(self):
+        return _FakeCtx()
+
+    def call(self, fn):
+        return fn()
+
+    def stop(self):
+        with mod._lock:
+            mod._collects.pop(self._cid, None)
+
+
+def test_save_twice_no_filename_collision(client, tmp_path, monkeypatch):
+    """两次 save 的文件名以 DB 自增 id 命名:后端重启后进程内计数复用也不会覆盖旧登录态文件。"""
+    monkeypatch.setattr(settings, "ui_data_dir", tmp_path)  # 导出落 tmp,不脏仓库 data 目录
+    pid = _mk_project()
+    ids = []
+    for _ in range(2):  # 同一进程内连续两次采集 save(不同行 id)
+        cid = next(mod._ids)
+        with mod._lock:
+            mod._collects[cid] = _FakeSession(cid, pid, "n")
+        r = client.post(f"/api/ui-auth-collect/{cid}/save")
+        assert r.status_code == 201
+        ids.append(r.json()["id"])
+    assert ids[0] != ids[1]  # 文件名跟着行 id 走,必不冲突
+    assert mod._collects == {}  # save 即关会话
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        paths = {r.id: r.storage_path
+                 for r in db.query(UiAuthState).filter(UiAuthState.project_id == pid).all()}
+    finally:
+        db.close()
+    assert set(paths) == set(ids)
+    for aid in ids:  # 各自独立落盘,且命名与行 id 一一对应
+        assert paths[aid].endswith(f"{pid}_{aid}.json"), paths[aid]
+        assert Path(paths[aid]).exists()
+    assert paths[ids[0]] != paths[ids[1]]

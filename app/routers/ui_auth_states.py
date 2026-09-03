@@ -20,7 +20,6 @@ router = APIRouter(prefix="/api", tags=["ui-auth-states"])
 _collects: dict[int, InteractiveSession] = {}
 _lock = threading.Lock()
 _ids = itertools.count(1)
-_auth_ids = itertools.count(1)  # 测试库自增重置后避免文件名冲突
 
 
 class CollectCreate(BaseModel):
@@ -66,17 +65,22 @@ def save_collect(cid: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "collect session not found")
     auth_dir = settings.ui_data_dir / "auth"
     auth_dir.mkdir(parents=True, exist_ok=True)
-    aid = next(_auth_ids)
-    path = (auth_dir / f"{sess._project_id}_{aid}.json").resolve()
+    # 文件名用 DB 自增 id 而非进程内计数:行与文件都跨重启持久,进程内计数重启后从 1 重来,
+    # 会命中旧文件静默覆盖,删旧行时 unlink 还会连带删掉新行正用的文件。
+    # 先 flush 拿 id 再导出(未提交),导出失败回滚即不留 storage_path 为空的孤儿行
+    row = UiAuthState(project_id=sess._project_id, name=sess._name, storage_path="")
+    db.add(row)
+    db.flush()
+    path = (auth_dir / f"{sess._project_id}_{row.id}.json").resolve()
     try:
         # 导出必须在会话线程内做(跨线程直调 context 会 greenlet 报错),经 call() 投递
         ctx = sess.browser_context()
         sess.call(lambda: ctx.storage_state(path=str(path)))
     except Exception as e:
+        db.rollback()  # 显式回滚占位行
         sess.stop()  # 会话已坏:交给 on_close 释放槽位,调用方需重新采集
         raise HTTPException(409, f"采集会话已结束,无法导出登录态: {e}") from e
-    row = UiAuthState(project_id=sess._project_id, name=sess._name, storage_path=str(path))
-    db.add(row)
+    row.storage_path = str(path)
     db.commit()
     db.refresh(row)
     sess.stop()  # 采集完成即关会话;槽位随 on_close 释放
