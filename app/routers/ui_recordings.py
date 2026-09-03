@@ -44,8 +44,9 @@ def start_recording(project_id: int, payload: RecordCreate, db: Session = Depend
         raise HTTPException(404, "project not found")
     storage = None
     if payload.auth_state_id is not None:
+        # 与 ui_runs 同源校验:存在、未软删、且属于本项目(防跨项目引用)
         auth = db.get(UiAuthState, payload.auth_state_id)
-        if auth is None or auth.is_deleted:
+        if auth is None or auth.is_deleted or auth.project_id != project_id:
             raise HTTPException(400, "invalid auth_state_id")
         storage = str(auth.storage_path)
     if not INTERACTIVE_SLOT.acquire(blocking=False):

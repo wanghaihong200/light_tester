@@ -141,6 +141,16 @@ class UiScriptOut(BaseModel):
     updated_at: datetime
 
 
+# UI自动化登录态:storage_state 文件的登记行(路径/软删标记不外泄)
+class UiAuthStateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    name: str
+    created_at: datetime
+
+
 # UI自动化执行记录:一次脚本回放的步骤级结果
 class UiRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)

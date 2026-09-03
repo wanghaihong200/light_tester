@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.jobs.bus import bus
-from app.models import Project, UiRun, UiScript
+from app.models import Project, UiAuthState, UiRun, UiScript
 from app.schemas import UiRunOut
 from app.ui_automation import dsl, runner
 
@@ -30,6 +30,7 @@ class RunCreate(BaseModel):
     script_id: int
     mode: str = Field(default="headless", pattern="^(headless|headed)$")
     variables: dict = Field(default_factory=dict)
+    auth_state_id: int | None = None  # 带登录态启动 context,脚本不必录登录步骤
 
 
 def _run_thread(run_id: int, doc: dict, mode: str, variables: dict, auth_path: str | None):
@@ -53,6 +54,13 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
     errs = dsl.validate_script(script.script)
     if errs:
         raise HTTPException(400, "脚本不合法: " + ";".join(errs[:3]))
+    auth_path = None
+    if payload.auth_state_id is not None:
+        # 登录态与脚本同源校验:存在、未软删、且属于本项目(防跨项目拖库)
+        auth = db.get(UiAuthState, payload.auth_state_id)
+        if auth is None or auth.is_deleted or auth.project_id != project_id:
+            raise HTTPException(400, "invalid auth_state_id")
+        auth_path = str(auth.storage_path)
     if not runner.RUN_SLOT.acquire(blocking=False):
         raise HTTPException(409, "已有执行在进行中,请稍后")
     # 占锁成功即拥有执行权,所有权随线程移交(线程 finally 释放),消灭「探测后让位」的竞态窗口:
@@ -64,7 +72,7 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
         db.commit()
         db.refresh(run)
         threading.Thread(target=_run_thread,
-                         args=(run.id, script.script, payload.mode, payload.variables, None),
+                         args=(run.id, script.script, payload.mode, payload.variables, auth_path),
                          daemon=True).start()
     except Exception:
         runner.RUN_SLOT.release()

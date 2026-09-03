@@ -95,8 +95,11 @@ class RecordingSession:
     def _on_close(self) -> None:
         # 先注销再广播 stopped:若先 publish 后 pop,晚于 publish 的订阅者在
         # 「publish 早于 subscribe 且 pop 晚于 get」窗口内会等不到终态,单连接挂死
-        self._close_cb()
-        self._emit({"type": "stopped"})
+        # 注销回调异常不能吞掉 stopped:前端靠它结束 SSE 流,故 finally 兜底必发
+        try:
+            self._close_cb()
+        finally:
+            self._emit({"type": "stopped"})
 
     def _emit(self, event: dict) -> None:
         """统一出口:回调外部 on_event + 投递 rec_bus(经主循环,与 runner._notify_bus 同构)。"""
