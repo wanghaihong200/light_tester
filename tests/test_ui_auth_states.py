@@ -337,3 +337,31 @@ def test_save_concurrent_only_one_wins(tmp_path, monkeypatch):
     assert sorted(o.split(":")[0] for o in outcomes) == ["201", "404"]
     assert len(_auth_rows(pid)) == 1
     assert mod._collects == {}
+
+
+def test_recording_rejects_invalid_auth_state_id(client):
+    """ui_recordings 的 auth_state_id 校验与 ui_runs 同源:不存在/跨项目/软删 一律 400,
+    且先于占 INTERACTIVE_SLOT(槽被占满时仍是 400,证明不会带病去开浏览器会话)。"""
+    pid_a, pid_b = _mk_project(), _mk_project()
+    aid = _mk_auth(pid_a, "auth/none.json")
+    import time
+
+    from app.ui_automation.recorder import INTERACTIVE_SLOT as SLOT
+    for _ in range(100):  # 预占交互槽:若校验缺失,路由会继续走 409/开会话而非 400
+        if SLOT.acquire(blocking=False):
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("INTERACTIVE_SLOT 被先前会话占住,无法预占")
+    try:
+        assert client.post(f"/api/projects/{pid_b}/ui-recordings",
+                           json={"auth_state_id": 99999}).status_code == 400
+        # 跨项目引用:登录态属于 pid_a,在 pid_b 下发起录制必须 400(Task 5 defer,Task 6 已修)
+        assert client.post(f"/api/projects/{pid_b}/ui-recordings",
+                           json={"auth_state_id": aid}).status_code == 400
+        # 软删后不可再引用
+        assert client.delete(f"/api/ui-auth-states/{aid}").status_code == 204
+        assert client.post(f"/api/projects/{pid_b}/ui-recordings",
+                           json={"auth_state_id": aid}).status_code == 400
+    finally:
+        SLOT.release()
