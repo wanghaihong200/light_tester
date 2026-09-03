@@ -294,6 +294,27 @@ def test_save_io_error_500_keeps_session_for_retry(client, tmp_path, monkeypatch
     assert mod._collects == {}
 
 
+def test_save_dir_failure_500_keeps_session_for_retry(client, tmp_path, monkeypatch):
+    """mkdir/落库段失败与导出失败同口径(Task 11 review M1):500 且会话回插可重试;
+    若这些步骤游离在保护外,条目已被 pop → 裸 500 后重试 404、浏览器窗口占槽到用户手关窗。"""
+    pid = _mk_project()
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x", encoding="utf-8")  # ui_data_dir 指向文件 → mkdir(parents=True) 必炸
+    monkeypatch.setattr(settings, "ui_data_dir", blocker)
+    cid, fake = _inject_collect(pid)
+    r = client.post(f"/api/ui-auth-collect/{cid}/save")
+    assert r.status_code == 500
+    assert "重试" in r.json()["detail"]
+    assert fake.stopped is False            # 会话未被打断,交互槽仍被本会话正常持有
+    assert list(mod._collects) == [cid]     # 所有权回插:save/cancel 都还能找到它
+    assert _auth_rows(pid) == []
+    monkeypatch.setattr(settings, "ui_data_dir", tmp_path)  # 故障解除,同一会话重试 save
+    r2 = client.post(f"/api/ui-auth-collect/{cid}/save")
+    assert r2.status_code == 201
+    assert _auth_rows(pid) == [r2.json()["id"]]
+    assert mod._collects == {}
+
+
 def test_save_duplicate_second_404_single_row(client, tmp_path, monkeypatch):
     """重复 save:所有权移交,第二次 save 404,库里只落一行。"""
     monkeypatch.setattr(settings, "ui_data_dir", tmp_path)

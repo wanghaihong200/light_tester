@@ -63,7 +63,7 @@ MySQL(SQLAlchemy 2.x)。启动时 `create_all` 建缺失表;**给已有表加列
 ## 测试
 
 ```bash
-pytest -q    # 163 条;使用 DATABASE_URL 指向的测试库(默认 test_platform_test),零 AI 调用
+pytest -q    # 164 条;使用 DATABASE_URL 指向的测试库(默认 test_platform_test),零 AI 调用
 ```
 
 ## 环境变量

@@ -75,33 +75,37 @@ def save_collect(cid: int, db: Session = Depends(get_db)):
     if cs is None:
         raise HTTPException(404, "collect session not found")
     sess = cs.session
-    auth_dir = settings.ui_data_dir / "auth"
-    auth_dir.mkdir(parents=True, exist_ok=True)
-    # 文件名用 DB 自增 id 而非进程内计数:行与文件都跨重启持久,进程内计数重启后从 1 重来,
-    # 会命中旧文件静默覆盖,删旧行时 unlink 还会连带删掉新行正用的文件。
-    # 先 flush 拿 id 再导出(未提交),导出失败回滚即不留 storage_path 为空的孤儿行
-    row = UiAuthState(project_id=cs.project_id, name=cs.name, storage_path="")
-    db.add(row)
-    db.flush()
-    path = (auth_dir / f"{cs.project_id}_{row.id}.json").resolve()
     try:
-        # 导出必须在会话线程内做(跨线程直调 context 会 greenlet 报错),经 call() 投递
-        ctx = sess.browser_context()
-        sess.call(lambda: ctx.storage_state(path=str(path)))
-    except RuntimeError as e:
-        # 会话/浏览器已关,重试必然再败:停掉并清理,用户须重新采集
-        db.rollback()  # 显式回滚占位行
-        sess.stop()  # 交给 on_close 释放槽位
-        raise HTTPException(409, f"采集会话已结束,无法导出登录态: {e}") from e
+        auth_dir = settings.ui_data_dir / "auth"
+        auth_dir.mkdir(parents=True, exist_ok=True)
+        # 文件名用 DB 自增 id 而非进程内计数:行与文件都跨重启持久,进程内计数重启后从 1 重来,
+        # 会命中旧文件静默覆盖,删旧行时 unlink 还会连带删掉新行正用的文件。
+        # 先 flush 拿 id 再导出(未提交),任何一步失败回滚即不留 storage_path 为空的孤儿行
+        row = UiAuthState(project_id=cs.project_id, name=cs.name, storage_path="")
+        db.add(row)
+        db.flush()
+        path = (auth_dir / f"{cs.project_id}_{row.id}.json").resolve()
+        try:
+            # 导出必须在会话线程内做(跨线程直调 context 会 greenlet 报错),经 call() 投递
+            ctx = sess.browser_context()
+            sess.call(lambda: ctx.storage_state(path=str(path)))
+        except RuntimeError as e:
+            # 会话/浏览器已关,重试必然再败:停掉并清理,用户须重新采集
+            db.rollback()  # 显式回滚占位行
+            sess.stop()  # 交给 on_close 释放槽位
+            raise HTTPException(409, f"采集会话已结束,无法导出登录态: {e}") from e
+        row.storage_path = str(path)
+        db.commit()
+        db.refresh(row)
+    except HTTPException:
+        raise  # 409 已按口径处理完(回滚+停会话),原样透传
     except Exception as e:
-        # I/O 写盘等失败,会话本身仍健康:回滚占位行后放回,保留会话让用户重试 save
+        # mkdir/落库/导出写盘等失败,会话本身仍健康:回滚占位行后回插所有权,
+        # 保留会话让用户重试 save(条目已被 pop,不回插的话重试只能 404、窗口还占着交互槽)
         db.rollback()
         with _lock:
             _collects[cid] = cs
-        raise HTTPException(500, f"登录态导出失败,会话已保留可重试: {e}") from e
-    row.storage_path = str(path)
-    db.commit()
-    db.refresh(row)
+        raise HTTPException(500, f"登录态保存失败,会话已保留可重试: {e}") from e
     sess.stop()  # 采集完成即关会话;槽位随 on_close 释放
     return row
 
