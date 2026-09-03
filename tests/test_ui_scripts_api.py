@@ -1,4 +1,8 @@
 # UI自动化脚本 CRUD API 测试:创建/列表/详情/更新/软删 + 项目隔离
+from app.database import SessionLocal
+from app.models import UiScript
+
+
 def _mk_project(client, name="ui-crud-p"):
     return client.post("/api/projects", json={"name": name}).json()
 
@@ -21,6 +25,31 @@ def test_script_crud_roundtrip(client):
 
     assert client.delete(f"/api/ui-scripts/{sid}").status_code == 204
     assert client.get(f"/api/ui-scripts/{sid}").status_code == 404  # 软删后视为不存在
+
+
+def test_delete_is_soft_delete_row_retained(client):
+    # 软删实证:DELETE 只置 is_deleted,不允许物理删除。
+    # 该用例防止实现被"优化"成 db.delete(row) —— 物理删会断掉 ui_runs.script_id 外键历史。
+    pid = _mk_project(client, "softdel-row")["id"]
+    sid = client.post(f"/api/projects/{pid}/ui-scripts", json={"name": "s", "script": DOC}).json()["id"]
+    assert client.delete(f"/api/ui-scripts/{sid}").status_code == 204
+
+    # DELETE 已提交,新开会话直查 DB,避免会话缓存;行必须还在且 is_deleted=True
+    db = SessionLocal()
+    try:
+        row = db.get(UiScript, sid)
+        assert row is not None and row.is_deleted is True
+    finally:
+        db.close()
+
+
+def test_soft_deleted_script_put_and_delete_404(client):
+    # 已软删脚本对写操作同样视为不存在:覆盖 _get_owned 的 is_deleted 分支(PUT/DELETE 路径)
+    pid = _mk_project(client, "softdel-p")["id"]
+    sid = client.post(f"/api/projects/{pid}/ui-scripts", json={"name": "s", "script": DOC}).json()["id"]
+    assert client.delete(f"/api/ui-scripts/{sid}").status_code == 204
+    assert client.put(f"/api/ui-scripts/{sid}", json={"name": "x", "script": DOC}).status_code == 404
+    assert client.delete(f"/api/ui-scripts/{sid}").status_code == 404
 
 
 def test_script_project_isolation_and_404(client):
