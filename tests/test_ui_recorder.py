@@ -1,11 +1,14 @@
 # tests/test_ui_recorder.py
 """录制会话测试:headless 模式程序化点击驱动真实 chromium,验证事件采集/DSL 映射/断言候选;
 HTTP 冒烟只打 404/409 分支,不真开会话。"""
+import itertools
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from app.jobs.bus import JobEventBus
 from app.models import Project
 from app.ui_automation.recorder import INTERACTIVE_SLOT, RecordingSession
 
@@ -94,3 +97,62 @@ def test_recording_api_409_when_slot_occupied(client):
         assert "会话" in r.json()["detail"]
     finally:
         INTERACTIVE_SLOT.release()
+
+
+# ── 纯映射单测:不起浏览器,跳过 __init__(其会自动开会话)手工填最小字段,
+#    直接驱动 _on_raw/insert_assert/stop,锁死增量同步的确定性契约 ──
+def _bare_session(on_event) -> RecordingSession:
+    s = RecordingSession.__new__(RecordingSession)
+    s.recording_id = 1
+    s.on_event = on_event
+    s._bus = JobEventBus()  # 无订阅者,投递即空操作(单测不起主循环)
+    s._close_cb = lambda: None
+    s._headless = True
+    s._storage_path = None
+    s._start_url = ""
+    s._raw, s._main, s._asserts = [], [], []
+    s._ids = itertools.count(1)
+    s._lock = threading.Lock()
+    s._session = None
+    s._started = True
+    return s
+
+
+_INPUT = {"tag": "input", "id": "user", "placeholder": "用户名"}
+
+
+def _streamed_steps(events: list[dict]) -> list[dict]:
+    return [e["step"] for e in events if e["type"] == "action"]
+
+
+def test_incremental_sync_keeps_step_id_stable():
+    """逐字输入 5 次:每次都推流,但 fill 的 id 恒定(原位刷新)、文本恒为最新值;终稿沿用同一 id。"""
+    events: list[dict] = []
+    s = _bare_session(events.append)
+    for v in ("a", "ad", "adm", "admi", "admin"):
+        s._on_raw({"kind": "input", "target": _INPUT, "value": v})
+    fills = [x for x in _streamed_steps(events) if x["action"] == "fill"]
+    assert len(fills) == 5
+    assert {f["id"] for f in fills} == {fills[0]["id"]}
+    assert [f["params"]["text"] for f in fills] == ["a", "ad", "adm", "admi", "admin"]
+    draft = s.stop()
+    fill = next(x for x in draft["steps"] if x["action"] == "fill")
+    assert (fill["id"], fill["params"]["text"]) == (fills[0]["id"], "admin")
+
+
+def test_assert_interleaves_at_before_len_and_matches_stream():
+    """断言落在插入时的主干位置(同位保持插入顺序);流式步骤与 stop 终稿逐条一致。"""
+    events: list[dict] = []
+    s = _bare_session(events.append)
+    btn = {"tag": "button", "text": "登录"}
+    s._on_raw({"kind": "click", "target": btn})        # 主干[0]:click
+    s._on_raw({"kind": "goto", "url": "http://x/a"})   # 主干[1]:goto(before_len=2)
+    a1 = s.insert_assert(btn, "assert_visible", None, None)
+    a2 = s.insert_assert(btn, "assert_text", "登录", "contains")
+    s._on_raw({"kind": "goto", "url": "http://x/b"})   # 主干[2]:须排在断言之后
+    draft = s.stop()
+    actions = [x["action"] for x in draft["steps"]]
+    assert actions == ["click", "goto", "assert_visible", "assert_text", "goto"]
+    ids = [x["id"] for x in draft["steps"]]
+    assert ids.index(a1["id"]) == 2 and ids.index(a2["id"]) == 3
+    assert draft["steps"] == _streamed_steps(events)
