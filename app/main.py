@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import Base, engine
-from app.routers import cases, documents, jobs, modules, projects, repo, ui_scripts
+from app.routers import cases, documents, jobs, modules, projects, repo, ui_runs, ui_scripts
 
 import app.models  # noqa: F401 — ensure Base.metadata knows all tables
 
@@ -17,6 +17,9 @@ async def lifespan(app: FastAPI):
     # 无条件注册主事件循环,使 enqueue_job 可跨线程安全投递(线程安全)
     from app.jobs.pipeline import set_loop
     set_loop(asyncio.get_running_loop())
+    # UI 执行器线程同样经主循环把预览帧/步骤事件投递回 bus
+    from app.ui_automation.loopref import set_ui_loop
+    set_ui_loop(asyncio.get_running_loop())
     workers: list[asyncio.Task] = []
     if settings.anthropic_api_key:  # 无 key 的环境(测试/离线)不启动 worker
         from app.jobs.pipeline import worker_loop
@@ -44,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router)
     app.include_router(repo.router)
     app.include_router(ui_scripts.router)
+    app.include_router(ui_runs.router)
 
     @app.get("/api/health")
     def health() -> dict:

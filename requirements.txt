@@ -10,3 +10,4 @@ httpx>=0.27
 claude-agent-sdk
 openpyxl
 pytest-asyncio
+playwright==1.60.0  # 本机 ms-playwright 已有 chromium-1223,官方对应 1.60.0(1.62 要 1234 需重新下载)

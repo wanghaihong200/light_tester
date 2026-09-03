@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://root:root123@127.0.0.1:3307/test_platform?charset=utf8mb4"
     repos_dir: Path = Path("../data/repos")
     uploads_dir: Path = Path("../data/uploads")
+    ui_data_dir: Path = Path("../data/ui")
     anthropic_api_key: str | None = None
     ai_model: str = "claude-opus-5"
 
@@ -16,3 +17,4 @@ class Settings(BaseSettings):
 settings = Settings()
 settings.repos_dir.mkdir(parents=True, exist_ok=True)
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+settings.ui_data_dir.mkdir(parents=True, exist_ok=True)

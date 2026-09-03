@@ -139,3 +139,23 @@ class UiScriptOut(BaseModel):
     script: dict
     created_at: datetime
     updated_at: datetime
+
+
+# UI自动化执行记录:一次脚本回放的步骤级结果
+class UiRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    status: str
+    script_id: int
+    script_name: str
+    mode: str
+    variables: dict
+    step_results: list
+    steps_total: int
+    steps_passed: int
+    steps_failed: int
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
