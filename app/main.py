@@ -8,7 +8,7 @@ from app.config import settings
 from app.database import Base, engine
 from app.routers import (
     auth, cases, documents, jobs, members, modules, projects, repo, ui_auth_states, ui_recordings,
-    ui_runs, ui_scripts
+    ui_runs, ui_scripts, users
 )
 
 import app.models  # noqa: F401 — ensure Base.metadata knows all tables
@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(auth.router)
     app.include_router(members.router)
+    app.include_router(users.router)
     app.include_router(projects.router)
     app.include_router(modules.router)
     app.include_router(cases.router)
