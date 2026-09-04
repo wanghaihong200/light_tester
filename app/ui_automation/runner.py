@@ -35,7 +35,13 @@ def mark_force_finished(run_id: int) -> None:
 
 
 def is_force_finished(run_id: int) -> bool:
-    return run_id in _force_finished
+    # 一次性消费:命中即清除。取消是单发动作(线程在下一个步骤边界退出后标记已无意义),
+    # 留着会毒化复用的 run id(测试库 TRUNCATE 复位自增/长期运行旧 id 重现),
+    # 让无辜的新 run 在第一步就被 ForceCancelled 静默放行(状态停在 running)。
+    if run_id in _force_finished:
+        _force_finished.discard(run_id)
+        return True
+    return False
 
 
 def _notify_bus(run_id: int, event: dict) -> None:

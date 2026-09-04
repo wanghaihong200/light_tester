@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import Project, UiAuthState
+from app.models import Project, UiAuthState, User
+from app.permissions import ensure_project_access
 from app.schemas import UiAuthStateOut
 from app.ui_automation.session import INTERACTIVE_SLOT, InteractiveSession
 
@@ -39,9 +40,10 @@ class CollectCreate(BaseModel):
 
 
 @router.post("/projects/{project_id}/ui-auth-states/collect", status_code=201)
-def start_collect(project_id: int, payload: CollectCreate, db: Session = Depends(get_db)):
+def start_collect(project_id: int, payload: CollectCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     if db.get(Project, project_id) is None:
         raise HTTPException(404, "project not found")
+    ensure_project_access(db, current, project_id, "editor")  # 开采集 = 写(先于占交互槽)
     if not INTERACTIVE_SLOT.acquire(blocking=False):
         raise HTTPException(409, "已有录制/登录态采集会话进行中")
     cid = next(_ids)
@@ -68,13 +70,25 @@ def start_collect(project_id: int, payload: CollectCreate, db: Session = Depends
     return {"collect_id": cid}
 
 
-@router.post("/ui-auth-collect/{cid}/save", response_model=UiAuthStateOut, status_code=201)
-def save_collect(cid: int, db: Session = Depends(get_db)):
-    # 所有权移交:开头 pop 到手才允许导出,并发的第二次 save 到此即为 404,
-    # 从根上排除两路 save 各落一行的可能;终态路径不回插
-    cs = _collects.pop(cid, None)
-    if cs is None:
+def _take_owned(cid: int, db: Session, current: User, min_role: str) -> CollectSession:
+    """会话级闸门 + 所有权移交:先窥视过闸(角色不足 → 403,会话原样保留,
+    不能借 save/cancel 毁掉别人的采集会话),闸过才 pop(并发第二路 → 404)。"""
+    with _lock:
+        cs = _collects.get(cid)
+        if cs is None:
+            raise HTTPException(404, "collect session not found")
+    ensure_project_access(db, current, cs.project_id, min_role)
+    taken = _collects.pop(cid, None)
+    if taken is None:  # 过闸窗口内被并发取走:与「不存在」同语义
         raise HTTPException(404, "collect session not found")
+    return taken
+
+
+@router.post("/ui-auth-collect/{cid}/save", response_model=UiAuthStateOut, status_code=201)
+def save_collect(cid: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    # 所有权移交:开头取到手才允许导出,并发的第二次 save 到此即为 404,
+    # 从根上排除两路 save 各落一行的可能;终态路径不回插
+    cs = _take_owned(cid, db, current, "editor")  # save 落库 = 写
     sess = cs.session
     try:
         auth_dir = settings.ui_data_dir / "auth"
@@ -112,26 +126,26 @@ def save_collect(cid: int, db: Session = Depends(get_db)):
 
 
 @router.post("/ui-auth-collect/{cid}/cancel", status_code=204)
-def cancel_collect(cid: int):
-    cs = _collects.pop(cid, None)  # 同 save 的所有权移交:取消与保存互斥,先到先得
-    if cs is None:
-        raise HTTPException(404, "collect session not found")
+def cancel_collect(cid: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    cs = _take_owned(cid, db, current, "editor")  # 同 save 的闸门+所有权移交:取消与保存互斥,先到先得
     cs.session.stop()  # 丢弃不落库;槽位随 on_close 释放
     return Response(status_code=204)
 
 
 @router.get("/projects/{project_id}/ui-auth-states", response_model=list[UiAuthStateOut])
-def list_auth_states(project_id: int, db: Session = Depends(get_db)):
+def list_auth_states(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    ensure_project_access(db, current, project_id, "viewer")
     return (db.query(UiAuthState)
             .filter(UiAuthState.project_id == project_id, UiAuthState.is_deleted.is_(False))
             .order_by(UiAuthState.id.desc()).all())
 
 
 @router.delete("/ui-auth-states/{auth_id}", status_code=204)
-def delete_auth_state(auth_id: int, db: Session = Depends(get_db)):
+def delete_auth_state(auth_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     row = db.get(UiAuthState, auth_id)
     if row is None or row.is_deleted:
         raise HTTPException(404, "auth state not found")
+    ensure_project_access(db, current, row.project_id, "editor")  # 删登录态(连带删文件)= 写
     row.is_deleted = True
     db.commit()
     from pathlib import Path

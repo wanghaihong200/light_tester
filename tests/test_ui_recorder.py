@@ -60,24 +60,40 @@ def test_assert_candidate_reported(page_url):
         sess.join(timeout=10)
 
 
+def _admin_headers(client):
+    """Task 8 补鉴权:业务端点全量 401 后,HTTP 冒烟走 admin 头(保语义,补鉴权)。"""
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.database import SessionLocal as SL
+
+    db = SL()
+    try:
+        ensure_bootstrap_admin(db)
+    finally:
+        db.close()
+    tok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    return {"Authorization": f"Bearer {tok}"}
+
+
 def test_recording_api_404(client):
+    ah = _admin_headers(client)
     # 先确认路由确实注册了:否则下面的 404 分不清是「无会话」还是「无路由」
     spec = client.get("/openapi.json").json()["paths"]
     for p in ("/api/projects/{project_id}/ui-recordings", "/api/ui-recordings/{rid}/events",
               "/api/ui-recordings/{rid}/assert", "/api/ui-recordings/{rid}/stop",
               "/api/ui-recordings/{rid}/cancel"):
         assert p in spec, p
-    assert client.get("/api/ui-recordings/9999/events").status_code == 404
+    assert client.get("/api/ui-recordings/9999/events", headers=ah).status_code == 404
     r = client.post("/api/ui-recordings/9999/assert",
-                    json={"target": {"tag": "div"}, "assert_type": "assert_visible"})
+                    json={"target": {"tag": "div"}, "assert_type": "assert_visible"}, headers=ah)
     assert r.status_code == 404
-    assert client.post("/api/ui-recordings/9999/stop").status_code == 404
-    assert client.post("/api/ui-recordings/9999/cancel").status_code == 404
-    assert client.post("/api/projects/9999/ui-recordings", json={}).status_code == 404
+    assert client.post("/api/ui-recordings/9999/stop", headers=ah).status_code == 404
+    assert client.post("/api/ui-recordings/9999/cancel", headers=ah).status_code == 404
+    assert client.post("/api/projects/9999/ui-recordings", json={}, headers=ah).status_code == 404
 
 
 def test_recording_api_409_when_slot_occupied(client):
     """全局并发=1:INTERACTIVE_SLOT 被占时创建录制必须 409,且不产出 recording_id。"""
+    ah = _admin_headers(client)
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -92,7 +108,7 @@ def test_recording_api_409_when_slot_occupied(client):
     else:
         pytest.fail("INTERACTIVE_SLOT 被先前会话占住,无法预占")
     try:
-        r = client.post(f"/api/projects/{pid}/ui-recordings", json={})
+        r = client.post(f"/api/projects/{pid}/ui-recordings", json={}, headers=ah)
         assert r.status_code == 409
         assert "会话" in r.json()["detail"]
     finally:

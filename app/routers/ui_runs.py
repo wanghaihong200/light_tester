@@ -15,6 +15,7 @@ from app.config import settings
 from app.database import get_db
 from app.jobs.bus import bus
 from app.models import Project, UiAuthState, UiRun, UiScript, User
+from app.permissions import ensure_project_access
 from app.schemas import UiRunOut
 from app.ui_automation import dsl, runner
 
@@ -50,6 +51,7 @@ def _run_thread(run_id: int, doc: dict, mode: str, variables: dict, auth_path: s
 def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     if db.get(Project, project_id) is None:
         raise HTTPException(404, "project not found")
+    ensure_project_access(db, current, project_id, "editor")  # 发起执行 = 写(共识硬点)
     script = db.get(UiScript, payload.script_id)
     if script is None or script.is_deleted or script.project_id != project_id:
         raise HTTPException(400, "invalid script_id")
@@ -84,6 +86,7 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
 
 @router.get("/projects/{project_id}/ui-runs", response_model=list[UiRunOut])
 def list_runs(project_id: int, script_id: int | None = None, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    ensure_project_access(db, current, project_id, "viewer")
     q = db.query(UiRun).filter(UiRun.project_id == project_id)
     if script_id is not None:
         q = q.filter(UiRun.script_id == script_id)
@@ -95,6 +98,7 @@ def get_run(run_id: int, db: Session = Depends(get_db), current: User = Depends(
     run = db.get(UiRun, run_id)
     if run is None:
         raise HTTPException(404, "run not found")
+    ensure_project_access(db, current, run.project_id, "viewer")
     return run
 
 
@@ -104,6 +108,8 @@ async def run_events(run_id: int, db: Session = Depends(get_db), current: User =
     run = db.get(UiRun, run_id)
     if run is None:
         raise HTTPException(404, "run not found")
+    # 闸门在订阅前:无权限者连半开流都拿不到,也不留需清理的订阅
+    ensure_project_access(db, current, run.project_id, "editor")
     queue = bus.subscribe(run_id)
     # ORM 陷阱:Depends 的 db 在生成器执行时可能已关闭,先取值存局部变量
     snapshot = {"status": run.status, "step_results": run.step_results, "error": run.error,
@@ -136,6 +142,7 @@ def force_finish(run_id: int, db: Session = Depends(get_db), current: User = Dep
     run = db.get(UiRun, run_id)
     if run is None:
         raise HTTPException(404, "run not found")
+    ensure_project_access(db, current, run.project_id, "editor")  # 强制结束 = 写
     if run.status in ("completed", "failed"):
         raise HTTPException(400, "该执行已结束,无需强制结束")
     run.status = "failed"
@@ -152,10 +159,14 @@ def force_finish(run_id: int, db: Session = Depends(get_db), current: User = Dep
 
 
 @router.get("/ui-runs/{run_id}/screens/{name}")
-def run_screenshot(run_id: int, name: str, current: User = Depends(get_current_user)):
+def run_screenshot(run_id: int, name: str, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     # 文件名恒为 step_<i>_<status>.jpg:非 .jpg 一律拒绝,顺带挡掉 "."/".." 目录名
     if not _NAME_RE.fullmatch(name) or name in (".", "..") or not name.endswith(".jpg"):
         raise HTTPException(400, "bad name")
+    run = db.get(UiRun, run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    ensure_project_access(db, current, run.project_id, "viewer")  # 截图读 = viewer
     path = settings.ui_data_dir / "runs" / str(run_id) / name
     if not path.exists():
         raise HTTPException(404, "not found")

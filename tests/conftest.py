@@ -43,6 +43,11 @@ def _clean_tables():
         db.commit()
     finally:
         db.close()
+    # 进程内全局态与 DB 一起复位:TRUNCATE 复位自增后 run id 会被复用,
+    # 残留的强制结束标记会让下个用例的 run 在第一步被 ForceCancelled 静默放行(状态停 running)。
+    from app.ui_automation import runner
+
+    runner._force_finished.clear()
 
 
 @pytest.fixture()

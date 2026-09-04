@@ -1,11 +1,38 @@
 # tests/test_ui_auth_states.py
 """登录态管理测试:HTTP 只打 404/400/409/软删等便宜分支(不真开浏览器会话);
-storage_state 加载走 runner 集成链路(headless 真开 chromium,补 Task 4 未实测的分支)。"""
+storage_state 加载走 runner 集成链路(headless 真开 chromium,补 Task 4 未实测的分支)。
+Task 8 补鉴权:业务端点全量 401 后,走 HTTP 的用例统一带 admin 头(保语义,补鉴权)。"""
 import itertools
 import time
 from pathlib import Path
 
 import pytest
+
+
+def _admin_headers(client):
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.database import SessionLocal as SL
+
+    db = SL()
+    try:
+        ensure_bootstrap_admin(db)
+    finally:
+        db.close()
+    tok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    return {"Authorization": f"Bearer {tok}"}
+
+
+def _admin_user():
+    """直取 admin User 行:供直接驱动路由函数的用例构造 current(绕过 TestClient 时闸门仍需过)。"""
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.database import SessionLocal as SL
+    from app.models import User
+
+    db = SL()
+    try:
+        return ensure_bootstrap_admin(db)
+    finally:
+        db.close()
 
 from app.config import settings
 from app.jobs.bus import JobEventBus
@@ -66,18 +93,19 @@ def _get_run(run_id: int) -> UiRun:
 
 def test_auth_state_api_guards_without_browser(client):
     """便宜分支全量:路由注册、项目404、会话404、槽位409、空列表;全程不真开浏览器。"""
+    ah = _admin_headers(client)
     spec = client.get("/openapi.json").json()["paths"]
     for p in ("/api/projects/{project_id}/ui-auth-states/collect",
               "/api/ui-auth-collect/{cid}/save", "/api/ui-auth-collect/{cid}/cancel",
               "/api/projects/{project_id}/ui-auth-states", "/api/ui-auth-states/{auth_id}"):
         assert p in spec, p
     pid = _mk_project()
-    assert client.get(f"/api/projects/{pid}/ui-auth-states").json() == []
+    assert client.get(f"/api/projects/{pid}/ui-auth-states", headers=ah).json() == []
     # 项目不存在:先于开会话返回 404
     assert client.post("/api/projects/9999/ui-auth-states/collect",
-                       json={"name": "管理员"}).status_code == 404
-    assert client.post("/api/ui-auth-collect/9999/save").status_code == 404
-    assert client.post("/api/ui-auth-collect/9999/cancel").status_code == 404
+                       json={"name": "管理员"}, headers=ah).status_code == 404
+    assert client.post("/api/ui-auth-collect/9999/save", headers=ah).status_code == 404
+    assert client.post("/api/ui-auth-collect/9999/cancel", headers=ah).status_code == 404
     for _ in range(100):  # 预占全局槽位(等先前会话释放),collect 因此走 409 而非真开浏览器
         if INTERACTIVE_SLOT.acquire(blocking=False):
             break
@@ -85,7 +113,7 @@ def test_auth_state_api_guards_without_browser(client):
     else:
         pytest.fail("INTERACTIVE_SLOT 被先前会话占住,无法预占")
     try:
-        r = client.post(f"/api/projects/{pid}/ui-auth-states/collect", json={"name": "管理员"})
+        r = client.post(f"/api/projects/{pid}/ui-auth-states/collect", json={"name": "管理员"}, headers=ah)
         assert r.status_code == 409
         assert "会话" in r.json()["detail"]
     finally:
@@ -94,17 +122,18 @@ def test_auth_state_api_guards_without_browser(client):
 
 def test_auth_state_list_and_soft_delete(client, tmp_path):
     """列表可见 → 软删后列表消失、文件一并清、二次删除 404(软删行保留审计痕迹)。"""
+    ah = _admin_headers(client)
     pid = _mk_project()
     f = tmp_path / "999.json"
     f.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
     aid = _mk_auth(pid, str(f))
-    rows = client.get(f"/api/projects/{pid}/ui-auth-states").json()
+    rows = client.get(f"/api/projects/{pid}/ui-auth-states", headers=ah).json()
     assert [r["id"] for r in rows] == [aid]
     assert set(rows[0]) == {"id", "project_id", "name", "created_at"}  # 路径/软删标记不外泄
-    assert client.delete(f"/api/ui-auth-states/{aid}").status_code == 204
+    assert client.delete(f"/api/ui-auth-states/{aid}", headers=ah).status_code == 204
     assert not f.exists()
-    assert client.delete(f"/api/ui-auth-states/{aid}").status_code == 404
-    assert client.get(f"/api/projects/{pid}/ui-auth-states").json() == []
+    assert client.delete(f"/api/ui-auth-states/{aid}", headers=ah).status_code == 404
+    assert client.get(f"/api/projects/{pid}/ui-auth-states", headers=ah).json() == []
     from app.database import SessionLocal
     db = SessionLocal()
     try:
@@ -115,6 +144,7 @@ def test_auth_state_list_and_soft_delete(client, tmp_path):
 
 def test_run_rejects_invalid_auth_state_id(client):
     """ui_runs 的 auth_state_id 校验:不存在/跨项目/软删 一律 400(在占执行锁之前拒掉)。"""
+    ah = _admin_headers(client)
     pid_a, pid_b = _mk_project(), _mk_project()
     aid = _mk_auth(pid_a, "auth/none.json")
     from app.database import SessionLocal
@@ -126,14 +156,14 @@ def test_run_rejects_invalid_auth_state_id(client):
     finally:
         db.close()
     assert client.post(f"/api/projects/{pid_b}/ui-runs",
-                       json={"script_id": sid, "auth_state_id": 99999}).status_code == 400
+                       json={"script_id": sid, "auth_state_id": 99999}, headers=ah).status_code == 400
     # 跨项目引用:登录态属于 pid_a,在 pid_b 下使用必须 400
     assert client.post(f"/api/projects/{pid_b}/ui-runs",
-                       json={"script_id": sid, "auth_state_id": aid}).status_code == 400
+                       json={"script_id": sid, "auth_state_id": aid}, headers=ah).status_code == 400
     # 软删后不可再引用
-    assert client.delete(f"/api/ui-auth-states/{aid}").status_code == 204
+    assert client.delete(f"/api/ui-auth-states/{aid}", headers=ah).status_code == 204
     assert client.post(f"/api/projects/{pid_b}/ui-runs",
-                       json={"script_id": sid, "auth_state_id": aid}).status_code == 400
+                       json={"script_id": sid, "auth_state_id": aid}, headers=ah).status_code == 400
 
 
 def test_execute_script_loads_storage_state(tmp_path):
@@ -239,11 +269,12 @@ def _auth_rows(project_id: int) -> list[int]:
 def test_save_twice_no_filename_collision(client, tmp_path, monkeypatch):
     """两次 save 的文件名以 DB 自增 id 命名:后端重启后进程内计数复用也不会覆盖旧登录态文件。"""
     monkeypatch.setattr(settings, "ui_data_dir", tmp_path)  # 导出落 tmp,不脏仓库 data 目录
+    ah = _admin_headers(client)
     pid = _mk_project()
     ids = []
     for _ in range(2):  # 同一进程内连续两次采集 save(不同行 id)
         cid, _cs = _inject_collect(pid)
-        r = client.post(f"/api/ui-auth-collect/{cid}/save")
+        r = client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah)
         assert r.status_code == 201
         ids.append(r.json()["id"])
     assert ids[0] != ids[1]  # 文件名跟着行 id 走,必不冲突
@@ -266,9 +297,10 @@ def test_save_twice_no_filename_collision(client, tmp_path, monkeypatch):
 def test_save_runtime_error_409_cleans_session(client, tmp_path, monkeypatch):
     """导出抛 RuntimeError(会话/浏览器已关,重试必然再败)→ 409 且停止清理会话。"""
     monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
+    ah = _admin_headers(client)
     pid = _mk_project()
     cid, fake = _inject_collect(pid, RuntimeError("session closed"))
-    r = client.post(f"/api/ui-auth-collect/{cid}/save")
+    r = client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah)
     assert r.status_code == 409
     assert "已结束" in r.json()["detail"]
     assert fake.stopped is True            # 会话已停止清理,用户须重新采集
@@ -279,16 +311,17 @@ def test_save_runtime_error_409_cleans_session(client, tmp_path, monkeypatch):
 def test_save_io_error_500_keeps_session_for_retry(client, tmp_path, monkeypatch):
     """导出抛非 RuntimeError(写盘失败等,会话仍健康)→ 500 且保留会话,重试可成功。"""
     monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
+    ah = _admin_headers(client)
     pid = _mk_project()
     cid, fake = _inject_collect(pid, OSError("disk full"))
-    r = client.post(f"/api/ui-auth-collect/{cid}/save")
+    r = client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah)
     assert r.status_code == 500
     assert "重试" in r.json()["detail"]
     assert fake.stopped is False           # 会话未被打断
     assert list(mod._collects) == [cid]    # 仍在册:save / cancel 都还能找到它
     assert _auth_rows(pid) == []           # 占位行已回滚,不留孤儿
     fake.exc = None                        # 故障解除,同一会话直接重试 save
-    r2 = client.post(f"/api/ui-auth-collect/{cid}/save")
+    r2 = client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah)
     assert r2.status_code == 201
     assert _auth_rows(pid) == [r2.json()["id"]]  # 恰好一行:失败那次的占位行已回滚
     assert mod._collects == {}
@@ -301,15 +334,16 @@ def test_save_dir_failure_500_keeps_session_for_retry(client, tmp_path, monkeypa
     blocker = tmp_path / "not-a-dir"
     blocker.write_text("x", encoding="utf-8")  # ui_data_dir 指向文件 → mkdir(parents=True) 必炸
     monkeypatch.setattr(settings, "ui_data_dir", blocker)
+    ah = _admin_headers(client)
     cid, fake = _inject_collect(pid)
-    r = client.post(f"/api/ui-auth-collect/{cid}/save")
+    r = client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah)
     assert r.status_code == 500
     assert "重试" in r.json()["detail"]
     assert fake.stopped is False            # 会话未被打断,交互槽仍被本会话正常持有
     assert list(mod._collects) == [cid]     # 所有权回插:save/cancel 都还能找到它
     assert _auth_rows(pid) == []
     monkeypatch.setattr(settings, "ui_data_dir", tmp_path)  # 故障解除,同一会话重试 save
-    r2 = client.post(f"/api/ui-auth-collect/{cid}/save")
+    r2 = client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah)
     assert r2.status_code == 201
     assert _auth_rows(pid) == [r2.json()["id"]]
     assert mod._collects == {}
@@ -318,10 +352,11 @@ def test_save_dir_failure_500_keeps_session_for_retry(client, tmp_path, monkeypa
 def test_save_duplicate_second_404_single_row(client, tmp_path, monkeypatch):
     """重复 save:所有权移交,第二次 save 404,库里只落一行。"""
     monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
+    ah = _admin_headers(client)
     pid = _mk_project()
     cid, _fake = _inject_collect(pid)
-    assert client.post(f"/api/ui-auth-collect/{cid}/save").status_code == 201
-    assert client.post(f"/api/ui-auth-collect/{cid}/save").status_code == 404
+    assert client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah).status_code == 201
+    assert client.post(f"/api/ui-auth-collect/{cid}/save", headers=ah).status_code == 404
     assert len(_auth_rows(pid)) == 1
     assert mod._collects == {}
 
@@ -332,6 +367,7 @@ def test_save_concurrent_only_one_wins(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "ui_data_dir", tmp_path)
     pid = _mk_project()
     cid, _fake = _inject_collect(pid)
+    current = _admin_user()  # 直接驱动路由函数,闸门也要过(admin 直通)
     from threading import Thread
 
     from fastapi import HTTPException
@@ -343,7 +379,7 @@ def test_save_concurrent_only_one_wins(tmp_path, monkeypatch):
     def attempt():
         db = SessionLocal()
         try:
-            row = mod.save_collect(cid, db)
+            row = mod.save_collect(cid, db, current)
             outcomes.append(f"201:{row.id}")
         except HTTPException as e:
             outcomes.append(str(e.status_code))
@@ -363,6 +399,7 @@ def test_save_concurrent_only_one_wins(tmp_path, monkeypatch):
 def test_recording_rejects_invalid_auth_state_id(client):
     """ui_recordings 的 auth_state_id 校验与 ui_runs 同源:不存在/跨项目/软删 一律 400,
     且先于占 INTERACTIVE_SLOT(槽被占满时仍是 400,证明不会带病去开浏览器会话)。"""
+    ah = _admin_headers(client)
     pid_a, pid_b = _mk_project(), _mk_project()
     aid = _mk_auth(pid_a, "auth/none.json")
     import time
@@ -376,13 +413,13 @@ def test_recording_rejects_invalid_auth_state_id(client):
         pytest.fail("INTERACTIVE_SLOT 被先前会话占住,无法预占")
     try:
         assert client.post(f"/api/projects/{pid_b}/ui-recordings",
-                           json={"auth_state_id": 99999}).status_code == 400
+                           json={"auth_state_id": 99999}, headers=ah).status_code == 400
         # 跨项目引用:登录态属于 pid_a,在 pid_b 下发起录制必须 400(Task 5 defer,Task 6 已修)
         assert client.post(f"/api/projects/{pid_b}/ui-recordings",
-                           json={"auth_state_id": aid}).status_code == 400
+                           json={"auth_state_id": aid}, headers=ah).status_code == 400
         # 软删后不可再引用
-        assert client.delete(f"/api/ui-auth-states/{aid}").status_code == 204
+        assert client.delete(f"/api/ui-auth-states/{aid}", headers=ah).status_code == 204
         assert client.post(f"/api/projects/{pid_b}/ui-recordings",
-                           json={"auth_state_id": aid}).status_code == 400
+                           json={"auth_state_id": aid}, headers=ah).status_code == 400
     finally:
         SLOT.release()
