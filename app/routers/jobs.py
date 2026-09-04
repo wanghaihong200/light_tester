@@ -8,11 +8,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user, get_current_user_sse
 from app.config import settings
 from app.database import get_db
 from app.jobs.bus import bus
 from app.jobs.pipeline import enqueue_job
-from app.models import Case, Document, FeaturePoint, GenerationJob, Module, Project, Step, StagedCase
+from app.models import Case, Document, FeaturePoint, GenerationJob, Module, Project, Step, StagedCase, User
 from app.schemas import GenerationJobOut, StagedCaseOut
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -23,7 +24,7 @@ def _sse(event: dict) -> str:
 
 
 @router.get("/jobs/{job_id}/events")
-async def job_events(job_id: int, db: Session = Depends(get_db)):
+async def job_events(job_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user_sse)):
     job = db.get(GenerationJob, job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
@@ -106,7 +107,7 @@ def _resolve_module_id(db: Session, project_id: int, payload: JobCreate) -> int 
 
 
 @router.post("/projects/{project_id}/jobs", response_model=GenerationJobOut, status_code=201)
-def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db)):
+def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "project not found")
@@ -137,7 +138,7 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
 
 
 @router.get("/projects/{project_id}/jobs", response_model=list[GenerationJobOut])
-def list_jobs(project_id: int, db: Session = Depends(get_db)):
+def list_jobs(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     return (
         db.query(GenerationJob)
         .filter(GenerationJob.project_id == project_id)
@@ -147,7 +148,7 @@ def list_jobs(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/jobs/{job_id}", response_model=GenerationJobOut)
-def get_job(job_id: int, db: Session = Depends(get_db)):
+def get_job(job_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     job = db.get(GenerationJob, job_id)
     if job is None:
         raise HTTPException(404, "job not found")
@@ -162,7 +163,7 @@ class StagingAccept(BaseModel):
 
 
 @router.get("/jobs/{job_id}/staging")
-def staging_list(job_id: int, db: Session = Depends(get_db)):
+def staging_list(job_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     """暂存区分组列表:按功能点名分组,组内按 id 升序,组按首次出现序"""
     job = db.get(GenerationJob, job_id)
     if job is None:
@@ -185,7 +186,7 @@ def staging_list(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/jobs/{job_id}/staging/accept")
-def staging_accept(job_id: int, payload: StagingAccept, db: Session = Depends(get_db)):
+def staging_accept(job_id: int, payload: StagingAccept, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     """勾选转正:找或建功能点,插 Case+Steps,删暂存行;全部完成后一次 commit"""
     job = db.get(GenerationJob, job_id)
     if job is None:
@@ -263,7 +264,7 @@ def staging_accept(job_id: int, payload: StagingAccept, db: Session = Depends(ge
 
 
 @router.delete("/staged/{staged_id}", status_code=204)
-def staging_reject(staged_id: int, db: Session = Depends(get_db)):
+def staging_reject(staged_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     """拒绝:物理删除暂存行"""
     staged = db.get(StagedCase, staged_id)
     if staged is None:

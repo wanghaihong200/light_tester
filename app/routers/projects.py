@@ -4,13 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import Project
 from app.schemas import ProjectCreate, ProjectOut, ProjectUpdate
 from app.excel_export import build_excel_bytes
 from app.xmind_export import build_xmind_bytes
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+router = APIRouter(prefix="/api/projects", tags=["projects"], dependencies=[Depends(get_current_user)])
 
 
 def _get_or_404(db: Session, project_id: int) -> Project:

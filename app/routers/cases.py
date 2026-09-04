@@ -2,11 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, selectinload
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import Case, FeaturePoint, Module, Step
 from app.schemas import CaseCreate, CaseOut, CaseUpdate, FeaturePointCreate, FeaturePointOut
 
-router = APIRouter(prefix="/api", tags=["cases"])
+router = APIRouter(prefix="/api", tags=["cases"], dependencies=[Depends(get_current_user)])
 
 
 def _case_or_404(db: Session, case_id: int) -> Case:

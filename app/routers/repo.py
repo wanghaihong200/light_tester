@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.git_service import (
     ChangeFile, FileNode, GitError, NothingToCommit, PushConflict,
@@ -15,7 +16,7 @@ from app.git_service import (
 )
 from app.models import Project
 
-router = APIRouter(prefix="/api/projects/{project_id}/repo", tags=["repo"])
+router = APIRouter(prefix="/api/projects/{project_id}/repo", tags=["repo"], dependencies=[Depends(get_current_user)])
 
 _LANG_MAP = {".java": "java", ".xml": "xml", ".properties": "properties", ".md": "markdown"}
 

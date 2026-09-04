@@ -54,3 +54,26 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> "User":
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已禁用")
     return user
+
+
+def get_current_user_sse(
+    request: Request,
+    token: str | None = None,
+    db: Session = Depends(get_db),
+) -> "User":
+    """SSE 端点专用:裸 EventSource 不能带自定义头,退而支持 query ?token=。
+    先头后参;两者皆无/皆无效 → 401。"""
+    from app.models import User
+
+    auth = request.headers.get("Authorization", "")
+    raw = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else (token or "")
+    if raw:
+        try:
+            user = db.get(User, decode_token(raw))
+        except jwt.PyJWTError:
+            user = None
+        if user is not None:
+            if not user.is_active:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已禁用")
+            return user
+    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "未登录或登录已过期")

@@ -2,11 +2,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import Project, UiScript
 from app.schemas import UiScriptOut, UiScriptSave
 
-router = APIRouter(prefix="/api", tags=["ui-scripts"])
+router = APIRouter(prefix="/api", tags=["ui-scripts"], dependencies=[Depends(get_current_user)])
 
 
 def _get_owned(db: Session, script_id: int) -> UiScript:

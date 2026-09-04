@@ -9,8 +9,9 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user, get_current_user_sse
 from app.database import get_db
-from app.models import Project, UiAuthState
+from app.models import Project, UiAuthState, User
 from app.ui_automation.recorder import INTERACTIVE_SLOT, RecordingSession, rec_bus
 
 router = APIRouter(prefix="/api", tags=["ui-recordings"])
@@ -39,7 +40,7 @@ class AssertInsert(BaseModel):
 
 
 @router.post("/projects/{project_id}/ui-recordings", status_code=201)
-def start_recording(project_id: int, payload: RecordCreate, db: Session = Depends(get_db)):
+def start_recording(project_id: int, payload: RecordCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     if db.get(Project, project_id) is None:
         raise HTTPException(404, "project not found")
     storage = None
@@ -74,7 +75,7 @@ def start_recording(project_id: int, payload: RecordCreate, db: Session = Depend
 
 
 @router.get("/ui-recordings/{rid}/events")
-async def recording_events(rid: int):
+async def recording_events(rid: int, current: User = Depends(get_current_user_sse)):
     """SSE 实时流:断线重连先补发已有步骤,再持续推帧/步骤/断言候选,直到 stopped。"""
     _get_active(rid)
     queue = rec_bus.subscribe(rid)
@@ -100,7 +101,7 @@ async def recording_events(rid: int):
 
 
 @router.post("/ui-recordings/{rid}/assert")
-def insert_assert(rid: int, payload: AssertInsert):
+def insert_assert(rid: int, payload: AssertInsert, current: User = Depends(get_current_user)):
     """断言模式点击出的候选元素,由前端选定类型后回调插入,实时推流给录制面板。"""
     sess = _get_active(rid)
     sess.insert_assert(payload.target, payload.assert_type, payload.text, payload.mode)
@@ -108,14 +109,14 @@ def insert_assert(rid: int, payload: AssertInsert):
 
 
 @router.post("/ui-recordings/{rid}/stop")
-def stop_recording(rid: int):
+def stop_recording(rid: int, current: User = Depends(get_current_user)):
     """停止录制并返回草稿({meta,variables,steps});会话已结束则 404。"""
     sess = _get_active(rid)
     return sess.stop()
 
 
 @router.post("/ui-recordings/{rid}/cancel", status_code=204)
-def cancel_recording(rid: int):
+def cancel_recording(rid: int, current: User = Depends(get_current_user)):
     sess = _get_active(rid)
     sess.stop()  # 草稿丢弃,仅停会话;槽位随 on_close 释放
     return Response(status_code=204)

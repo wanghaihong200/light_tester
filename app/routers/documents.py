@@ -8,10 +8,11 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import Document, Project
 
-router = APIRouter(prefix="/api", tags=["documents"])
+router = APIRouter(prefix="/api", tags=["documents"], dependencies=[Depends(get_current_user)])
 
 
 class DocumentOut(BaseModel):

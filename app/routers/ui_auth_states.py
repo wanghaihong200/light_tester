@@ -11,12 +11,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.auth import get_current_user
 from app.database import get_db
 from app.models import Project, UiAuthState
 from app.schemas import UiAuthStateOut
 from app.ui_automation.session import INTERACTIVE_SLOT, InteractiveSession
 
-router = APIRouter(prefix="/api", tags=["ui-auth-states"])
+router = APIRouter(prefix="/api", tags=["ui-auth-states"], dependencies=[Depends(get_current_user)])
 
 
 @dataclass

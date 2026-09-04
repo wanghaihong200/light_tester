@@ -10,10 +10,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.auth import get_current_user, get_current_user_sse
 from app.config import settings
 from app.database import get_db
 from app.jobs.bus import bus
-from app.models import Project, UiAuthState, UiRun, UiScript
+from app.models import Project, UiAuthState, UiRun, UiScript, User
 from app.schemas import UiRunOut
 from app.ui_automation import dsl, runner
 
@@ -46,7 +47,7 @@ def _run_thread(run_id: int, doc: dict, mode: str, variables: dict, auth_path: s
 
 
 @router.post("/projects/{project_id}/ui-runs", response_model=UiRunOut, status_code=201)
-def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db)):
+def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     if db.get(Project, project_id) is None:
         raise HTTPException(404, "project not found")
     script = db.get(UiScript, payload.script_id)
@@ -82,7 +83,7 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
 
 
 @router.get("/projects/{project_id}/ui-runs", response_model=list[UiRunOut])
-def list_runs(project_id: int, script_id: int | None = None, db: Session = Depends(get_db)):
+def list_runs(project_id: int, script_id: int | None = None, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     q = db.query(UiRun).filter(UiRun.project_id == project_id)
     if script_id is not None:
         q = q.filter(UiRun.script_id == script_id)
@@ -90,7 +91,7 @@ def list_runs(project_id: int, script_id: int | None = None, db: Session = Depen
 
 
 @router.get("/ui-runs/{run_id}", response_model=UiRunOut)
-def get_run(run_id: int, db: Session = Depends(get_db)):
+def get_run(run_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     run = db.get(UiRun, run_id)
     if run is None:
         raise HTTPException(404, "run not found")
@@ -98,7 +99,7 @@ def get_run(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/ui-runs/{run_id}/events")
-async def run_events(run_id: int, db: Session = Depends(get_db)):
+async def run_events(run_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user_sse)):
     """SSE 预览流:先发当前状态,running 中则持续推帧/步骤事件直到 done/error。"""
     run = db.get(UiRun, run_id)
     if run is None:
@@ -128,7 +129,7 @@ async def run_events(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/ui-runs/{run_id}/force-finish", response_model=UiRunOut)
-def force_finish(run_id: int, db: Session = Depends(get_db)):
+def force_finish(run_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     """强制结束执行中/排队的 run,状态置「执行异常」(2026-09-04 需求:异常挂起时可手动收口)。
     执行线程活着 → 取消标志让其在下一个步骤边界退出并释放 RUN_SLOT(协作式,长步骤需跑完当前步);
     线程已死(后端重启等)→ 纯状态修复。线程迟到的落库被 _persist 终态防覆盖挡住。"""
@@ -151,7 +152,7 @@ def force_finish(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/ui-runs/{run_id}/screens/{name}")
-def run_screenshot(run_id: int, name: str):
+def run_screenshot(run_id: int, name: str, current: User = Depends(get_current_user)):
     # 文件名恒为 step_<i>_<status>.jpg:非 .jpg 一律拒绝,顺带挡掉 "."/".." 目录名
     if not _NAME_RE.fullmatch(name) or name in (".", "..") or not name.endswith(".jpg"):
         raise HTTPException(400, "bad name")
