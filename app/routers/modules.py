@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
 from app.database import get_db
-from app.models import Case, FeaturePoint, Module, Project
+from app.models import Case, FeaturePoint, Module, Project, User
+from app.permissions import ensure_project_access
 
 router = APIRouter(prefix="/api", tags=["modules"], dependencies=[Depends(get_current_user)])
 
@@ -27,7 +28,8 @@ def _get_project_or_404(db: Session, project_id: int) -> Project:
 
 
 @router.get("/projects/{project_id}/tree")
-def get_tree(project_id: int, db: Session = Depends(get_db)):
+def get_tree(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    ensure_project_access(db, current, project_id, "viewer")
     _get_project_or_404(db, project_id)
 
     # Single query: all modules for the project
@@ -98,7 +100,10 @@ def get_tree(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/projects/{project_id}/modules", status_code=status.HTTP_201_CREATED)
-def create_module(project_id: int, payload: ModuleCreate, db: Session = Depends(get_db)):
+def create_module(
+    project_id: int, payload: ModuleCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)
+):
+    ensure_project_access(db, current, project_id, "editor")
     _get_project_or_404(db, project_id)
     if payload.parent_id is not None:
         parent = db.get(Module, payload.parent_id)
@@ -121,10 +126,13 @@ def _is_descendant(db: Session, candidate_id: int, ancestor_id: int) -> bool:
 
 
 @router.put("/modules/{module_id}")
-def update_module(module_id: int, payload: ModuleUpdate, db: Session = Depends(get_db)):
+def update_module(
+    module_id: int, payload: ModuleUpdate, db: Session = Depends(get_db), current: User = Depends(get_current_user)
+):
     module = db.get(Module, module_id)
     if module is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "module not found")
+    ensure_project_access(db, current, module.project_id, "editor")
     data = payload.model_dump(exclude_unset=True)
     if "parent_id" in data and data["parent_id"] is not None:
         parent = db.get(Module, data["parent_id"])
@@ -140,9 +148,10 @@ def update_module(module_id: int, payload: ModuleUpdate, db: Session = Depends(g
 
 
 @router.delete("/modules/{module_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_module(module_id: int, db: Session = Depends(get_db)):
+def delete_module(module_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     module = db.get(Module, module_id)
     if module is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "module not found")
+    ensure_project_access(db, current, module.project_id, "editor")
     db.delete(module)
     db.commit()
