@@ -66,7 +66,7 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
             raise HTTPException(400, "invalid auth_state_id")
         auth_path = str(auth.storage_path)
     if not runner.RUN_SLOT.acquire(blocking=False):
-        raise HTTPException(409, "已有执行在进行中,请稍后")
+        raise HTTPException(409, f"执行槽已满(上限 {settings.run_slot_count}),请稍后重试")
     # 占锁成功即拥有执行权,所有权随线程移交(线程 finally 释放),消灭「探测后让位」的竞态窗口:
     # 落库/起线程一旦失败就地释放,避免锁泄漏把后续所有请求卡死在 409
     try:

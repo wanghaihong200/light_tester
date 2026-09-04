@@ -155,15 +155,18 @@ def test_run_api_lifecycle_and_409_guard(client, owned):
 
 
 def test_run_api_409_when_slot_occupied(client, owned):
-    """全局并发=1:锁被占用时创建必须 409,且不得落库(无 pending 僵尸 run)。"""
+    """执行槽占满时创建必须 409(Task 12 后容量来自 settings.run_slot_count),且不得落库(无 pending 僵尸 run)。"""
     db, p, s = owned
     ah = _admin_headers(client)
     doc = {"version": 1, "meta": {}, "variables": [],
            "steps": [{"id": "s1", "action": "wait", "params": {"ms": 50}}]}
     from app.database import SessionLocal
     db2 = SessionLocal(); row = db2.get(UiScript, s.id); row.script = doc; db2.commit(); db2.close()
-    for _ in range(100):  # 等上一用例的执行线程释放锁后再预占(0.1s 间隔,上限 10s)
-        if runner.RUN_SLOT.acquire(blocking=False):
+    held = 0
+    for _ in range(100):  # 占满全部执行槽(容量来自 settings.run_slot_count);先前用例线程未让位则等(0.1s 间隔,上限 10s)
+        while runner.RUN_SLOT.acquire(blocking=False):
+            held += 1
+        if held:
             break
         time.sleep(0.1)
     else:
@@ -172,14 +175,15 @@ def test_run_api_409_when_slot_occupied(client, owned):
         for _ in range(2):  # 连续两次都 409:守卫不被单次请求消费
             r = client.post(f"/api/projects/{p.id}/ui-runs", json={"script_id": s.id}, headers=ah)
             assert r.status_code == 409
-            assert "已有执行" in r.json()["detail"]
+            assert "执行槽" in r.json()["detail"]  # Task 12 文案:「执行槽已满(上限 N),请稍后重试」
         db3 = SessionLocal()
         try:
             assert db3.query(UiRun).filter(UiRun.project_id == p.id).count() == 0
         finally:
             db3.close()
     finally:
-        runner.RUN_SLOT.release()
+        for _ in range(held):  # 只归还自己占到的槽(BoundedSemaphore 超额 release 会 ValueError)
+            runner.RUN_SLOT.release()
     # 释放后可正常创建(锁的所有权移交线程),并等它跑完避免弄脏下一用例
     r = client.post(f"/api/projects/{p.id}/ui-runs", json={"script_id": s.id}, headers=ah)
     assert r.status_code == 201
@@ -329,9 +333,8 @@ def test_force_finish_cancels_thread_and_guards_state(client, tmp_path, owned):
         _t.sleep(0.2)
     _t.sleep(1.8)  # 落在第 2~3 步之间
     assert client.post(f"/api/ui-runs/{run_id}/force-finish", headers=ah).status_code == 200
-    for _ in range(100):  # 线程在步骤边界自杀后槽必须释放(上限 20s)
-        if runner.RUN_SLOT.acquire(blocking=False):
-            runner.RUN_SLOT.release()
+    for _ in range(100):  # 线程在步骤边界自杀后执行槽必须全部归还(Task 12 后容量=settings.run_slot_count,上限 20s)
+        if runner.RUN_SLOT._value == runner.RUN_SLOT._initial_value:  # BoundedSemaphore 内部字段:剩余许可/总容量
             break
         _t.sleep(0.2)
     else:

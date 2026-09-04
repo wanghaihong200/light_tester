@@ -1,6 +1,6 @@
 # app/ui_automation/runner.py
 """执行器:DSL 步骤 → Playwright 调用。阻塞执行,配合后台线程使用。
-设计要点:①全局 RUN_SLOT 并发=1;②每步「高亮→截图→执行」预览帧带元素高亮;
+设计要点:①全局 RUN_SLOT 并发可配置(settings.run_slot_count,默认 5);②每步「高亮→截图→执行」预览帧带元素高亮;
 ③context.pages[-1] 作为当前页实现多标签页跟随;④截图按步落盘供历史回看。
 实现说明:Playwright 的 sync API 是 greenlet 绑定创建线程的,心跳帧线程跨线程
 调 page.screenshot() 会报 greenlet error。因此这里用 async API 跑在执行线程
@@ -13,12 +13,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import UiRun
 from app.ui_automation import dsl
 from app.ui_automation.shotfx import overlay_click_mark
 
-RUN_SLOT = threading.Lock()
+# Task 12:执行槽并发数可配置(settings.run_slot_count,默认 5);INTERACTIVE_SLOT 不受影响
+RUN_SLOT = threading.BoundedSemaphore(settings.run_slot_count)
 _FRAME_INTERVAL = 0.6  # 心跳帧间隔秒
 
 # 用户强制结束的 run 集合(协作式取消):执行线程在下一个步骤边界检查并自杀退出,
