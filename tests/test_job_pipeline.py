@@ -7,6 +7,16 @@ from app.database import SessionLocal
 from app.models import Document, GenerationJob, Module, Project, StagedCase
 
 
+def _admin_headers(client, db_session):
+    """Task 7 补鉴权:bootstrap admin 登录,返回 Authorization 头(admin 直通所有项目)。
+    原断言语义不变,仅补鉴权头。"""
+    from app.bootstrap import ensure_bootstrap_admin
+
+    ensure_bootstrap_admin(db_session)
+    tok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    return {"Authorization": f"Bearer {tok}"}
+
+
 def _seed(db, storage_path):
     p = Project(name="管道测试项目")
     db.add(p)
@@ -111,21 +121,22 @@ async def test_process_job_failure_sets_failed(monkeypatch, tmp_path):
         db.close()
 
 
-def test_create_job_endpoint_and_validation(client):
-    pid = client.post("/api/projects", json={"name": "任务API项目"}).json()["id"]
-    doc = client.post(f"/api/projects/{pid}/documents", files={"file": ("r.md", "# 需求".encode("utf-8"), "text/markdown")}).json()
-    mod = client.post(f"/api/projects/{pid}/modules", json={"name": "模块"}).json()
-    resp = client.post(f"/api/projects/{pid}/jobs", json={"document_id": doc["id"], "target_module_id": mod["id"]})
+def test_create_job_endpoint_and_validation(client, db_session):
+    ah = _admin_headers(client, db_session)
+    pid = client.post("/api/projects", json={"name": "任务API项目"}, headers=ah).json()["id"]
+    doc = client.post(f"/api/projects/{pid}/documents", files={"file": ("r.md", "# 需求".encode("utf-8"), "text/markdown")}, headers=ah).json()
+    mod = client.post(f"/api/projects/{pid}/modules", json={"name": "模块"}, headers=ah).json()
+    resp = client.post(f"/api/projects/{pid}/jobs", json={"document_id": doc["id"], "target_module_id": mod["id"]}, headers=ah)
     assert resp.status_code == 201
     body = resp.json()
     assert body["status"] == "pending"
     assert body["model"] == "claude-opus-5"
-    other = client.post("/api/projects", json={"name": "另一项目"}).json()["id"]
-    bad = client.post(f"/api/projects/{other}/jobs", json={"document_id": doc["id"], "target_module_id": mod["id"]})
+    other = client.post("/api/projects", json={"name": "另一项目"}, headers=ah).json()["id"]
+    bad = client.post(f"/api/projects/{other}/jobs", json={"document_id": doc["id"], "target_module_id": mod["id"]}, headers=ah)
     assert bad.status_code == 400
-    listing = client.get(f"/api/projects/{pid}/jobs")
+    listing = client.get(f"/api/projects/{pid}/jobs", headers=ah)
     assert listing.status_code == 200 and any(j["id"] == body["id"] for j in listing.json())
-    detail = client.get(f"/api/jobs/{body['id']}")
+    detail = client.get(f"/api/jobs/{body['id']}", headers=ah)
     assert detail.status_code == 200 and detail.json()["status"] == "pending"
 
 
@@ -279,8 +290,9 @@ async def test_stream_threshold_flush_mid_stream(monkeypatch, tmp_path):
         db.close()
 
 
-def test_sse_endpoint_snapshot_and_404(client):
-    assert client.get("/api/jobs/999999/events").status_code == 404
+def test_sse_endpoint_snapshot_and_404(client, db_session):
+    ah = _admin_headers(client, db_session)
+    assert client.get("/api/jobs/999999/events", headers=ah).status_code == 404
     db = SessionLocal()
     try:
         p = Project(name="SSE项目")
@@ -298,7 +310,7 @@ def test_sse_endpoint_snapshot_and_404(client):
         jid = job.id
     finally:
         db.close()
-    with client.stream("GET", f"/api/jobs/{jid}/events") as r:
+    with client.stream("GET", f"/api/jobs/{jid}/events", headers=ah) as r:
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/event-stream")
         lines = [ln for ln in r.iter_lines() if ln.strip()]

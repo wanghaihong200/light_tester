@@ -14,6 +14,7 @@ from app.database import get_db
 from app.jobs.bus import bus
 from app.jobs.pipeline import enqueue_job
 from app.models import Case, Document, FeaturePoint, GenerationJob, Module, Project, Step, StagedCase, User
+from app.permissions import ensure_project_access, visible_project_ids
 from app.schemas import GenerationJobOut, StagedCaseOut
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -28,6 +29,8 @@ async def job_events(job_id: int, db: Session = Depends(get_db), current: User =
     job = db.get(GenerationJob, job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "job not found")
+    # Task 7:事件流也要闸(发起/详情同档 editor);非成员 404,viewer 403
+    ensure_project_access(db, current, job.project_id, "editor")
     queue = bus.subscribe(job_id)
     snapshot_status = job.status
     # ORM 陷阱:Depends 的 db 在生成器执行时可能已关闭,先取值存局部变量
@@ -111,6 +114,8 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "project not found")
+    # Task 7:发起生成要花钱,editor+ 才能发起(viewer 禁)
+    ensure_project_access(db, current, project_id, "editor")
     doc = db.get(Document, payload.document_id)
     if doc is None or doc.project_id != project_id:
         raise HTTPException(400, "invalid document_id")
@@ -139,6 +144,10 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
 
 @router.get("/projects/{project_id}/jobs", response_model=list[GenerationJobOut])
 def list_jobs(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    # Task 7:非成员项目的 job 不可见(admin → None → 不过滤,含不存在的项目)
+    ids = visible_project_ids(db, current)
+    if ids is not None and project_id not in ids:
+        raise HTTPException(404, "project not found")
     return (
         db.query(GenerationJob)
         .filter(GenerationJob.project_id == project_id)
@@ -152,6 +161,8 @@ def get_job(job_id: int, db: Session = Depends(get_db), current: User = Depends(
     job = db.get(GenerationJob, job_id)
     if job is None:
         raise HTTPException(404, "job not found")
+    # Task 7:详情与发起同档 editor(闸在 _get_or_404 之后:不存在与不可见同 404)
+    ensure_project_access(db, current, job.project_id, "editor")
     return job
 
 
@@ -168,6 +179,7 @@ def staging_list(job_id: int, db: Session = Depends(get_db), current: User = Dep
     job = db.get(GenerationJob, job_id)
     if job is None:
         raise HTTPException(404, "job not found")
+    ensure_project_access(db, current, job.project_id, "editor")
     rows = (
         db.query(StagedCase)
         .filter(StagedCase.job_id == job_id)
@@ -191,6 +203,7 @@ def staging_accept(job_id: int, payload: StagingAccept, db: Session = Depends(ge
     job = db.get(GenerationJob, job_id)
     if job is None:
         raise HTTPException(404, "job not found")
+    ensure_project_access(db, current, job.project_id, "editor")
     if job.status != "completed":
         raise HTTPException(400, "job not completed")
 
@@ -269,5 +282,8 @@ def staging_reject(staged_id: int, db: Session = Depends(get_db), current: User 
     staged = db.get(StagedCase, staged_id)
     if staged is None:
         raise HTTPException(404, "staged case not found")
+    # Task 7:暂存行随 job 闸(转正/拒绝都是写项目域,editor+)
+    job = db.get(GenerationJob, staged.job_id)
+    ensure_project_access(db, current, job.project_id, "editor")
     db.delete(staged)
     db.commit()

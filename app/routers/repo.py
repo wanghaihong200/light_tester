@@ -14,7 +14,8 @@ from app.git_service import (
     list_remote_branches, push_files, read_file, sync_repo,
     working_copy_path,
 )
-from app.models import Project
+from app.models import Project, User
+from app.permissions import ensure_project_access
 
 router = APIRouter(prefix="/api/projects/{project_id}/repo", tags=["repo"], dependencies=[Depends(get_current_user)])
 
@@ -37,8 +38,10 @@ class SyncRequest(BaseModel):
 
 
 @router.post("/sync", response_model=SyncResult)
-def repo_sync(project_id: int, payload: SyncRequest | None = None, db: Session = Depends(get_db)):
+def repo_sync(project_id: int, payload: SyncRequest | None = None, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     p = _get_project(project_id, db)
+    # Task 7:sync 拉外部仓并改写工作副本,写外部系统 → editor+(viewer 403,非成员 404)
+    ensure_project_access(db, current, p.id, "editor")
     try:
         branch = payload.branch if payload else None
         return sync_repo(p, branch)
@@ -49,8 +52,10 @@ def repo_sync(project_id: int, payload: SyncRequest | None = None, db: Session =
 
 
 @router.get("/files")
-def repo_files(project_id: int, db: Session = Depends(get_db)):
+def repo_files(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     p = _get_project(project_id, db)
+    # Task 7:文件浏览是读端点,viewer 可读(非成员 404)
+    ensure_project_access(db, current, p.id, "viewer")
     wc = working_copy_path(p)
     if not (wc.exists() and (wc / ".git").exists()):
         return {"needs_sync": True}
@@ -61,8 +66,9 @@ def repo_files(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/file")
-def repo_file(project_id: int, path: str = Query(...), db: Session = Depends(get_db)):
+def repo_file(project_id: int, path: str = Query(...), db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     p = _get_project(project_id, db)
+    ensure_project_access(db, current, p.id, "viewer")  # Task 7:读端点 viewer
     try:
         content = read_file(p, path)
     except GitError as e:
@@ -74,8 +80,9 @@ def repo_file(project_id: int, path: str = Query(...), db: Session = Depends(get
 
 
 @router.get("/changes")
-def repo_changes(project_id: int, db: Session = Depends(get_db)):
+def repo_changes(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     p = _get_project(project_id, db)
+    ensure_project_access(db, current, p.id, "viewer")  # Task 7:读端点 viewer
     try:
         return {"files": [c.model_dump() for c in git_status(p)]}
     except GitError as e:
@@ -83,8 +90,9 @@ def repo_changes(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/branches")
-def repo_branches(project_id: int, db: Session = Depends(get_db)):
+def repo_branches(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     p = _get_project(project_id, db)
+    ensure_project_access(db, current, p.id, "viewer")  # Task 7:读端点 viewer
     try:
         return {"branches": list_remote_branches(p)}
     except GitError as e:
@@ -98,8 +106,10 @@ class PushRequest(BaseModel):
 
 
 @router.post("/push", response_model=PushResult)
-def repo_push(project_id: int, payload: PushRequest, db: Session = Depends(get_db)):
+def repo_push(project_id: int, payload: PushRequest, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     p = _get_project(project_id, db)
+    # Task 7:push 推外部仓,写外部系统 → editor+(闸在任何 git 动作之前)
+    ensure_project_access(db, current, p.id, "editor")
     msg = payload.commit_message or f"AI 生成接口测试 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     try:
         return push_files(p, payload.files, payload.branch, msg)
