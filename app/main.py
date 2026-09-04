@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.routers import (
-    auth, cases, documents, jobs, modules, projects, repo, ui_auth_states, ui_recordings,
+    auth, cases, documents, jobs, members, modules, projects, repo, ui_auth_states, ui_recordings,
     ui_runs, ui_scripts
 )
 
@@ -50,6 +50,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(auth.router)
+    app.include_router(members.router)
     app.include_router(projects.router)
     app.include_router(modules.router)
     app.include_router(cases.router)
