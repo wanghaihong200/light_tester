@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -279,3 +279,33 @@ class UiAuthState(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = {"comment": "平台用户(管理员建号,无自助注册)"}
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, comment="登录名")
+    display_name: Mapped[str] = mapped_column(String(64), comment="显示名")
+    password_hash: Mapped[str] = mapped_column(String(100), comment="bcrypt 哈希")
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, comment="禁用而非删除")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="uq_project_member"),
+        {"comment": "项目成员(多对多,角色 owner/editor/viewer)"},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="项目ID")
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), comment="用户ID")
+    role: Mapped[str] = mapped_column(String(16), comment="owner/editor/viewer")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

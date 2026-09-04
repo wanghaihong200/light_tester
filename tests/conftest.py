@@ -11,15 +11,16 @@ os.environ["ANTHROPIC_API_KEY"] = ""
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.database import Base, SessionLocal, engine
 from app.main import create_app
 from app.models import (
-    Case, Document, FeaturePoint, GenerationJob, Module, Project, StagedCase,
-    Step, UiAuthState, UiRun, UiScript,
+    Case, Document, FeaturePoint, GenerationJob, Module, Project, ProjectMember,
+    StagedCase, Step, UiAuthState, UiRun, UiScript, User,
 )
 
-_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState)
+_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState, User, ProjectMember)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -48,3 +49,31 @@ def _clean_tables():
 def client():
     with TestClient(create_app()) as c:
         yield c
+
+
+@pytest.fixture()
+def db_session():
+    db = SessionLocal()
+    try:
+        yield db
+        db.rollback()
+    finally:
+        db.close()
+
+
+@pytest.fixture()
+def make_user():
+    from app.auth import hash_password
+
+    def _make(db: Session, username: str, *, is_admin: bool = False):
+        u = User(
+            username=username,
+            display_name=username,
+            password_hash=hash_password("pw-" + username),
+            is_admin=is_admin,
+        )
+        db.add(u)
+        db.commit()
+        return u
+
+    return _make
