@@ -4,8 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt
+from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.database import get_db
 
 
 def hash_password(plain: str) -> str:
@@ -32,3 +35,22 @@ def _encode(payload: dict) -> str:  # 测试钩子:构造过期 token
 def decode_token(token: str) -> int:
     payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     return int(payload["sub"])
+
+
+def get_current_user(request: Request, db: Session = Depends(get_db)) -> "User":
+    """Bearer 鉴权依赖:401=未带/无效 token 或用户已不存在;403=已禁用。"""
+    from app.models import User  # 局部 import 防循环
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "未登录或登录已过期")
+    try:
+        user_id = decode_token(auth.removeprefix("Bearer ").strip())
+    except jwt.PyJWTError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "未登录或登录已过期")
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "未登录或登录已过期")
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "账号已禁用")
+    return user

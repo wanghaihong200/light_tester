@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.routers import (
-    cases, documents, jobs, modules, projects, repo, ui_auth_states, ui_recordings,
+    auth, cases, documents, jobs, modules, projects, repo, ui_auth_states, ui_recordings,
     ui_runs, ui_scripts
 )
 
@@ -17,6 +17,12 @@ import app.models  # noqa: F401 — ensure Base.metadata knows all tables
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # 首次启动引导首个 admin(users 表空则建 admin/admin123)
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.database import SessionLocal
+
+    with SessionLocal() as _db:
+        ensure_bootstrap_admin(_db)
     # 无条件注册主事件循环,使 enqueue_job 可跨线程安全投递(线程安全)
     from app.jobs.pipeline import set_loop
     set_loop(asyncio.get_running_loop())
@@ -43,6 +49,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(modules.router)
     app.include_router(cases.router)
