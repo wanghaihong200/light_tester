@@ -96,7 +96,8 @@ def save_collect(cid: int, db: Session = Depends(get_db), current: User = Depend
         # 文件名用 DB 自增 id 而非进程内计数:行与文件都跨重启持久,进程内计数重启后从 1 重来,
         # 会命中旧文件静默覆盖,删旧行时 unlink 还会连带删掉新行正用的文件。
         # 先 flush 拿 id 再导出(未提交),任何一步失败回滚即不留 storage_path 为空的孤儿行
-        row = UiAuthState(project_id=cs.project_id, name=cs.name, storage_path="")
+        # save 是纯新建(所有权移交保证并发只落一行,无 upsert 更新路径):首次落库写 created_by
+        row = UiAuthState(project_id=cs.project_id, name=cs.name, storage_path="", created_by=current.id)
         db.add(row)
         db.flush()
         path = (auth_dir / f"{cs.project_id}_{row.id}.json").resolve()

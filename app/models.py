@@ -22,6 +22,8 @@ class Project(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
 
     modules: Mapped[list[Module]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
@@ -140,6 +142,8 @@ class Document(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
 
     project: Mapped[Project] = relationship(back_populates="documents")
 
@@ -171,6 +175,8 @@ class GenerationJob(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
     artifacts: Mapped[list | None] = mapped_column(
         JSON, nullable=True, comment="接口生成产物文件清单:[{\"path\":...,\"action\":\"created|overwritten\"}];用例生成任务为NULL"
     )
@@ -239,6 +245,8 @@ class UiScript(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
 
 
 class UiRun(Base):
@@ -279,6 +287,8 @@ class UiAuthState(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
 
 
 class User(Base):

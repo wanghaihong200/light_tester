@@ -25,7 +25,7 @@ def create_script(project_id: int, payload: UiScriptSave, db: Session = Depends(
     if db.get(Project, project_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "project not found")
     ensure_project_access(db, current, project_id, "editor")  # 建脚本 = 写
-    row = UiScript(project_id=project_id, **payload.model_dump())
+    row = UiScript(project_id=project_id, **payload.model_dump(), created_by=current.id)  # updated_by 仅 update 时写
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -53,6 +53,7 @@ def update_script(script_id: int, payload: UiScriptSave, db: Session = Depends(g
     row = _get_owned(db, current, script_id, "editor")
     for k, v in payload.model_dump().items():
         setattr(row, k, v)
+    row.updated_by = current.id
     db.commit()
     db.refresh(row)
     return row

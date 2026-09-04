@@ -134,6 +134,9 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
         job_type=payload.job_type,
         model=settings.ai_model,
         user_prompt=(payload.user_prompt or "").strip() or None,
+        # 归属口径:发起即视为一次"修改动作",两列同值写入;此后状态由 worker 翻转(不经用户),不再碰这两列
+        created_by=current.id,
+        updated_by=current.id,
     )
     db.add(job)
     db.commit()

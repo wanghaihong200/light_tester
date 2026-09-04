@@ -53,7 +53,7 @@ def upload_document(
     storage_path = target_dir / f"{uuid.uuid4().hex}_{safe_name}"
     storage_path.write_bytes(file.file.read())
 
-    doc = Document(project_id=project_id, filename=file.filename, storage_path=str(storage_path))
+    doc = Document(project_id=project_id, filename=file.filename, storage_path=str(storage_path), created_by=current.id)
     db.add(doc)
     db.commit()
     db.refresh(doc)

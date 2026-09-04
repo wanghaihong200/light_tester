@@ -33,7 +33,7 @@ def list_projects(db: Session = Depends(get_db), current: User = Depends(get_cur
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     if db.query(Project).filter(Project.name == payload.name).first():
         raise HTTPException(status.HTTP_409_CONFLICT, "project name already exists")
-    project = Project(**payload.model_dump())
+    project = Project(**payload.model_dump(), created_by=current.id)  # 建时不写 updated_by,仅 update 时写
     db.add(project)
     db.flush()
     db.add(ProjectMember(project_id=project.id, user_id=current.id, role="owner"))
@@ -61,6 +61,7 @@ def update_project(
             raise HTTPException(status.HTTP_409_CONFLICT, "project name already exists")
     for field, value in data.items():
         setattr(project, field, value)
+    project.updated_by = current.id
     db.commit()
     db.refresh(project)
     return project
