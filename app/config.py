@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     ui_data_dir: Path = Path("../data/ui")
     anthropic_api_key: str | None = None
     ai_model: str = "claude-opus-5"
-    jwt_secret: str = "dev-secret-change-me"
+    jwt_secret: str = "dev-secret-change-me-please-32bytes!"
     jwt_exp_days: int = 7
     run_slot_count: int = 5
 
