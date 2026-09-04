@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -23,11 +25,11 @@ class LoginOut(BaseModel):
 
 class MemberAddIn(BaseModel):
     username: str
-    role: str
+    role: Literal["owner", "editor", "viewer"]
 
 
 class MemberRoleUpdate(BaseModel):
-    role: str
+    role: Literal["owner", "editor", "viewer"]
 
 
 class MemberOut(BaseModel):

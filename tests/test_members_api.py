@@ -112,3 +112,12 @@ def test_outsider_members_invisible_404(client, db_session, make_user):
     assert client.get(f"/api/projects/{pid}/members", headers=oh).status_code == 404
     assert client.post(f"/api/projects/{pid}/members",
                        json={"username": "stranger", "role": "viewer"}, headers=oh).status_code == 404
+
+
+def test_add_member_invalid_role_422(client, db_session, make_user):
+    # 角色值域收紧为 owner/editor/viewer,手误(如 "editer")不得静默入库
+    ah = _admin_headers(client, db_session)
+    pid = client.post("/api/projects", json={"name": "typo"}, headers=ah).json()["id"]
+    make_user(db_session, "dee")
+    r = client.post(f"/api/projects/{pid}/members", json={"username": "dee", "role": "editer"}, headers=ah)
+    assert r.status_code == 422
