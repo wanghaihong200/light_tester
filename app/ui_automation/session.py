@@ -14,7 +14,7 @@ import queue
 import threading
 import time
 
-from app.ui_automation.injected import COLLECT_JS, TOOLBAR_JS
+from app.ui_automation.injected import CLICK_FX_JS, COLLECT_JS, TOOLBAR_JS
 
 INTERACTIVE_SLOT = threading.Lock()  # 全局同时 1 个交互会话(录制或登录态采集)
 _FRAME_INTERVAL = 0.6  # 预览帧间隔秒
@@ -163,6 +163,7 @@ class InteractiveSession:
                 context.add_init_script(COLLECT_JS)
                 if with_toolbar:
                     context.add_init_script(TOOLBAR_JS)
+                    context.add_init_script(CLICK_FX_JS)
 
                 def report(source, ev):  # 页面 JS → Python(binding 回调)
                     ev = dict(ev)

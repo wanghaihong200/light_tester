@@ -192,3 +192,66 @@ def test_capture_frames_false_no_frames(page_url):
         sess.stop()
         sess.join(timeout=10)
     assert frames == []
+
+
+# ── 点击红圈特效(CLICK_FX_JS,2026-09-03 冒烟需求 3)──────────────────
+
+
+def test_click_fx_ripple_on_recorded_click(page_url):
+    """录制会话点击出红圈(data-tc-fx);断言模式点击不出(断言不是录制步骤)。"""
+    sess = RecordingSession(recording_id=9903, headless=True, start_url=page_url,
+                            storage_state=None, on_close=lambda: None)
+    try:
+        page = sess.current_page(timeout=15)
+        # 工具条真实导航渲染回归:document-start 抛 appendChild null 曾致其从未出现
+        assert page.evaluate("!!document.querySelector('div[style*=fixed]')")
+        page.click("#user")  # #user 有尺寸且无导航行为,红圈可存活供断言(#out 零尺寸点不了)
+        time.sleep(0.3)
+        assert page.evaluate("!!document.querySelector('[data-tc-fx]')")
+
+        page.evaluate("document.querySelectorAll('[data-tc-fx]').forEach(e => e.remove())")
+        page.evaluate("window.__tcAssertMode = true")
+        page.click("#user")
+        time.sleep(0.3)
+        assert page.evaluate("document.querySelectorAll('[data-tc-fx]').length") == 0
+        sess.stop()
+    finally:
+        sess.join(timeout=10)
+
+
+def test_click_fx_absent_without_toolbar(page_url):
+    """with_toolbar=False(登录态采集会话)不注入特效:__tcClickFx 未定义、点击无红圈。"""
+    from app.ui_automation.session import InteractiveSession
+    sess = InteractiveSession(session_id=9912, headless=True, start_url=page_url,
+                              storage_state=None, on_raw=lambda e: None,
+                              on_frame=lambda b64: None, on_close=lambda: None,
+                              with_toolbar=False, capture_frames=False)
+    try:
+        page = sess.current_page(timeout=15)
+        page.click("#user")
+        time.sleep(0.3)
+        assert page.evaluate("window.__tcClickFx === undefined")
+        assert page.evaluate("document.querySelectorAll('[data-tc-fx]').length") == 0
+        sess.stop()
+    finally:
+        sess.join(timeout=10)
+
+
+def test_recording_captures_scroll(tmp_path):
+    """滚轮/拖滚动条录制(需求2):真实 mouse.wheel → scroll 事件 400ms 防抖 → 草稿含 scroll 步骤。"""
+    f = tmp_path / "long.html"
+    f.write_text('<html><body style="margin:0"><div style="height:3000px">tall</div></body></html>',
+                 encoding="utf-8")
+    draft_box = {}
+    sess = RecordingSession(recording_id=9904, headless=True, start_url=f.as_uri(),
+                            storage_state=None, on_close=lambda: None)
+    try:
+        page = sess.current_page(timeout=15)
+        page.mouse.wheel(0, 600)
+        time.sleep(0.7)  # ≥ 防抖窗口 400ms,让滚动批量结算
+        draft_box.update(sess.stop())
+    finally:
+        sess.stop()
+        sess.join(timeout=10)
+    scrolls = [s for s in draft_box["steps"] if s["action"] == "scroll"]
+    assert len(scrolls) == 1 and scrolls[0]["params"]["dy"] >= 500 and scrolls[0]["params"]["dx"] == 0

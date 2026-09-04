@@ -16,6 +16,7 @@ from pathlib import Path
 from app.database import SessionLocal
 from app.models import UiRun
 from app.ui_automation import dsl
+from app.ui_automation.shotfx import overlay_click_mark
 
 RUN_SLOT = threading.Lock()
 _FRAME_INTERVAL = 0.6  # 心跳帧间隔秒
@@ -79,6 +80,21 @@ async def _unhighlight(page, loc: dict | None) -> None:
         pass
 
 
+async def _click_point(page, step: dict) -> tuple[int, int] | None:
+    """click 步骤的视口点击点(元素盒中心,即 Playwright 实际点击处);定位失败返回 None。
+    在点击前取坐标,叠画到该步存档截图上(与录制预览的光标特效同一视觉,见 shotfx)。"""
+    if step.get("action") != "click" or not step.get("locator"):
+        return None
+    try:
+        el = await _locate(page, step["locator"])
+        box = await el.bounding_box()
+        if not box:
+            return None
+        return int(box["x"] + box["width"] / 2), int(box["y"] + box["height"] / 2)
+    except Exception:
+        return None
+
+
 async def _shot_b64(page) -> str:
     """截图直发 CDP captureScreenshot(不带 captureBeyondViewport)。
     playwright 截图对可滚动页强制走 beyond-viewport 路径,有头执行窗口每次
@@ -107,6 +123,9 @@ async def _run_step(page, step: dict, variables: dict) -> tuple[str, str | None]
         elif a == "wait":
             # asyncio.sleep 而非 time.sleep:等待期间心跳帧照常推
             await asyncio.sleep(min(p["ms"], 30_000) / 1000)
+        elif a == "scroll":
+            # 主文档滚动增量(录制自 scroll 事件防抖合并;拖滚动条/滚轮统一落在此)
+            await page.mouse.wheel(p["dx"], p["dy"])
         elif a == "set_var":
             variables[p["name"]] = p["value"]
         else:
@@ -123,9 +142,10 @@ async def _run_step(page, step: dict, variables: dict) -> tuple[str, str | None]
             elif a == "assert_text":
                 actual = await el.inner_text()
                 want = p["text"]
-                ok = (want == actual.strip()) if p.get("mode", "contains") == "equals" else (want in actual)
-                if not ok:
-                    return "failed", f"文本不匹配: 期望[{want}] 实际[{actual.strip()[:120]}]"
+                mode = p.get("mode", "contains")
+                if not dsl.text_matches(actual, want, mode):
+                    # 报错必须标明 mode:历史上两种模式报错同形,用户曾据历史把 contains 误判成 equals
+                    return "failed", f"文本不匹配({mode}): 期望[{want}] 实际[{actual.strip()[:120]}]"
         return "passed", None
     except Exception as e:  # Playwright 超时/导航失败等都归为步骤失败
         return "failed", str(e).split("\n")[0][:300]
@@ -210,10 +230,15 @@ async def _execute(run_id: int, script_doc: dict, *, mode: str, variables: dict,
                     cur = _current_page(context, page)
                     await _highlight(cur, step.get("locator"))
                     notify({"type": "frame", "data": await _shot_b64(cur), "step_index": i})
+                    # 点击点在执行前取:点击后元素可能随跳转/删除消失,坐标就没了
+                    mark = await _click_point(cur, step)
                     st, err = await _run_step(cur, step, variables)
                     await _unhighlight(cur, step.get("locator"))
                     shot_name = f"step_{i}_{st}.jpg"
-                    (run_dir / shot_name).write_bytes(await _shot_bytes(cur))
+                    shot = await _shot_bytes(cur)
+                    if st == "passed" and mark:  # 标示画在执行成功后的结果截图上
+                        shot = overlay_click_mark(shot, *mark)
+                    (run_dir / shot_name).write_bytes(shot)
                     results.append({"index": i, "step_id": step["id"], "action": step["action"],
                                     "status": st, "error": err, "screenshot": shot_name,
                                     "elapsed_ms": int((time.monotonic() - t0) * 1000)})

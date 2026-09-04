@@ -52,6 +52,11 @@ def dedupe_and_map(raw_events: list[dict]) -> list[dict]:
             flush_input()
             steps.append({"id": _next_id(), "action": "press",
                           "target": ev["target"], "params": {"key": ev["key"]}})
+        elif kind == "scroll":
+            # JS 侧已按 400ms 防抖合并增量:每批一条「滚动」步骤(含先滚后点的顺序由采集端保证)
+            flush_input()
+            steps.append({"id": _next_id(), "action": "scroll",
+                          "params": {"dx": int(ev.get("dx", 0)), "dy": int(ev.get("dy", 0))}})
         elif kind == "click":
             # 点击目标若是当前输入框(input 后点击同元素)则只保留 fill
             if not (pending is not None and pending["target"] == ev.get("target")):
@@ -113,6 +118,7 @@ def step_summary(step: dict) -> str:
     if a == "press": return f"按键 {p.get('key', '')}"
     if a == "select_option": return f"选择 {loc_name}={p.get('value', '')}"
     if a == "wait": return f"等待 {p.get('ms', 0)}ms"
+    if a == "scroll": return f"滚动 横向{p.get('dx', 0)} 纵向{p.get('dy', 0)}"
     if a == "set_var": return f"设变量 {p.get('name')}={p.get('value')}"
     if a == "assert_visible": return f"断言 可见 {loc_name}"
     if a == "assert_exists": return f"断言 存在 {loc_name}"

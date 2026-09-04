@@ -4,12 +4,12 @@ import re
 
 ACTIONS = {
     "goto": (), "click": ("locator",), "fill": ("locator",), "press": ("locator",),
-    "select_option": ("locator",), "wait": (), "set_var": (),
+    "select_option": ("locator",), "wait": (), "set_var": (), "scroll": (),
     "assert_visible": ("locator",), "assert_exists": ("locator",), "assert_text": ("locator",),
 }
 PARAM_REQUIRED = {"goto": ("url",), "fill": ("text",), "press": ("key",),
                   "select_option": ("value",), "wait": ("ms",), "set_var": ("name", "value"),
-                  "assert_text": ("text",)}
+                  "scroll": ("dx", "dy"), "assert_text": ("text",)}
 STRATEGIES = {"test_id", "role", "placeholder", "label", "text", "css"}
 _VAR = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
@@ -21,6 +21,17 @@ def render_text(value: str, variables: dict) -> str:
         return str(variables.get(m.group(1), m.group(0)))
 
     return _VAR.sub(_sub, value) if isinstance(value, str) else value
+
+
+def normalize_ws(value: str) -> str:
+    """文本比较前的空白归一化(对齐 Playwright text= 语义):连续空白(含换行/制表)坍缩为单个空格并去首尾。"""
+    return " ".join(value.split()) if isinstance(value, str) else value
+
+
+def text_matches(actual: str, want: str, mode: str = "contains") -> bool:
+    """assert_text 的比较语义:双方先空白归一化,再按 mode 判等/包含。未知 mode 按 contains 兜底。"""
+    a, w = normalize_ws(actual), normalize_ws(want)
+    return (a == w) if mode == "equals" else (w in a)
 
 
 def validate_script(doc: dict) -> list[str]:
@@ -64,6 +75,10 @@ def validate_script(doc: dict) -> list[str]:
                     errs.append(f"步骤{i}: {action} 缺 params.{p}")
             if action == "wait" and not isinstance(params.get("ms"), int):
                 errs.append(f"步骤{i}: wait 的 ms 必须是整数毫秒")
+            if action == "scroll":
+                for axis in ("dx", "dy"):
+                    if not isinstance(params.get(axis), int):
+                        errs.append(f"步骤{i}: scroll 的 {axis} 必须是整数像素")
 
     variables = doc.get("variables")
     if variables is None:

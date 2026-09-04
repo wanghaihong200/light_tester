@@ -177,3 +177,88 @@ def test_run_screenshot_name_guard(client):
     assert client.get("/api/ui-runs/999999/screens/step_0_passed.png").status_code == 400
     assert client.get("/api/ui-runs/999999/screens/..%5capp%5cmain.py").status_code == 400
     assert client.get("/api/ui-runs/999999/screens/step_0_passed.jpg").status_code == 404
+
+
+def test_assert_contains_whitespace_normalized(tmp_path, owned):
+    """E2E:元素文本含换行/连续空格时 contains 不背刺(dsl.text_matches 归一化接线)。
+    背景冒烟:页面文本「AI 测试」断言「AI测试」误判为 equals——归一化语义见用户拍板 2026-09-03(仅坍缩)。"""
+    db, p, s = owned
+    html = '<html><body><div id="t">线条\n  之间的   空白</div></body></html>'
+    f = tmp_path / "ws.html"
+    f.write_text(html, encoding="utf-8")
+    doc = {"version": 1, "meta": {}, "variables": [], "steps": [
+        {"id": "s1", "action": "goto", "params": {"url": f.as_uri()}},
+        {"id": "s2", "action": "assert_text", "locator": {"strategy": "css", "value": "#t"},
+         "params": {"text": "线条 之间的 空白", "mode": "contains"}}]}
+    run = UiRun(project_id=p.id, script_id=s.id, script_name=s.name, mode="headless")
+    db.add(run); db.commit()
+    runner.execute_script(run.id, doc, mode="headless", variables={},
+                          auth_state_path=None, data_dir=tmp_path, notify=lambda e: None)
+    from app.database import SessionLocal
+    db2 = SessionLocal(); r = db2.get(UiRun, run.id)
+    assert r.status == "completed" and r.steps_failed == 0
+    db2.close()
+
+
+def test_assert_fail_error_includes_mode(tmp_path, page_file, owned):
+    """断言失败报错必须标明 mode:历史里「文本不匹配: 期望[..] 实际[..]」两种模式长得一样,
+    用户曾据历史把 contains 误判成 equals(2026-09-03 脚本10案例)。"""
+    db, p, s = owned
+    doc = _doc(page_file)  # 第4步 assert_text mode=equals
+    doc["steps"][3]["params"]["text"] = "不会出现的文本"
+    run = UiRun(project_id=p.id, script_id=s.id, script_name=s.name, mode="headless")
+    db.add(run); db.commit()
+    runner.execute_script(run.id, doc, mode="headless", variables={},
+                          auth_state_path=None, data_dir=tmp_path, notify=lambda e: None)
+    from app.database import SessionLocal
+    db2 = SessionLocal(); r = db2.get(UiRun, run.id)
+    assert r.status == "failed"
+    assert "文本不匹配(equals)" in (r.step_results[3]["error"] or "")
+    db2.close()
+
+
+def test_scroll_step_executes(tmp_path, owned):
+    """scroll 步骤真实滚动主文档:页面 onscroll 把「scrolled」写进 #out,断言随之通过(需求2)。"""
+    db, p, s = owned
+    html = ('<html><body style="margin:0"><div style="height:3000px">long</div>'
+            '<div id="out">top</div>'
+            '<script>window.addEventListener("scroll",()=>{'
+            'if(window.scrollY>100)document.getElementById("out").textContent="scrolled";});</script>'
+            '</body></html>')
+    f = tmp_path / "long.html"
+    f.write_text(html, encoding="utf-8")
+    doc = {"version": 1, "meta": {}, "variables": [], "steps": [
+        {"id": "s1", "action": "goto", "params": {"url": f.as_uri()}},
+        {"id": "s2", "action": "scroll", "params": {"dx": 0, "dy": 600}},
+        {"id": "s3", "action": "assert_text", "locator": {"strategy": "css", "value": "#out"},
+         "params": {"text": "scrolled", "mode": "equals"}}]}
+    run = UiRun(project_id=p.id, script_id=s.id, script_name=s.name, mode="headless")
+    db.add(run); db.commit()
+    runner.execute_script(run.id, doc, mode="headless", variables={},
+                          auth_state_path=None, data_dir=tmp_path, notify=lambda e: None)
+    from app.database import SessionLocal
+    db2 = SessionLocal(); r = db2.get(UiRun, run.id)
+    assert r.status == "completed", (r.error, [x["error"] for x in r.step_results if x["error"]])
+    db2.close()
+
+
+def test_click_screenshot_has_cursor_mark(tmp_path, page_file, owned):
+    """执行截图点击标示(需求1):click 步骤的存档截图上必须出现红色光标/圆环像素。"""
+    from io import BytesIO
+    from PIL import Image
+    db, p, s = owned
+    doc = {"version": 1, "meta": {}, "variables": [], "steps": [
+        {"id": "s1", "action": "goto", "params": {"url": page_file}},
+        {"id": "s2", "action": "click", "locator": {"strategy": "css", "value": "#go"}}]}
+    run = UiRun(project_id=p.id, script_id=s.id, script_name=s.name, mode="headless")
+    db.add(run); db.commit()
+    runner.execute_script(run.id, doc, mode="headless", variables={},
+                          auth_state_path=None, data_dir=tmp_path, notify=lambda e: None)
+    from app.database import SessionLocal
+    db2 = SessionLocal(); r = db2.get(UiRun, run.id)
+    assert r.status == "completed" and r.step_results[1]["status"] == "passed"
+    db2.close()
+    shot = (tmp_path / "runs" / str(run.id) / "step_1_passed.jpg").read_bytes()
+    img = Image.open(BytesIO(shot)).convert("RGB")
+    reds = sum(1 for px in img.getdata() if px[0] > 200 and px[1] < 140 and px[2] < 140)
+    assert reds > 30, f"click 截图未见红色标示,红色像素数={reds}"

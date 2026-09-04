@@ -206,3 +206,51 @@ def test_step_summary_more_actions():
     assert events.step_summary({"action": "assert_text", "params": {"text": "欢迎", "mode": "equals"}}) == "断言 文本等于 欢迎"
     # 未知 action 原样返回 action 名
     assert events.step_summary({"action": "mystery"}) == "mystery"
+
+
+def test_text_matches_whitespace_normalized():
+    # 归一化 = 坍缩连续空白+去首尾(用户拍板 2026-09-03:严格对齐 Playwright text= 语义)
+    # 换行/制表/多空格不背刺
+    assert dsl.text_matches("a\nb\tc   d", "a b c d") is True
+    assert dsl.text_matches("  冒烟被测站首页 \n", "冒烟被测站首页", "equals") is True
+    assert dsl.text_matches("操作成功:smoke:冒烟输入", "操作成功") is True
+    # 关键词内部的空白属于内容,坍缩不消除:「AI测试」≠「AI 测试」(用户脚本10实测案例,改期望文本才可过)
+    assert dsl.text_matches("拒绝拍脑袋，AI 测试的工程化实践", "AI测试") is False
+    assert dsl.text_matches("拒绝拍脑袋，AI 测试的工程化实践", "AI 测试") is True
+    # 语义不同仍要拦 / 未知 mode 按 contains 兜底(与 runner 原 p.get("mode","contains") 语义一致)
+    assert dsl.text_matches("abc", "abd", "equals") is False
+    assert dsl.text_matches("abcd", "bc", "weird") is True
+
+
+# ---------- 滚动步骤(scroll,2026-09-04 冒烟需求 2)----------
+
+def test_scroll_validate_and_summary():
+    ok = {"version": 1, "meta": {}, "variables": [], "steps": [
+        {"id": "s1", "action": "scroll", "params": {"dx": 0, "dy": 600}}]}
+    assert dsl.validate_script(ok) == []
+    assert events.step_summary(ok["steps"][0]) == "滚动 横向0 纵向600"
+    # 缺参 / 非整数(dx 字符串、dy 布尔)都要报
+    bad = {"version": 1, "meta": {}, "variables": [], "steps": [
+        {"id": "s1", "action": "scroll", "params": {"dx": 0}},
+        {"id": "s2", "action": "scroll", "params": {"dx": "600", "dy": True}}]}
+    errs = dsl.validate_script(bad)
+    assert sum("dy" in e for e in errs) >= 1 and sum("dx 必须是整数" in e for e in errs) == 1
+
+
+def test_dedupe_scroll_order_and_merge():
+    # 先滚后点:顺序保真;连续两批滚动各自成步(JS 防抖已按停顿分批)
+    raw = [
+        {"kind": "scroll", "dx": 0, "dy": 300},
+        {"kind": "scroll", "dx": 0, "dy": 300},
+        {"kind": "click", "target": {"id": "go", "tag": "button"}},
+    ]
+    steps = events.dedupe_and_map(raw)
+    assert [s["action"] for s in steps] == ["scroll", "scroll", "click"]
+    assert steps[0]["params"] == {"dx": 0, "dy": 300}
+    # 输入先于滚动:fill 在 scroll 前,滚动不打断输入合并语义(fill→scroll 各自成步)
+    tgt = {"id": "user", "tag": "input", "type": "text"}
+    steps2 = events.dedupe_and_map([
+        {"kind": "input", "target": tgt, "value": "kw"},
+        {"kind": "scroll", "dx": 0, "dy": 120},
+    ])
+    assert [s["action"] for s in steps2] == ["fill", "scroll"]
