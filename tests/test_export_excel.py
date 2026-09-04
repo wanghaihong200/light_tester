@@ -7,12 +7,22 @@ import pytest
 
 
 @pytest.fixture()
-def seeded_pid(client):
+def ah(client, db_session):
+    """Task 5 存量用例补鉴权(保语义,补鉴权):bootstrap admin 登录头,admin 对所有项目直通。"""
+    from app.bootstrap import ensure_bootstrap_admin
+
+    ensure_bootstrap_admin(db_session)
+    tok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    return {"Authorization": f"Bearer {tok}"}
+
+
+@pytest.fixture()
+def seeded_pid(client, ah):
     """与 test_export_xmind.py 的 seeded_pid 同构:项目 → 登录模块 → 子模块 + 功能点 → P0 用例(1 步,已执行通过)。"""
-    pid = client.post("/api/projects", json={"name": "导出测试项目"}).json()["id"]
-    m1 = client.post(f"/api/projects/{pid}/modules", json={"name": "登录模块"}).json()
-    client.post(f"/api/projects/{pid}/modules", json={"name": "子模块", "parent_id": m1["id"]})
-    fp = client.post(f"/api/modules/{m1['id']}/feature-points", json={"name": "账号登录"}).json()
+    pid = client.post("/api/projects", json={"name": "导出测试项目"}, headers=ah).json()["id"]
+    m1 = client.post(f"/api/projects/{pid}/modules", json={"name": "登录模块"}, headers=ah).json()
+    client.post(f"/api/projects/{pid}/modules", json={"name": "子模块", "parent_id": m1["id"]}, headers=ah)
+    fp = client.post(f"/api/modules/{m1['id']}/feature-points", json={"name": "账号登录"}, headers=ah).json()
     case = client.post(
         f"/api/feature-points/{fp['id']}/cases",
         json={
@@ -22,13 +32,14 @@ def seeded_pid(client):
             "remark": "冒烟用例",
             "steps": [{"action": "输入账号密码", "expected": "登录成功"}],
         },
+        headers=ah,
     ).json()
-    client.patch(f"/api/cases/{case['id']}/execution", json={"executed_pass": True})
+    client.patch(f"/api/cases/{case['id']}/execution", json={"executed_pass": True}, headers=ah)
     return pid
 
 
-def test_export_excel_structure(client, seeded_pid):
-    resp = client.get(f"/api/projects/{seeded_pid}/export/excel")
+def test_export_excel_structure(client, seeded_pid, ah):
+    resp = client.get(f"/api/projects/{seeded_pid}/export/excel", headers=ah)
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -64,13 +75,13 @@ def test_export_excel_structure(client, seeded_pid):
     assert ws.cell(row=2, column=8).value == "通过"
 
 
-def test_export_excel_project_not_found(client):
-    assert client.get("/api/projects/99999/export/excel").status_code == 404
+def test_export_excel_project_not_found(client, ah):
+    assert client.get("/api/projects/99999/export/excel", headers=ah).status_code == 404
 
 
-def test_export_excel_empty_project(client):
-    pid = client.post("/api/projects", json={"name": "空导出项目"}).json()["id"]
-    resp = client.get(f"/api/projects/{pid}/export/excel")
+def test_export_excel_empty_project(client, ah):
+    pid = client.post("/api/projects", json={"name": "空导出项目"}, headers=ah).json()["id"]
+    resp = client.get(f"/api/projects/{pid}/export/excel", headers=ah)
     assert resp.status_code == 200
     wb = load_workbook(io.BytesIO(resp.content))
     assert wb.sheetnames == ["测试概述", "功能点清单", "测试用例"]
@@ -82,11 +93,11 @@ def test_export_excel_empty_project(client):
     assert wb["测试用例"].max_row == 1
 
 
-def test_export_excel_formula_injection_prevention(client):
+def test_export_excel_formula_injection_prevention(client, ah):
     """用户可控字符串以公式前缀开头时,导出应为纯文本而非公式。"""
-    pid = client.post("/api/projects", json={"name": "=SUM(1,1)"}).json()["id"]
-    m1 = client.post(f"/api/projects/{pid}/modules", json={"name": "+DANGER"}).json()
-    fp = client.post(f"/api/modules/{m1['id']}/feature-points", json={"name": "-INJECT"}).json()
+    pid = client.post("/api/projects", json={"name": "=SUM(1,1)"}, headers=ah).json()["id"]
+    m1 = client.post(f"/api/projects/{pid}/modules", json={"name": "+DANGER"}, headers=ah).json()
+    fp = client.post(f"/api/modules/{m1['id']}/feature-points", json={"name": "-INJECT"}, headers=ah).json()
     client.post(
         f"/api/feature-points/{fp['id']}/cases",
         json={
@@ -96,8 +107,9 @@ def test_export_excel_formula_injection_prevention(client):
             "remark": "\tINDENT",
             "steps": [{"action": "-cmd", "expected": "ok"}],
         },
+        headers=ah,
     )
-    resp = client.get(f"/api/projects/{pid}/export/excel")
+    resp = client.get(f"/api/projects/{pid}/export/excel", headers=ah)
     assert resp.status_code == 200
     wb = load_workbook(io.BytesIO(resp.content))
 
