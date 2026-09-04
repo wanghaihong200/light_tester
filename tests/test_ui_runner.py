@@ -262,3 +262,52 @@ def test_click_screenshot_has_cursor_mark(tmp_path, page_file, owned):
     img = Image.open(BytesIO(shot)).convert("RGB")
     reds = sum(1 for px in img.getdata() if px[0] > 200 and px[1] < 140 and px[2] < 140)
     assert reds > 30, f"click 截图未见红色标示,红色像素数={reds}"
+
+
+# ── 强制结束(2026-09-04 需求:异常挂起时可手动收口,状态置「执行异常」)──────────
+
+
+def test_force_finish_api_paths(client, owned):
+    """404(不存在)/ 400(已终态)/ 200(running→failed,error 带文案,终态时间落库)。"""
+    db, p, s = owned
+    assert client.post("/api/ui-runs/999999/force-finish").status_code == 404
+    r = UiRun(project_id=p.id, script_id=s.id, script_name=s.name, status="completed")
+    db.add(r); db.commit()
+    assert client.post(f"/api/ui-runs/{r.id}/force-finish").status_code == 400
+    r2 = UiRun(project_id=p.id, script_id=s.id, script_name=s.name, status="running")
+    db.add(r2); db.commit()
+    resp = client.post(f"/api/ui-runs/{r2.id}/force-finish")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "failed" and "强制结束" in body["error"] and body["finished_at"]
+
+
+def test_force_finish_cancels_thread_and_guards_state(client, tmp_path, owned):
+    """E2E:执行中强制结束 → 线程在步骤边界退出释放 RUN_SLOT;迟到的完成落库不翻案。"""
+    import time as _t
+    db, p, s = owned
+    url = "data:text/html,<html><title>t</title></html>"
+    doc = {"version": 1, "meta": {}, "variables": [], "steps": [
+        {"id": "s1", "action": "goto", "params": {"url": url}},
+        {"id": "s2", "action": "wait", "params": {"ms": 1500}},
+        {"id": "s3", "action": "wait", "params": {"ms": 1500}}]}
+    from app.database import SessionLocal
+    db2 = SessionLocal(); row = db2.get(UiScript, s.id); row.script = doc; db2.commit(); db2.close()
+    resp = client.post(f"/api/projects/{p.id}/ui-runs", json={"script_id": s.id})
+    assert resp.status_code == 201
+    run_id = resp.json()["id"]
+    for _ in range(50):  # 等 run 真正进入执行(约第 2 步时动手)
+        if client.get(f"/api/ui-runs/{run_id}").json()["status"] == "running":
+            break
+        _t.sleep(0.2)
+    _t.sleep(1.8)  # 落在第 2~3 步之间
+    assert client.post(f"/api/ui-runs/{run_id}/force-finish").status_code == 200
+    for _ in range(100):  # 线程在步骤边界自杀后槽必须释放(上限 20s)
+        if runner.RUN_SLOT.acquire(blocking=False):
+            runner.RUN_SLOT.release()
+            break
+        _t.sleep(0.2)
+    else:
+        pytest.fail("强制结束后执行线程未退出,RUN_SLOT 未释放")
+    st = client.get(f"/api/ui-runs/{run_id}").json()
+    assert st["status"] == "failed" and "强制结束" in st["error"]  # 迟到落库未翻案

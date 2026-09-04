@@ -21,6 +21,22 @@ from app.ui_automation.shotfx import overlay_click_mark
 RUN_SLOT = threading.Lock()
 _FRAME_INTERVAL = 0.6  # 心跳帧间隔秒
 
+# 用户强制结束的 run 集合(协作式取消):执行线程在下一个步骤边界检查并自杀退出,
+# 自然走 finally 关浏览器、由调用方释放 RUN_SLOT。线程无法被强杀,长步骤(如 wait)需跑完当前步。
+_force_finished: set[int] = set()
+
+
+class ForceCancelled(Exception):
+    """用户强制结束:步骤边界抛出,状态已由 force-finish 接口落库,这里只负责退出。"""
+
+
+def mark_force_finished(run_id: int) -> None:
+    _force_finished.add(run_id)
+
+
+def is_force_finished(run_id: int) -> bool:
+    return run_id in _force_finished
+
 
 def _notify_bus(run_id: int, event: dict) -> None:
     """线程内回调 → 主循环 bus 投递(无订阅者/无主循环时 no-op)。"""
@@ -159,6 +175,8 @@ def _persist(run_id: int, *, status: str, results: list, total: int,
         r = db.get(UiRun, run_id)
         if r is None:
             return
+        if r.status in ("completed", "failed"):
+            return  # 已终态(如用户强制结束):执行线程的迟到落库不得翻案
         r.status, r.step_results = status, results
         r.steps_total, r.steps_passed, r.steps_failed = total, passed, failed
         r.started_at = r.started_at or datetime.now()
@@ -226,6 +244,8 @@ async def _execute(run_id: int, script_doc: dict, *, mode: str, variables: dict,
             heartbeat = asyncio.create_task(_frame_loop(context, page, results, notify))
             try:
                 for i, step in enumerate(steps):
+                    if is_force_finished(run_id):
+                        raise ForceCancelled()  # 步骤边界响应强制结束;状态已由接口落库
                     notify({"type": "step_start", "index": i})
                     cur = _current_page(context, page)
                     await _highlight(cur, step.get("locator"))
@@ -264,6 +284,8 @@ async def _execute(run_id: int, script_doc: dict, *, mode: str, variables: dict,
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat
                 await browser.close()
+    except ForceCancelled:
+        pass  # 状态/error 已由 force-finish 接口落库;浏览器随 finally 关闭,槽由调用方释放
     except Exception as e:  # 环境级错误(浏览器起不来等)
         env_error = str(e)[:500]
         persist("failed")

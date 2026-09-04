@@ -3,6 +3,7 @@
 import json
 import re
 import threading
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -124,6 +125,29 @@ async def run_events(run_id: int, db: Session = Depends(get_db)):
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/ui-runs/{run_id}/force-finish", response_model=UiRunOut)
+def force_finish(run_id: int, db: Session = Depends(get_db)):
+    """强制结束执行中/排队的 run,状态置「执行异常」(2026-09-04 需求:异常挂起时可手动收口)。
+    执行线程活着 → 取消标志让其在下一个步骤边界退出并释放 RUN_SLOT(协作式,长步骤需跑完当前步);
+    线程已死(后端重启等)→ 纯状态修复。线程迟到的落库被 _persist 终态防覆盖挡住。"""
+    run = db.get(UiRun, run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    if run.status in ("completed", "failed"):
+        raise HTTPException(400, "该执行已结束,无需强制结束")
+    run.status = "failed"
+    run.error = "执行异常: 用户强制结束"
+    run.started_at = run.started_at or datetime.now()
+    run.finished_at = datetime.now()
+    db.commit()
+    runner.mark_force_finished(run_id)
+    # 推终态给 SSE 订阅者:前端按 done 收尾断流(迟到的事件被前端 finished 守卫忽略)
+    runner._notify_bus(run_id, {"type": "done", "status": "failed",
+                                "summary": {"total": run.steps_total, "passed": run.steps_passed,
+                                            "failed": run.steps_failed, "duration_ms": 0}})
+    return run
 
 
 @router.get("/ui-runs/{run_id}/screens/{name}")
