@@ -36,6 +36,12 @@ class LoginOut(BaseModel):
     user: UserOut
 
 
+class UserSearchItem(BaseModel):
+    id: int
+    username: str
+    display_name: str
+
+
 class MemberAddIn(BaseModel):
     username: str
     role: Literal["owner", "editor", "viewer"]

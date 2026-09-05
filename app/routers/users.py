@@ -1,11 +1,12 @@
 # 用户管理(admin only):建号/列表/改资料·重置密码·禁用;不能禁用自己的账号(改名/自改密放行)
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, hash_password
 from app.database import get_db
 from app.models import User
-from app.schemas_auth import UserCreate, UserOut, UserUpdate
+from app.schemas_auth import UserCreate, UserOut, UserSearchItem, UserUpdate
 
 router = APIRouter(prefix="/api/users", tags=["users"], dependencies=[Depends(get_current_user)])
 
@@ -20,6 +21,27 @@ def _require_admin(current: User) -> None:
 def list_users(db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     _require_admin(current)
     return db.query(User).order_by(User.id).all()
+
+
+@router.get("/search", response_model=list[UserSearchItem])
+def search_users(
+    q: str = "",
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    """用户名/显示名模糊搜索(登录即可用);供选人场景消费。"""
+    kw = (q or "").strip()
+    if not kw:
+        return []
+    limit = max(1, min(limit, 50))
+    rows = (
+        db.query(User)
+        .filter(or_(User.username.contains(kw), User.display_name.contains(kw)))
+        .order_by(User.username)
+        .limit(limit)
+        .all()
+    )
+    return [UserSearchItem(id=r.id, username=r.username, display_name=r.display_name) for r in rows]
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

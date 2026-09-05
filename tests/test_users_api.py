@@ -123,3 +123,38 @@ def test_admin_reset_password_and_missing_target(client, db_session):
 def test_unauthenticated_rejected(client):
     assert client.get("/api/users").status_code == 401
     assert client.post("/api/users", json={"username": "n", "display_name": "n", "password": "123456"}).status_code == 401
+
+
+def test_search_users_basic_and_field_lock(client, db_session, make_user):
+    from app.bootstrap import ensure_bootstrap_admin
+    ensure_bootstrap_admin(db_session)
+    make_user(db_session, "alice")
+    make_user(db_session, "bob")
+    atok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    h = {"Authorization": f"Bearer {atok}"}
+    r = client.get("/api/users/search", params={"q": "ali"}, headers=h)
+    assert r.status_code == 200
+    items = r.json()
+    assert [i["username"] for i in items] == ["alice"]
+    assert set(items[0].keys()) == {"id", "username", "display_name"}  # 字段锁:不泄其他
+
+
+def test_search_by_display_name_no_match_and_empty_q(client, db_session):
+    from app.auth import hash_password
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.models import User
+    ensure_bootstrap_admin(db_session)
+    db_session.add(User(username="zhang3", display_name="张三", password_hash=hash_password("pw-x")))
+    db_session.commit()
+    atok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    h = {"Authorization": f"Bearer {atok}"}
+    r = client.get("/api/users/search", params={"q": "张"}, headers=h)
+    assert [i["username"] for i in r.json()] == ["zhang3"]  # display_name 命中
+    assert client.get("/api/users/search", params={"q": "不存在的名字"}, headers=h).json() == []
+    assert client.get("/api/users/search", params={"q": "   "}, headers=h).json() == []  # 空白 q → []
+
+
+def test_search_open_to_any_logged_in_user(client, db_session, make_user):
+    h = _auth(client, db_session, make_user, "pleb")
+    r = client.get("/api/users/search", params={"q": "pleb"}, headers=h)
+    assert r.status_code == 200 and len(r.json()) == 1
