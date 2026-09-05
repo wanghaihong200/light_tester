@@ -169,11 +169,14 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
 
 
 @router.get("/projects/{project_id}/ui-runs", response_model=list[UiRunOut])
-def list_runs(project_id: int, script_id: int | None = None, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+def list_runs(project_id: int, script_id: int | None = None, driver_target: str | None = None, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    # driver_target 可选筛选:按执行端(web/android/harmony)过滤历史
     ensure_project_access(db, current, project_id, "viewer")
     q = db.query(UiRun).filter(UiRun.project_id == project_id)
     if script_id is not None:
         q = q.filter(UiRun.script_id == script_id)
+    if driver_target is not None:
+        q = q.filter(UiRun.driver_target == driver_target)
     return q.order_by(UiRun.id.desc()).limit(100).all()
 
 

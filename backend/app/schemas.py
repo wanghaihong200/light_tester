@@ -137,6 +137,7 @@ class UiScriptOut(BaseModel):
     name: str
     description: str | None
     script: dict
+    driver_target: str  # 端:web/android/harmony(服务端由 script.meta.target 派生)
     created_at: datetime
     updated_at: datetime
 
@@ -169,5 +170,7 @@ class UiRunOut(BaseModel):
     steps_passed: int
     steps_failed: int
     error: str | None
+    driver_target: str  # 端:web/android/harmony
+    ai_usage: dict | None  # AI 执行用量:{input_tokens,output_tokens,cost_usd,report_path}
     started_at: datetime | None
     finished_at: datetime | None
