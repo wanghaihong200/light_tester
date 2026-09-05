@@ -176,8 +176,10 @@ async def _run_step(page, step: dict, variables: dict) -> tuple[str, str | None]
 
 
 def _persist(run_id: int, *, status: str, results: list, total: int,
-             passed: int, failed: int, error: str | None) -> None:
-    """把一次 run 的结果落库(短会话,避免跨线程长持连接)。"""
+             passed: int, failed: int, error: str | None,
+             ai_usage: dict | None = None) -> None:
+    """把一次 run 的结果落库(短会话,避免跨线程长持连接)。
+    ai_usage 为 Node 路径 AI 用量(缺省 None 不动该列,Python 路径不受影响)。"""
     db = SessionLocal()
     try:
         r = db.get(UiRun, run_id)
@@ -190,6 +192,8 @@ def _persist(run_id: int, *, status: str, results: list, total: int,
         r.started_at = r.started_at or datetime.now()
         if status in ("completed", "failed"):
             r.finished_at = datetime.now()
+        if ai_usage is not None:
+            r.ai_usage = ai_usage
         r.error = error
         db.commit()
     finally:

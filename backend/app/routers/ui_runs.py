@@ -4,6 +4,7 @@ import json
 import re
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -17,7 +18,7 @@ from app.jobs.bus import bus
 from app.models import Project, UiAuthState, UiRun, UiScript, User
 from app.permissions import ensure_project_access
 from app.schemas import UiRunOut
-from app.ui_automation import dsl, runner
+from app.ui_automation import adb, compose, dsl, node_runner, nodepath, runner, vision
 
 router = APIRouter(prefix="/api", tags=["ui-runs"])
 
@@ -47,6 +48,64 @@ def _run_thread(run_id: int, doc: dict, mode: str, variables: dict, auth_path: s
         runner.RUN_SLOT.release()
 
 
+def _resolver(db: Session, project_id: int):
+    """run_sub 片段解析器:同项目、未软删的脚本才可被引用。"""
+    def resolve(script_id) -> dict | None:
+        if not isinstance(script_id, int) or isinstance(script_id, bool):
+            return None
+        sub = db.get(UiScript, script_id)
+        if sub is None or sub.is_deleted or sub.project_id != project_id:
+            return None
+        return sub.script
+    return resolve
+
+
+def _ai_run_thread(run_id: int, doc: dict, target: str, mode: str, variables: dict,
+                   auth: UiAuthState | None):
+    """Node 路径执行线程:快照恢复→预渲染→spawn Node;done 事件负责落库(含 ai_usage)。"""
+    results: list[dict] = []
+
+    def on_event(e: dict) -> None:
+        runner._notify_bus(run_id, e)
+        t = e.get("type")
+        if t == "step_end":
+            results.append({"index": e.get("index"), "step_id": e.get("step_id"),
+                            "action": e.get("action", ""), "status": e.get("status", "failed"),
+                            "error": e.get("error"), "screenshot": e.get("screenshot"),
+                            "elapsed_ms": e.get("elapsed_ms", 0)})
+        elif t == "done":
+            summary = e.get("summary") or {}
+            usage = dict(e.get("usage") or {})
+            if e.get("report_path"):
+                usage["report_path"] = e["report_path"]
+            runner._persist(run_id, status="completed" if e.get("status") == "completed" else "failed",
+                            results=results, total=summary.get("total", len(results)),
+                            passed=summary.get("passed", 0), failed=summary.get("failed", 0),
+                            error=None, ai_usage=usage or None)
+
+    try:
+        storage_state = None
+        if auth is not None:
+            if auth.kind == "android_snapshot":
+                # 快照恢复先于一切步骤,失败即环境级失败(登录态在步骤执行前生效)
+                adb.restore_app_data(auth.app_package, Path(auth.storage_path))
+            else:
+                storage_state = str(auth.storage_path)  # web_storage:交给 PlaywrightAgent 的 context
+        node_runner.execute_ai_run(run_id, doc, driver_target=target, mode=mode,
+                                   variables=variables, storage_state=storage_state,
+                                   data_dir=settings.ui_data_dir,
+                                   notify=on_event, env_extra=vision.vision_env())
+    except Exception as e:
+        # 宽捕:Node 崩溃(RuntimeError)/快照恢复失败(TimeoutExpired/FileNotFoundError)等
+        # 一切异常都转环境级失败,状态不能停在 running
+        err = str(e)[:500]
+        runner._persist_env_failure(run_id, err)
+        runner._notify_bus(run_id, {"type": "error", "message": err})
+    finally:
+        nodepath.TARGET_LOCKS[target].release()
+        runner.RUN_SLOT.release()
+
+
 @router.post("/projects/{project_id}/ui-runs", response_model=UiRunOut, status_code=201)
 def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     if db.get(Project, project_id) is None:
@@ -58,27 +117,52 @@ def create_run(project_id: int, payload: RunCreate, db: Session = Depends(get_db
     errs = dsl.validate_script(script.script)
     if errs:
         raise HTTPException(400, "脚本不合法: " + ";".join(errs[:3]))
+    # run_sub 先展开再分流:展开后的 steps 才参与「是否走 Node」的判定
+    steps, expand_errs = compose.expand_steps(script.script.get("steps") or [],
+                                              _resolver(db, project_id))
+    if expand_errs:
+        raise HTTPException(400, "脚本不合法: " + ";".join(expand_errs[:3]))
+    expanded = {**script.script, "steps": steps}
+    target = nodepath.driver_target(expanded)
+    use_node = nodepath.needs_node(expanded)
+    auth_row = None
     auth_path = None
     if payload.auth_state_id is not None:
         # 登录态与脚本同源校验:存在、未软删、且属于本项目(防跨项目拖库)
-        auth = db.get(UiAuthState, payload.auth_state_id)
-        if auth is None or auth.is_deleted or auth.project_id != project_id:
+        auth_row = db.get(UiAuthState, payload.auth_state_id)
+        if auth_row is None or auth_row.is_deleted or auth_row.project_id != project_id:
             raise HTTPException(400, "invalid auth_state_id")
-        auth_path = str(auth.storage_path)
+        if auth_row.kind == "android_snapshot":
+            if not use_node or target != "android":
+                raise HTTPException(400, "应用数据快照仅用于 Android 端脚本执行")
+        auth_path = None if auth_row.kind == "android_snapshot" else str(auth_row.storage_path)
+    if use_node:
+        # 端锁先于执行槽:同端同时至多一个 Node 会话,占用直接 409(不排队)
+        if not nodepath.TARGET_LOCKS[target].acquire(blocking=False):
+            raise HTTPException(409, f"「{target}」端设备忙,请稍后重试")
     if not runner.RUN_SLOT.acquire(blocking=False):
+        if use_node:
+            nodepath.TARGET_LOCKS[target].release()
         raise HTTPException(409, f"执行槽已满(上限 {settings.run_slot_count}),请稍后重试")
     # 占锁成功即拥有执行权,所有权随线程移交(线程 finally 释放),消灭「探测后让位」的竞态窗口:
     # 落库/起线程一旦失败就地释放,避免锁泄漏把后续所有请求卡死在 409
     try:
         run = UiRun(project_id=project_id, script_id=script.id, script_name=script.name,
-                    mode=payload.mode, variables=payload.variables)
+                    mode=payload.mode, variables=payload.variables, driver_target=target)
         db.add(run)
         db.commit()
         db.refresh(run)
-        threading.Thread(target=_run_thread,
-                         args=(run.id, script.script, payload.mode, payload.variables, auth_path),
-                         daemon=True).start()
+        if use_node:
+            threading.Thread(target=_ai_run_thread,
+                             args=(run.id, expanded, target, payload.mode, payload.variables, auth_row),
+                             daemon=True).start()
+        else:
+            threading.Thread(target=_run_thread,
+                             args=(run.id, expanded, payload.mode, payload.variables, auth_path),
+                             daemon=True).start()
     except Exception:
+        if use_node:
+            nodepath.TARGET_LOCKS[target].release()
         runner.RUN_SLOT.release()
         raise
     return run
