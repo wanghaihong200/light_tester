@@ -1,0 +1,22 @@
+{
+  "name": "runner-node",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "start": "node src/main.js"
+  },
+  "dependencies": {
+    "@midscene/android": "1.12.3",
+    "@midscene/harmony": "1.12.3",
+    "@midscene/web": "1.12.3"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "vitest": "^5.0.0"
+  }
+}
