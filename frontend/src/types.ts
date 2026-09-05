@@ -162,7 +162,12 @@ export interface UiStep {
 export interface UiVariable { name: string; default?: string; desc?: string }
 export interface UiScriptDoc {
   version: number
-  meta: { start_url: string; auth_state_id?: number } // auth_state_id:录制时用的登录态,执行默认带上
+  meta: {
+    start_url: string
+    auth_state_id?: number // 录制时用的登录态,执行默认带上
+    target?: 'web' | 'android' | 'harmony' // 脚本目标端;缺省视为 web(version 1 兼容)
+    launch_target?: string // 启动目标:Android 包名/鸿蒙 bundleName(web 无此字段)
+  }
   variables: UiVariable[]
   steps: UiStep[]
 }
@@ -184,5 +189,11 @@ export interface UiRun {
   step_results: UiStepResult[]
   steps_total: number; steps_passed: number; steps_failed: number
   error: string | null; started_at: string | null; finished_at: string | null
+  driver_target: string // 执行端:web/android/harmony(老记录由后端按 mode 派生为 web)
+  ai_usage: Record<string, unknown> | null // AI 消耗统计(仅 AI 步骤运行时有值)
 }
-export interface UiAuthState { id: number; project_id: number; name: string; created_at: string }
+export interface UiAuthState {
+  id: number; project_id: number; name: string; created_at: string
+  kind: 'web_storage' | 'android_snapshot' // 登录态种类:Web 存储快照 / Android 应用快照
+  app_package: string | null // Android 快照的应用包名(web 登录态为 null)
+}
