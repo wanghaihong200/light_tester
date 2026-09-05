@@ -16,6 +16,7 @@ from app.database import get_db
 from app.models import Project, UiAuthState, User
 from app.permissions import ensure_project_access
 from app.schemas import UiAuthStateOut
+from app.ui_automation import adb
 from app.ui_automation.session import INTERACTIVE_SLOT, InteractiveSession
 
 router = APIRouter(prefix="/api", tags=["ui-auth-states"], dependencies=[Depends(get_current_user)])
@@ -37,6 +38,12 @@ _ids = itertools.count(1)
 
 class CollectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+
+
+class AndroidSnapshotCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    app_package: str = Field(min_length=1, max_length=200,
+                             pattern=r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$")
 
 
 @router.post("/projects/{project_id}/ui-auth-states/collect", status_code=201)
@@ -133,12 +140,48 @@ def cancel_collect(cid: int, db: Session = Depends(get_db), current: User = Depe
     return Response(status_code=204)
 
 
+@router.post("/projects/{project_id}/ui-auth-states/android-snapshot",
+             response_model=UiAuthStateOut, status_code=201)
+def collect_android_snapshot(project_id: int, payload: AndroidSnapshotCreate,
+                             db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    """从在线 Android 真机采集应用数据快照(等价 App 端「登录态」;需可调试包)。"""
+    if db.get(Project, project_id) is None:
+        raise HTTPException(404, "project not found")
+    ensure_project_access(db, current, project_id, "editor")  # 采集快照 = 写
+    try:
+        adb.check_adb()
+    except Exception as e:
+        raise HTTPException(409, f"adb 不可用: {e}")
+    if not adb.list_devices():
+        raise HTTPException(409, "无在线 Android 设备(adb devices 为空),请连接并开启 USB 调试")
+    dest_dir = settings.ui_data_dir / "auth" / "android"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    row = UiAuthState(project_id=project_id, name=payload.name, storage_path="",
+                      kind="android_snapshot", app_package=payload.app_package,
+                      created_by=current.id)
+    db.add(row)
+    db.flush()  # 先拿 id 再写盘,失败回滚不留孤儿行(与 save_collect 同模式)
+    path = (dest_dir / f"{project_id}_{row.id}.tar").resolve()
+    try:
+        adb.collect_app_data(payload.app_package, path)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(409, f"快照采集失败: {e}")
+    row.storage_path = str(path)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 @router.get("/projects/{project_id}/ui-auth-states", response_model=list[UiAuthStateOut])
-def list_auth_states(project_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+def list_auth_states(project_id: int, kind: str | None = None, db: Session = Depends(get_db),
+                     current: User = Depends(get_current_user)):
     ensure_project_access(db, current, project_id, "viewer")
-    return (db.query(UiAuthState)
-            .filter(UiAuthState.project_id == project_id, UiAuthState.is_deleted.is_(False))
-            .order_by(UiAuthState.id.desc()).all())
+    q = (db.query(UiAuthState)
+         .filter(UiAuthState.project_id == project_id, UiAuthState.is_deleted.is_(False)))
+    if kind:  # 按登录态种类筛选(web_storage/android_snapshot);不传保持原行为
+        q = q.filter(UiAuthState.kind == kind)
+    return q.order_by(UiAuthState.id.desc()).all()
 
 
 @router.delete("/ui-auth-states/{auth_id}", status_code=204)

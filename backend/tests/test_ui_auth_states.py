@@ -129,7 +129,8 @@ def test_auth_state_list_and_soft_delete(client, tmp_path):
     aid = _mk_auth(pid, str(f))
     rows = client.get(f"/api/projects/{pid}/ui-auth-states", headers=ah).json()
     assert [r["id"] for r in rows] == [aid]
-    assert set(rows[0]) == {"id", "project_id", "name", "created_at"}  # 路径/软删标记不外泄
+    assert set(rows[0]) == {"id", "project_id", "name", "kind", "app_package",
+                            "created_at"}  # 路径/软删标记不外泄(计划10 起暴露 kind/app_package)
     assert client.delete(f"/api/ui-auth-states/{aid}", headers=ah).status_code == 204
     assert not f.exists()
     assert client.delete(f"/api/ui-auth-states/{aid}", headers=ah).status_code == 404

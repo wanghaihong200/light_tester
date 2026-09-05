@@ -148,6 +148,8 @@ class UiAuthStateOut(BaseModel):
     id: int
     project_id: int
     name: str
+    kind: str
+    app_package: str | None
     created_at: datetime
 
 
