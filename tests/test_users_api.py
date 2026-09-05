@@ -1,4 +1,4 @@
-"""Task 10:用户管理 API(admin 建号/重置密码/禁用;非 admin 403;不能操作自己的账号)。"""
+"""Task 10:用户管理 API(admin 建号/重置密码/禁用;非 admin 403;不能禁用自己的账号,改名/自改密放行)。"""
 
 
 def _auth(client, db_session, make_user, name, *, project_ids=(), role="editor"):
@@ -57,8 +57,8 @@ def test_admin_cannot_disable_self(client, db_session):
     assert client.put(f"/api/users/{aid}", json={"is_active": False}, headers=h).status_code == 409
 
 
-def test_admin_cannot_operate_self_other_field(client, db_session):
-    """自操作守卫与 payload 字段无关:只改 display_name 同样 409。"""
+def test_admin_can_rename_self(client, db_session):
+    """自操作守卫只拦禁用自己:改 display_name 放行(200,收尾修复波收窄)。"""
     from app.bootstrap import ensure_bootstrap_admin
     from app.models import User
 
@@ -66,7 +66,25 @@ def test_admin_cannot_operate_self_other_field(client, db_session):
     atok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
     h = {"Authorization": f"Bearer {atok}"}
     aid = db_session.query(User).filter_by(username="admin").first().id
-    assert client.put(f"/api/users/{aid}", json={"display_name": "新名字"}, headers=h).status_code == 409
+    r = client.put(f"/api/users/{aid}", json={"display_name": "新名字"}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "新名字"
+
+
+def test_admin_can_reset_own_password(client, db_session):
+    """自改密 200:旧 token 不吊销仍可用(Q6),新密码可登录、旧密码被拒。"""
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.models import User
+
+    ensure_bootstrap_admin(db_session)
+    atok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    h = {"Authorization": f"Bearer {atok}"}
+    aid = db_session.query(User).filter_by(username="admin").first().id
+    assert client.put(f"/api/users/{aid}", json={"password": "newpass9"}, headers=h).status_code == 200
+    # 旧 token 仍有效(设计上不吊销)
+    assert client.get("/api/auth/me", headers=h).status_code == 200
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "newpass9"}).status_code == 200
+    assert client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).status_code == 401
 
 
 def test_admin_list_users(client, db_session):

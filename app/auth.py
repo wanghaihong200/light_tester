@@ -1,5 +1,5 @@
 """登录安全基元:bcrypt 口令哈希与 JWT 签发/解析(HS256,7 天)。
-共识:单 token 无 refresh 无服务端吊销;禁用不即时生效(DEFER)。"""
+共识:单 token 无 refresh 无服务端吊销;禁用即时生效(is_active 逐请求校验,残留见 DEFER #63)。"""
 from datetime import datetime, timedelta, timezone
 
 import bcrypt

@@ -1,4 +1,4 @@
-# 用户管理(admin only):建号/列表/改资料·重置密码·禁用;不能操作自己的账号(禁用或降级自己)
+# 用户管理(admin only):建号/列表/改资料·重置密码·禁用;不能禁用自己的账号(改名/自改密放行)
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -49,8 +49,9 @@ def update_user(
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
-    # 自操作守卫先于字段判断:禁用/降级/改自己的账号一律 409(包括只改 display_name)
-    if user.id == current.id:
+    # 自操作守卫:仅拦禁用自己(payload 带 is_active 即 409),防自断门禁;
+    # 改显示名/重置自己密码放行(自改密不吊销当前 token,Q6 已拍板)
+    if user.id == current.id and payload.is_active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "不能操作自己的账号")
     if payload.display_name is not None:
         user.display_name = payload.display_name

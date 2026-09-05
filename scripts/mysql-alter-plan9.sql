@@ -21,15 +21,8 @@ CREATE TABLE IF NOT EXISTS project_members (
   CONSTRAINT fk_pm_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目成员';
 
--- bootstrap admin(仅在 users 空时插入;密码为 admin123 的 bcrypt 哈希,占位用——
--- 实际由后端启动时 ensure_bootstrap_admin 以运行时哈希创建,此 INSERT 兜底纯 SQL 场景)
--- ⚠ 此 INSERT 写入的哈希是无效占位:若本库只跑了本脚本、从未启动过后端,
--- 登录会失败且启动引导不会修复该行。处置:DELETE FROM users WHERE username='admin';
--- 然后启动后端,由 ensure_bootstrap_admin 以运行时哈希重建 admin/admin123。
-INSERT INTO users (username, display_name, password_hash, is_admin)
-SELECT 'admin', '管理员',
-'$2b$12$C6UzMDM.H6dfI/f/IKcEe.6uIz0gSfP8h8Z5F9lXkq7Qv0OZ1WwEe', 1
-FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM users WHERE username='admin');
+-- admin 账号不由本脚本创建:后端启动时 ensure_bootstrap_admin 以运行时 bcrypt 哈希
+-- 创建 admin/admin123(仅在 users 无 admin 时),本脚本只建表。
 
 -- ------------------------------------------------------------------
 -- Task 11:归属列 created_by/updated_by(5 表 × 2 列)
