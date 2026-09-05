@@ -1,8 +1,8 @@
 <template>
   <aside class="side-menu" :class="{ collapsed }">
     <div class="brand" @click="emit('navigate', '/')">
-      <span class="brand-logo">轻</span>
-      <span v-if="!collapsed" class="brand-name">轻测试</span>
+      <img alt="轻测试" class="brand-logo" src="/favicon.gif" />
+      <span v-if="!collapsed" class="brand-name">LightTester</span>
     </div>
     <div class="menu-item" :class="{ active: activeKey === 'home' }" @click="emit('navigate', '/')">
       <span class="menu-icon">⌂</span>
@@ -68,16 +68,10 @@ onMounted(async () => {
   padding: 4px 8px;
 }
 .brand-logo {
-  align-items: center;
-  background: var(--el-color-primary);
   border-radius: var(--border-radius-base);
-  color: #fff;
-  display: flex;
   flex-shrink: 0;
-  font-size: 16px;
-  font-weight: 700;
   height: 30px;
-  justify-content: center;
+  object-fit: cover;
   width: 30px;
 }
 .brand-name {
