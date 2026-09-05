@@ -6,3 +6,5 @@ pytest.ini
 .superpowers/
 progress.md
 task-*-brief.md
+.env.*
+!.env.example
