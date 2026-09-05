@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
     id: 5, project_id: 1, status: 'pending', script_id: 1, script_name: '冒烟脚本',
     mode: 'headless', variables: {}, step_results: [], steps_total: 0,
     steps_passed: 0, steps_failed: 0, error: null, started_at: null, finished_at: null,
+    driver_target: 'web', ai_usage: null,
   }
   return {
     create: vi.fn(async () => run),
@@ -81,6 +82,8 @@ function mkRun(over: Partial<UiRun> = {}): UiRun {
     error: null,
     started_at: '2026-09-02T10:01:00',
     finished_at: '2026-09-02T10:01:05',
+    driver_target: 'web',
+    ai_usage: null,
     step_results: [
       { index: 0, step_id: 's1', action: 'goto', status: 'passed', error: null, screenshot: 'step_0_passed.jpg', elapsed_ms: 100 },
       { index: 1, step_id: 's2', action: 'assert_text', status: 'failed', error: '文本不匹配', screenshot: 'step_1_failed.jpg', elapsed_ms: 200 },
