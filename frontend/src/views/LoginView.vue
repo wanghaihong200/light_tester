@@ -2,8 +2,8 @@
   <div class="login-wrap">
     <el-card class="login-card">
       <div class="brand">
-        <span class="brand-logo">轻</span>
-        <h2 class="brand-name">轻测试 LightTester</h2>
+        <img alt="轻测试" class="brand-logo" src="/favicon.gif" />
+        <h2 class="brand-name">LightTester</h2>
         <p class="brand-sub">登录后继续使用</p>
       </div>
       <el-form @submit.prevent="submit">
@@ -65,14 +65,9 @@ async function submit() {
   margin-bottom: 20px;
 }
 .brand-logo {
-  background: var(--el-color-primary);
   border-radius: var(--border-radius-base);
-  color: #fff;
-  display: inline-block;
-  font-size: 18px;
-  font-weight: 600;
   height: 40px;
-  line-height: 40px;
+  object-fit: cover;
   width: 40px;
 }
 .brand-name {
