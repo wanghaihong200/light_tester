@@ -13,7 +13,7 @@ describe('SideMenu', () => {
   it('渲染品牌/首页/项目列表;点击发出 navigate', async () => {
     const wrapper = mount(SideMenu, { props: { activeKey: 'home', collapsed: false } })
     await flushPromises()
-    expect(wrapper.text()).toContain('轻测试')
+    expect(wrapper.text()).toContain('LightTester')
     expect(wrapper.text()).toContain('首页')
     expect(wrapper.text()).toContain('商城系统')
     expect(wrapper.text()).toContain('风控平台')
