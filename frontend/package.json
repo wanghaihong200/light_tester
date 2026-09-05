@@ -1,0 +1,28 @@
+{
+  "name": "test-platform-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "@vue/test-utils": "^2.4.11",
+    "jsdom": "^25.0.1",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^2.2.8"
+  },
+  "dependencies": {
+    "element-plus": "^2.9.7",
+    "monaco-editor": "^0.56.0",
+    "simple-mind-map": "^0.14.0-fix.3",
+    "vue": "^3.5.17",
+    "vue-router": "^4.5.0"
+  }
+}

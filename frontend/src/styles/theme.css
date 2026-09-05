@@ -1,0 +1,102 @@
+/* 轻测试 LightTester 全局主题 —— 提取自 BrickCoreTest theme-pro(设计:2026-09-02) */
+:root {
+  --primary-color: #4b6fff;
+  --primary-color-line: #4b6fff;
+  --primary-color-background: #f5f7ff;
+  --secondary-color: #586073;
+
+  /* 覆盖 Element Plus 主色全套 */
+  --el-color-primary: #4b6fff;
+  --el-color-primary-light-1: #5d7dff;
+  --el-color-primary-light-3: #8aa0ff;
+  --el-color-primary-light-5: #b0c0ff;
+  --el-color-primary-light-7: #d0d9ff;
+  --el-color-primary-light-8: #e3e9ff;
+  --el-color-primary-light-9: #eaf0ff;
+  --el-color-primary-dark-1: #3556e8;
+  --el-color-primary-dark-2: #2a47c9;
+
+  --border-radius-small: 6px;
+  --border-radius-base: 10px;
+  --border-radius-large: 14px;
+
+  /* 布局面板(布局壳组件引用) */
+  --pro-bg-gradient: radial-gradient(circle at 16% 0%, rgba(96, 120, 255, 0.14), transparent 34%),
+    linear-gradient(135deg, #eef3ff 0%, #f8faff 36%, #f7f9ff 100%);
+  --pro-sidebar-bg: #f7f9ff;
+  --pro-sidebar-border: rgba(226, 232, 244, 0.42);
+  --pro-topbar-bg: rgba(247, 249, 255, 0.92);
+  --pro-card-bg: rgba(255, 255, 255, 0.82);
+  --pro-card-shadow: 0 4px 18px rgba(68, 87, 150, 0.045);
+  --pro-panel-shadow: 0 22px 60px rgba(46, 64, 117, 0.13);
+  --pro-line: #e5e9f5;
+  --pro-muted: #7b8498;
+
+  /* Element Plus 底色/文字/边框 */
+  --el-bg-color: rgba(255, 255, 255, 0.88);
+  --el-bg-color-page: #f7f9ff;
+  --el-fill-color-light: #f7f9fe;
+  --el-fill-color: #f0f3fa;
+  --el-border-color: #e5e9f5;
+  --el-border-color-light: #edf1f8;
+  --el-border-color-lighter: #f0f3fa;
+  --el-text-color-primary: #1f2533;
+  --el-text-color-regular: #586073;
+  --el-text-color-secondary: #7b8498;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  font-size: 13px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  color: var(--el-text-color-primary);
+}
+
+body {
+  background: var(--pro-bg-gradient);
+  background-attachment: fixed;
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #cad3e5;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--el-color-primary-light-3);
+}
+
+/* Element Plus 组件精调 */
+.el-tag {
+  border-radius: 999px;
+}
+.el-input__wrapper,
+.el-select__wrapper,
+.el-textarea__inner {
+  border-radius: var(--border-radius-base);
+}
+.el-dialog {
+  border: 1px solid var(--pro-line);
+  border-radius: var(--border-radius-large);
+  box-shadow: var(--pro-panel-shadow);
+}
+.el-button--primary {
+  box-shadow: 0 10px 24px rgba(75, 111, 255, 0.22);
+}
+.el-button--primary.is-plain {
+  box-shadow: none;
+}
+.el-table {
+  --el-table-border-color: var(--pro-line);
+  border-radius: var(--border-radius-large);
+}
