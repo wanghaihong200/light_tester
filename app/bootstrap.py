@@ -1,4 +1,4 @@
-"""首个 admin 的启动引导:users 表空则建 admin/admin123(内网,首登后自行改密)。"""
+"""首个 admin 的启动引导:users 无 is_admin 行则建 admin/admin123(内网,首登后自行改密)。"""
 from sqlalchemy.orm import Session
 
 from app.auth import hash_password
