@@ -12,7 +12,8 @@ def test_validate_script():
     ok = {"version": 1, "meta": {}, "variables": [], "steps": [
         {"id": "s1", "action": "click", "locator": {"strategy": "css", "value": "#a"}}]}
     assert dsl.validate_script(ok) == []
-    bad = {"version": 2, "steps": [{"id": "s1", "action": "fly"}]}
+    # v2 落地后非法版本样例改为 3(version 2 已是合法 DSL)
+    bad = {"version": 3, "steps": [{"id": "s1", "action": "fly"}]}
     errs = dsl.validate_script(bad)
     assert any("version" in e for e in errs) and any("fly" in e for e in errs)
     miss = {"version": 1, "steps": [{"id": "s1", "action": "fill", "locator": {"strategy": "css", "value": "#u"}}]}

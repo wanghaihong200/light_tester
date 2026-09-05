@@ -2,14 +2,25 @@
 """DSL 纯函数层:校验/变量渲染/定位候选。不依赖 Playwright,可独立单测。"""
 import re
 
+# v2 多端:合法端 / ai_scroll 方向枚举 / 变量名规则 / ai 系动作清单(须先于 ACTIONS 定义)
+TARGETS = {"web", "android", "harmony"}
+_SCROLL_DIRECTIONS = {"up", "down", "left", "right"}
+_VARNAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+AI_ACTIONS = ("ai_tap", "ai_input", "ai_scroll", "ai_wait", "ai_assert", "ai_extract", "run_sub")
+
 ACTIONS = {
     "goto": (), "click": ("locator",), "fill": ("locator",), "press": ("locator",),
     "select_option": ("locator",), "wait": (), "set_var": (), "scroll": (),
     "assert_visible": ("locator",), "assert_exists": ("locator",), "assert_text": ("locator",),
+    # version 2 扩展:ai 系六动作 + run_sub(均为无 locator 的参数驱动动作)
+    **{a: () for a in AI_ACTIONS},
 }
 PARAM_REQUIRED = {"goto": ("url",), "fill": ("text",), "press": ("key",),
                   "select_option": ("value",), "wait": ("ms",), "set_var": ("name", "value"),
-                  "scroll": ("dx", "dy"), "assert_text": ("text",)}
+                  "scroll": ("dx", "dy"), "assert_text": ("text",),
+                  "ai_tap": ("target",), "ai_input": ("text",), "ai_scroll": ("direction",),
+                  "ai_wait": ("assertion",), "ai_assert": ("assertion",),
+                  "ai_extract": ("target", "name"), "run_sub": ("script_id",)}
 STRATEGIES = {"test_id", "role", "placeholder", "label", "text", "css"}
 _VAR = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
@@ -43,8 +54,16 @@ def validate_script(doc: dict) -> list[str]:
     errs: list[str] = []
     if not isinstance(doc, dict):
         return ["脚本必须是对象"]
-    if doc.get("version") != 1:
-        errs.append("version 必须为 1")
+    if doc.get("version") not in (1, 2):
+        errs.append("version 必须为 1 或 2")
+
+    # meta.target:v2 多端规则(缺省视同 web;v1 只允许 web)
+    meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+    target = meta.get("target")
+    if target is not None and target not in TARGETS:
+        errs.append(f"meta.target 非法: {target!r}(必须是 web/android/harmony)")
+    if doc.get("version") == 1 and target not in (None, "web"):
+        errs.append("version 1 脚本的 meta.target 必须是 web")
 
     steps = doc.get("steps")
     if steps is None:
@@ -69,6 +88,24 @@ def validate_script(doc: dict) -> list[str]:
         elif not isinstance(params, dict):
             errs.append(f"步骤{i}: params 必须是对象")
             params = None  # 类型不对:跳过该步的 params 检查
+        # ── v2 扩展校验(params 非 dict 时沿用「视同缺参/跳过」既有逻辑)──
+        if doc.get("version") == 1 and action in AI_ACTIONS:
+            errs.append(f"步骤{i}: version 1 不支持 {action},请改用 version 2")
+            continue
+        if action == "run_sub" and not (isinstance(params, dict)
+                and isinstance(params.get("script_id"), int) and not isinstance(params.get("script_id"), bool)
+                and params.get("script_id") > 0):
+            errs.append(f"步骤{i}: run_sub 缺合法 params.script_id(正整数)")
+        if action == "ai_scroll" and isinstance(params, dict) and params.get("direction") not in _SCROLL_DIRECTIONS:
+            errs.append(f"步骤{i}: ai_scroll 的 direction 必须是 up/down/left/right")
+        if action == "ai_wait" and isinstance(params, dict) and "timeout_ms" in params \
+                and (not isinstance(params["timeout_ms"], int) or isinstance(params["timeout_ms"], bool)
+                     or params["timeout_ms"] <= 0):
+            # 与 run_sub.script_id 同型:bool 是 int 子类,须显式排除(true 不是正整数毫秒)
+            errs.append(f"步骤{i}: ai_wait 的 timeout_ms 必须是正整数毫秒")
+        if action == "ai_extract" and isinstance(params, dict) \
+                and not _VARNAME_RE.fullmatch(str(params.get("name") or "")):
+            errs.append(f"步骤{i}: ai_extract 的 name 必须是合法变量名")
         if params is not None:
             for p in PARAM_REQUIRED.get(action, ()):
                 if params.get(p) in (None, ""):
