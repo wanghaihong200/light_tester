@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     ui_data_dir: Path = Path("../data/ui")
     anthropic_api_key: str | None = None
     ai_model: str = "claude-opus-5"
+    ai_vision_api_key: str | None = None  # 智谱 GLM(计划 10 多端 UI 自动化视觉模型用;仅预留,暂无消费方)
     jwt_secret: str = "dev-secret-change-me-please-32bytes!"
     jwt_exp_days: int = 7
     run_slot_count: int = 5
