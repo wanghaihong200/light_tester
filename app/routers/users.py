@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, hash_password
 from app.database import get_db
-from app.models import User
-from app.schemas_auth import UserCreate, UserOut, UserSearchItem, UserUpdate
+from app.models import Project, ProjectMember, User
+from app.schemas_auth import UserCreate, UserOut, UserProjectRole, UserSearchItem, UserUpdate
 
 router = APIRouter(prefix="/api/users", tags=["users"], dependencies=[Depends(get_current_user)])
 
@@ -42,6 +42,27 @@ def search_users(
         .all()
     )
     return [UserSearchItem(id=r.id, username=r.username, display_name=r.display_name) for r in rows]
+
+
+@router.get("/{user_id}/projects", response_model=list[UserProjectRole])
+def list_user_projects(
+    user_id: int,
+    current: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """某用户的项目授权列表(admin only;用户管理页授权弹窗消费)。"""
+    _require_admin(current)
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+    rows = (
+        db.query(ProjectMember, Project.name)
+        .join(Project, Project.id == ProjectMember.project_id)
+        .filter(ProjectMember.user_id == user_id)
+        .order_by(Project.name)
+        .all()
+    )
+    return [UserProjectRole(project_id=pm.project_id, project_name=name, role=pm.role) for pm, name in rows]
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)

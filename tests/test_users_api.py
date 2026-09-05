@@ -158,3 +158,36 @@ def test_search_open_to_any_logged_in_user(client, db_session, make_user):
     h = _auth(client, db_session, make_user, "pleb")
     r = client.get("/api/users/search", params={"q": "pleb"}, headers=h)
     assert r.status_code == 200 and len(r.json()) == 1
+
+
+def test_admin_lists_user_projects(client, db_session, make_user):
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.models import User
+    ensure_bootstrap_admin(db_session)
+    atok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    ah = {"Authorization": f"Bearer {atok}"}
+    u = make_user(db_session, "assignee")
+    p1 = client.post("/api/projects", json={"name": "alpha"}, headers=ah).json()["id"]
+    p2 = client.post("/api/projects", json={"name": "beta"}, headers=ah).json()["id"]
+    client.post(f"/api/projects/{p1}/members", json={"username": "assignee", "role": "editor"}, headers=ah)
+    client.post(f"/api/projects/{p2}/members", json={"username": "assignee", "role": "viewer"}, headers=ah)
+    r = client.get(f"/api/users/{u.id}/projects", headers=ah)
+    assert r.status_code == 200
+    rows = r.json()
+    assert [x["project_name"] for x in rows] == ["alpha", "beta"]  # 按名排序
+    assert set(rows[0].keys()) == {"project_id", "project_name", "role"}
+    assert rows[0]["role"] == "editor" and rows[1]["role"] == "viewer"
+
+
+def test_user_projects_empty_404_and_non_admin(client, db_session, make_user):
+    from app.bootstrap import ensure_bootstrap_admin
+    from app.models import User
+    ensure_bootstrap_admin(db_session)
+    atok = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"}).json()["token"]
+    ah = {"Authorization": f"Bearer {atok}"}
+    u = make_user(db_session, "lonely")
+    assert client.get(f"/api/users/{u.id}/projects", headers=ah).json() == []  # 存在但无项目
+    assert client.get("/api/users/999999/projects", headers=ah).status_code == 404
+    uh = _auth(client, db_session, make_user, "pleb2")
+    assert client.get("/api/users/search", headers=uh).status_code == 200  # 对照:search 非 admin 可用
+    assert client.get(f"/api/users/{u.id}/projects", headers=uh).status_code == 403

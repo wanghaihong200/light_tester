@@ -59,3 +59,9 @@ class MemberOut(BaseModel):
     username: str
     display_name: str
     role: str
+
+
+class UserProjectRole(BaseModel):
+    project_id: int
+    project_name: str
+    role: str
