@@ -35,6 +35,12 @@
       <div class="run-head">
         <el-tag size="small" :type="statusTag(run.status)" disable-transitions>{{ statusText(run.status) }}</el-tag>
         <span v-if="reportPath" class="report">执行报告:{{ reportPath }}</span>
+        <span class="spacer" />
+        <!-- Node 路径挂死(真机断连/模型卡死)会占住端锁:运行中才给强制结束入口,手动收口 -->
+        <el-button
+          v-if="run.status === 'pending' || run.status === 'running'"
+          size="small" type="danger" plain :loading="forcing" @click="onForceFinish"
+        >强制结束</el-button>
       </div>
       <div class="frame-box">
         <img v-if="frameUrl" class="frame" :src="frameUrl" alt="执行画面" />
@@ -68,12 +74,14 @@
           <span v-if="aiTokens" class="muted"> · AI tokens:{{ aiTokens }}</span>
         </template>
       </div>
+      <!-- 环境级失败(缺 AI key/快照恢复失败/Node 崩溃)没有 step_results,靠 run.error 透出原因 -->
+      <div v-if="run.error" class="err">{{ run.error }}</div>
     </div>
 
     <template #footer>
       <template v-if="!run">
         <el-button @click="emit('update:visible', false)">取消</el-button>
-        <el-button type="primary" @click="submit">开始执行</el-button>
+        <el-button type="primary" :loading="submitting" @click="submit">开始执行</el-button>
       </template>
       <el-button v-else @click="emit('update:visible', false)">关闭</el-button>
     </template>
@@ -83,10 +91,10 @@
 <script setup lang="ts">
 // 跨端运行对话框(计划 10):运行前收变量/登录态(web_storage 或 android_snapshot),
 // 提交 createUiRun 后订阅执行 SSE;预览帧是 b64 jpeg 事件,直接 data URL 渲染(不走截图文件端点)。
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import type { UiAuthState, UiRun, UiScript } from '../../types'
-import { createUiRun, getUiRun, subscribeRunEvents } from '../../api/uiAutomation'
+import { createUiRun, forceFinishRun, getUiRun, subscribeRunEvents } from '../../api/uiAutomation'
 import { listAuthStates } from '../../api/crossAutomation'
 
 const props = defineProps<{ visible: boolean; projectId: number; script: UiScript | null }>()
@@ -134,6 +142,10 @@ async function onEvent(e: Record<string, unknown>) {
   } else if (e.type === 'done') {
     reportPath.value = String(e.report_path || '')
     await refresh()
+  } else if (e.type === 'error') {
+    // 环境级失败(缺 AI key/快照恢复失败/Node 崩溃):提示 + 拉终态,否则对话框停在「等待画面」
+    ElMessage.error(String(e.message ?? '执行异常'))
+    await refresh()
   } else if (e.type === 'snapshot' || e.type === 'status') {
     await refresh()
   }
@@ -147,8 +159,12 @@ async function refresh(_e?: unknown) {
   }
 }
 
+const submitting = ref(false)
 async function submit() {
-  if (!props.script) return
+  // 防重入:已建 run 不再重复建(双击=双 run:双份 AI token+历史双条+首个订阅泄漏);
+  // await 期间连点由 submitting 守卫 + 按钮 :loading 兜底(run.value 要到返回后才非空)
+  if (!props.script || run.value || submitting.value) return
+  submitting.value = true
   try {
     run.value = await createUiRun(props.projectId, {
       script_id: props.script.id, mode: mode.value,
@@ -159,6 +175,33 @@ async function submit() {
     unsub = subscribeRunEvents(run.value.id, onEvent)
   } catch (e) {
     ElMessage.error(String(e))
+  } finally {
+    submitting.value = false
+  }
+}
+
+// 强制结束(照抄 RunDialog 形态):Node 路径挂死(真机断连/模型卡死)占住端锁、同端后续全 409,
+// 手动收口:后端置「执行异常」并向 SSE 推 done,本地 refresh 拉终态(两条路径幂等)
+const forcing = ref(false)
+async function onForceFinish() {
+  if (run.value == null || forcing.value) return
+  if (run.value.status !== 'pending' && run.value.status !== 'running') return
+  const id = run.value.id
+  try {
+    await ElMessageBox.confirm('确定强制结束当前执行?状态将记为「执行异常」。', '强制结束', {
+      confirmButtonText: '强制结束', cancelButtonText: '取消', type: 'warning',
+    })
+  } catch {
+    return // 用户取消
+  }
+  forcing.value = true
+  try {
+    await forceFinishRun(id)
+    await refresh()
+  } catch (e) {
+    ElMessage.error(`强制结束失败:${(e as Error).message}`)
+  } finally {
+    forcing.value = false
   }
 }
 
@@ -215,6 +258,9 @@ onUnmounted(() => unsub?.())
   color: var(--el-text-color-secondary);
   word-break: break-all;
 }
+.run-head .spacer {
+  flex: 1;
+}
 .frame-box {
   align-items: center;
   background: var(--el-fill-color-light);
@@ -240,6 +286,7 @@ onUnmounted(() => unsub?.())
 .err {
   color: var(--el-color-danger);
   font-size: 12px;
+  word-break: break-all;
 }
 .summary {
   font-size: 13px;

@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UiRun, UiScript } from '../../src/types'
 
@@ -179,5 +179,55 @@ describe('CrossRunDialog', () => {
     // 下拉选项经 popper 渲染,从组件树断言选项标签
     const labels = w.findAllComponents({ name: 'ElOption' }).map((o) => String(o.props('label')))
     expect(labels).toContain('首页快照')
+  })
+
+  it('③ error 事件(环境级失败):ElMessage.error 提示 + refresh 拉终态,run.error 红字透出不再停在「等待画面」', async () => {
+    const errSpy = vi.spyOn(ElMessage, 'error')
+    mocks.getRun.mockResolvedValue(mkPendingRun({
+      status: 'failed',
+      error: '环境启动失败:缺少 AI Key,无法执行 ai_tap',
+      started_at: '2026-09-05T10:01:00',
+      finished_at: '2026-09-05T10:01:02',
+    }))
+    const w = mountDialog(mkScript())
+    await open(w)
+    await btn(w, '开始执行').trigger('click')
+    await flushPromises()
+    mocks.fire({ type: 'error', message: '环境启动失败:Node 进程崩溃' })
+    await flushPromises()
+    expect(String(errSpy.mock.calls[0][0])).toContain('Node 进程崩溃') // SSE error 的 message 透出
+    expect(mocks.getRun).toHaveBeenCalledWith(5) // refresh 拉终态
+    expect(w.text()).toContain('环境启动失败:缺少 AI Key') // 终态 summary 区透出 run.error
+    expect(w.find('.summary').classes()).toContain('bad')
+    expect(w.find('.err').text()).toContain('缺少 AI Key') // 红字(此场景无 step_results,.err 即 run.error)
+  })
+
+  it('③ 防重入:createUiRun 未返回期间连点「开始执行」,submitting 守卫 + 按钮 :loading 兜底只建一个 run', async () => {
+    let resolveCreate!: (r: UiRun) => void
+    mocks.create.mockImplementationOnce(
+      () => new Promise<UiRun>((r) => { resolveCreate = r }),
+    )
+    const w = mountDialog(mkScript())
+    await open(w)
+    await btn(w, '开始执行').trigger('click') // 第一次点击:createUiRun 挂起中
+    const pendingBtn = btn(w, '开始执行')!
+    expect(pendingBtn.attributes('disabled')).toBeDefined() // :loading 期间禁点
+    await pendingBtn.trigger('click') // jsdom 对禁用按钮仍派发 click,须由守卫兜住
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    resolveCreate(mkPendingRun())
+    await flushPromises()
+    expect(mocks.subscribe).toHaveBeenCalledTimes(1) // 也只订一次,无订阅泄漏
+  })
+
+  it('③ 防重入:run 已存在时再触发 submit 早退,不再调 createUiRun', async () => {
+    const w = mountDialog(mkScript())
+    await open(w)
+    await btn(w, '开始执行').trigger('click')
+    await flushPromises()
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    await (w.vm as { submit: () => Promise<void> }).submit() // run 存在(按钮已切到 runner 视图)
+    await flushPromises()
+    expect(mocks.create).toHaveBeenCalledTimes(1) // 早退,不产生第二个 run
+    expect(mocks.subscribe).toHaveBeenCalledTimes(1)
   })
 })
