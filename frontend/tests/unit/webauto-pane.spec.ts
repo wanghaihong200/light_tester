@@ -63,7 +63,7 @@ describe('WebAutoPane', () => {
   it('加载并列出脚本,显示步骤数', async () => {
     const w = mountPane()
     await flushPromises()
-    expect(mocks.list).toHaveBeenCalledWith(1)
+    expect(mocks.list).toHaveBeenCalledWith(1, 'web_legacy') // 列表查询收窄纯选择器脚本
     expect(w.text()).toContain('登录脚本')
     expect(w.text()).toContain('1') // 步骤数
   })

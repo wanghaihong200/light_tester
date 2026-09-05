@@ -4,8 +4,9 @@ import type {
 import { http, withSseToken } from './client'
 
 // 脚本 CRUD
-export function listUiScripts(projectId: number) {
-  return http.get<UiScript[]>(`/projects/${projectId}/ui-scripts`)
+// scope=web_legacy 仅返回纯选择器 Web 脚本(老「Web自动化」Tab 用),缺省返回全部
+export function listUiScripts(projectId: number, scope?: 'web_legacy' | 'cross') {
+  return http.get<UiScript[]>(`/projects/${projectId}/ui-scripts${scope ? `?scope=${scope}` : ''}`)
 }
 export function createUiScript(projectId: number, body: { name: string; description?: string | null; script: UiScriptDoc }) {
   return http.post<UiScript>(`/projects/${projectId}/ui-scripts`, {

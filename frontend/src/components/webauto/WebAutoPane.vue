@@ -93,7 +93,8 @@ const history = ref<{ script: UiScript; runs: UiRun[] } | null>(null)
 async function reload() {
   loading.value = true
   try {
-    scripts.value = await listUiScripts(props.projectId)
+    // 老「Web自动化」Tab 只展示纯选择器脚本(跨端/AI 步脚本在其他入口)
+    scripts.value = await listUiScripts(props.projectId, 'web_legacy')
   } catch (e) {
     ElMessage.error(`加载脚本失败:${(e as Error).message}`)
   } finally {
