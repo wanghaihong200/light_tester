@@ -247,6 +247,7 @@ class UiScript(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
     updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+    driver_target: Mapped[str] = mapped_column(String(16), default="web", comment="端:web/android/harmony(由 script.meta.target 派生)")
 
 
 class UiRun(Base):
@@ -272,6 +273,8 @@ class UiRun(Base):
         DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
     )
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    driver_target: Mapped[str] = mapped_column(String(16), default="web", comment="端:web/android/harmony")
+    ai_usage: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="AI 执行用量:{input_tokens,output_tokens,cost_usd,report_path}")
 
 
 class UiAuthState(Base):
@@ -289,6 +292,8 @@ class UiAuthState(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
     updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+    kind: Mapped[str] = mapped_column(String(20), default="web_storage", comment="登录态种类:web_storage/android_snapshot")
+    app_package: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="应用包名(仅 android_snapshot)")
 
 
 class User(Base):
