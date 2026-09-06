@@ -14,6 +14,9 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    // 非 2xx 时解析出的响应 JSON body(dict detail 等结构化错误由调用方按需读取;
+    // throwOn401 等内部抛出与 JSON 解析失败的场景无 body)
+    public body?: unknown,
   ) {
     super(message)
   }
@@ -48,13 +51,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   throwOn401(res)
   if (!res.ok) {
     let message = `HTTP ${res.status}`
+    let body: unknown
     try {
       const data: unknown = await res.json()
+      body = data
       if (data && typeof data === 'object' && 'detail' in data) message = String((data as { detail: unknown }).detail)
     } catch {
       // 响应体不是 JSON,保留 HTTP 状态码文案
     }
-    throw new ApiError(res.status, message)
+    // body 原样随错误抛出:message 仍是 String(detail)(既有组件 catch 读 message 不受影响),
+    // dict detail(如导出校验 {errors:[…]})经 e.body?.detail 还原结构,不再退化成 [object Object]
+    throw new ApiError(res.status, message, body)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T

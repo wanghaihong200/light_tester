@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../src/api/client'
 
 // mock 出口对齐真实 API 模块的具名导出;rejection 形状对齐 client.ts 的错误封装:
-// request() 对非 2xx 抛 ApiError(status, message)(message = String(detail)),不携带原始 body。
+// request() 对非 2xx 抛 ApiError(status, message, body),message = String(detail),body 为解析后的响应 JSON。
 const mocks = vi.hoisted(() => ({
   exportUiScript: vi.fn(),
   listBranches: vi.fn(),
@@ -65,7 +65,23 @@ describe('ExportDialog', () => {
     expect(w.emitted('update:visible')).toBeFalsy()
   })
 
-  it('400 detail={errors:[…]}(导出校验失败)逐行渲染错误清单且不 emit', async () => {
+  it('400 detail={errors:[…]} 经 ApiError.body 还原,逐条渲染清单且不 emit(真实错误形态)', async () => {
+    // client.ts 真实抛出形态:message = String(detail) = '[object Object]',结构化原因在 body 里
+    mocks.listBranches.mockResolvedValue({ branches: ['main'] })
+    mocks.exportUiScript.mockRejectedValue(new ApiError(400, '[object Object]', {
+      detail: { errors: ['步骤1: ai_tap 无法导出', '步骤3: set_var 不支持'] },
+    }))
+    const w = mountDlg()
+    await flushPromises()
+    await (w.vm as unknown as { onConfirm: () => Promise<void> }).onConfirm()
+    await flushPromises()
+    expect(w.text()).toContain('ai_tap')
+    expect(w.text()).toContain('set_var 不支持')
+    expect(w.text()).not.toContain('[object Object]')
+    expect(w.emitted('exported')).toBeFalsy()
+  })
+
+  it('400 detail={errors:[…]} 兼容形状(rejection 直接带 data.detail)同样逐行渲染且不 emit', async () => {
     mocks.listBranches.mockResolvedValue({ branches: ['main'] })
     mocks.exportUiScript.mockRejectedValue({
       status: 400,

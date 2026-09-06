@@ -63,11 +63,14 @@ watch(() => props.visible, async (v) => {
 }, { immediate: true })
 
 // 后端 400 的 detail 可能是字符串(通用错误)或 {errors:[…]}(导出校验失败清单)。
-// client.ts 对非 2xx 抛 ApiError(status, message) 且 message = String(detail)(dict 形态会
-// 变成 '[object Object]',此时退化为通用文案),这里把三种来源都兜住
+// client.ts 对非 2xx 抛 ApiError(status, message, body):message = String(detail)
+// (dict 形态是 '[object Object]',不能直接展示),结构化原因从 e.body?.detail 还原;
+// data/detail 两路为兼容形状兜底,仍无结构时退回 message 文案
 function extractExportErrors(e: unknown): string[] {
-  const err = e as { data?: { detail?: unknown }; detail?: unknown; message?: string } | null
-  const detail = err?.data?.detail ?? err?.detail
+  const err = e as {
+    body?: { detail?: unknown }; data?: { detail?: unknown }; detail?: unknown; message?: string
+  } | null
+  const detail = err?.body?.detail ?? err?.data?.detail ?? err?.detail
   if (detail && typeof detail === 'object' && Array.isArray((detail as { errors?: unknown }).errors)) {
     return (detail as { errors: unknown[] }).errors.map(String)
   }
