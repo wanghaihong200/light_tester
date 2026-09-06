@@ -11,7 +11,7 @@ const kinded = (path: string, kind: RepoKind) => `${path}${path.includes('?') ? 
 export const syncRepo = (projectId: number, branch?: string, kind: RepoKind = 'api') =>
   http.post<SyncResult>(kinded(`/projects/${projectId}/repo/sync`, kind), branch ? { branch } : undefined)
 export const listFiles = (projectId: number, kind: RepoKind = 'api') =>
-  http.get<FileNode | { needs_sync: true }>(kinded(`/projects/${projectId}/repo/files`, kind))
+  http.get<FileNode | { needs_sync: true } | { needs_config: true }>(kinded(`/projects/${projectId}/repo/files`, kind))
 export const readFile = (projectId: number, path: string, kind: RepoKind = 'api') =>
   http.get<{ path: string; content: string; language: string }>(kinded(`/projects/${projectId}/repo/file?path=${encodeURIComponent(path)}`, kind))
 export const listChanges = (projectId: number, kind: RepoKind = 'api') =>
@@ -23,3 +23,21 @@ export const pushFiles = (
   projectId: number, files: string[], branch: string, commit_message?: string, kind: RepoKind = 'api',
 ) =>
   http.post<PushResult>(kinded(`/projects/${projectId}/repo/push`, kind), { files, branch, commit_message })
+
+// ── plan11 Task 8:多仓配置(GET viewer 可读 / PUT editor 权限,路由挂在 /api/projects/{id}/repo 下) ──
+export interface AutomationRepoRow {
+  id: number
+  kind: RepoKind
+  repo_url: string
+  // 后端明文返回;前端不回显到输入框,留空提交即清除
+  repo_token: string | null
+  updated_at?: string
+}
+
+export const listAutomationRepos = (projectId: number) =>
+  http.get<AutomationRepoRow[]>(`/projects/${projectId}/repo/automation-repos`)
+
+export const putAutomationRepo = (projectId: number, kind: RepoKind, body: { repo_url: string; repo_token?: string | null }) =>
+  http.put<{ id: number; kind: RepoKind; repo_url: string; repo_token: string | null }>(
+    `/projects/${projectId}/repo/automation-repos/${kind}`, body,
+  )
