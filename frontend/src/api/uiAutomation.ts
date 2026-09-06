@@ -22,6 +22,13 @@ export function deleteUiScript(id: number) {
   return http.del(`/ui-scripts/${id}`)
 }
 
+// 导出为 Playwright 脚本并推送到该项目的 web 自动化仓(plan11);
+// 400 时后端 detail 为字符串或 {errors:[...]}(导出校验失败清单),由调用方渲染
+export function exportUiScript(id: number, body: { branch: string; commit_message?: string }) {
+  return http.post<{ ok: boolean; branch: string; commit_short: string; pushed_files: string[]; files: string[] }>(
+    `/ui-scripts/${id}/export`, body)
+}
+
 // 录制会话
 export function startRecording(projectId: number, authStateId?: number) {
   return http.post<{ recording_id: number }>(`/projects/${projectId}/ui-recordings`,

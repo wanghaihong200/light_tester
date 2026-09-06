@@ -23,11 +23,12 @@
       <el-table-column label="更新时间" width="170">
         <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="300">
+      <el-table-column label="操作" width="360">
         <template #default="{ row }">
           <el-button size="small" @click="onEdit(row)">编辑</el-button>
           <el-button size="small" type="primary" @click="onRun(row)">执行</el-button>
           <el-button size="small" @click="onHistory(row)">历史</el-button>
+          <el-button size="small" type="success" plain @click="openExport(row)">导出</el-button>
           <el-popconfirm title="确认删除该脚本?" @confirm="onDelete(row)">
             <template #reference><el-button size="small" type="danger">删除</el-button></template>
           </el-popconfirm>
@@ -49,6 +50,11 @@
       @closed="closeRunDialog"
     />
     <AuthStatesPane v-if="showAuth" :project-id="projectId" @closed="showAuth = false" />
+    <ExportDialog
+      v-if="exportScript" :script-id="exportScript.id" :project-id="projectId"
+      :script-name="exportScript.name" :visible="!!exportScript"
+      @update:visible="(v) => !v && (exportScript = null)" @exported="onExported"
+    />
 
     <!-- 录制入口登录态选择:项目存在登录态时先选再进录制面板(无登录态直接开录不打扰) -->
     <el-dialog v-model="showRecAuth" title="开始录制" width="440" :close-on-click-modal="false">
@@ -74,6 +80,7 @@ import { onMounted, ref } from 'vue'
 import { createUiScript, deleteUiScript, listUiAuthStates, listUiRuns, listUiScripts } from '../../api/uiAutomation'
 import type { UiAuthState, UiRun, UiScript } from '../../types'
 import AuthStatesPane from './AuthStatesPane.vue'
+import ExportDialog from './ExportDialog.vue'
 import RecorderPanel from './RecorderPanel.vue'
 import RunDialog from './RunDialog.vue'
 import ScriptEditor from './ScriptEditor.vue'
@@ -185,6 +192,12 @@ async function onDelete(row: UiScript) {
   }
 }
 function onSaved() { recording.value = false; editing.value = null; reload() }
+
+// 导出 Playwright 脚本(plan11):弹窗只吃一行脚本;推送成功后刷新列表(推送不改脚本本身,
+// 但与删除/保存同口径保持列表与后端一致)
+const exportScript = ref<UiScript | null>(null)
+function openExport(row: UiScript) { exportScript.value = row }
+async function onExported() { await reload() }
 
 function formatTime(iso: string): string {
   return iso ? new Date(iso).toLocaleString('zh-CN', { hour12: false }) : '-'
