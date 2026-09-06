@@ -296,6 +296,36 @@ class UiAuthState(Base):
     app_package: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="应用包名(仅 android_snapshot)")
 
 
+class AutomationRepo(Base):
+    __tablename__ = "automation_repos"
+    __table_args__ = (
+        UniqueConstraint("project_id", "kind", name="uq_autorepo_project_kind"),
+        {"comment": "自动化工程仓表：一项目×分类(api/web/app)各一仓,分开推送"},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="自动化仓主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    kind: Mapped[str] = mapped_column(String(16), comment="仓分类:api/web/app")
+    repo_url: Mapped[str] = mapped_column(String(500), comment="仓库地址(http(s)/file)")
+    repo_token: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="访问仓库的认证 Token(明文,已接受)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+
+    # 鸭子类型别名:让本模型可直接传入 git_service(其按 project.git_repo_url/git_token 取值)
+    @property
+    def git_repo_url(self) -> str | None:
+        return self.repo_url
+
+    @property
+    def git_token(self) -> str | None:
+        return self.repo_token
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = {"comment": "平台用户(管理员建号,无自助注册)"}
