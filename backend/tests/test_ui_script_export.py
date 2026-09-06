@@ -285,3 +285,52 @@ def test_export_auth_state_name_traversal_400(client, db, repos_dir, tmp_path):
     repo_row = db.query(AutomationRepo).filter_by(project_id=p.id, kind="web").first()
     assert sorted(x.name for x in repos_dir.iterdir()) == [working_copy_path(repo_row).name]
     assert not (repos_dir / "evil.json").exists()
+
+
+def test_export_auth_state_name_illegal_chars_no_500(client, db, repos_dir, tmp_path):
+    """登录态名含 Windows 保留字符(?) → 写盘 OSError 被 400 兜底,绝不 500、绝不推送。
+    平台差异:?*<>"| 在 Linux 是合法文件名(写盘成功 → 200),Windows 必失败(→ 400),
+    故按「不 500」语义断言,不锁死单一状态码;不用字符黑名单(Linux 误伤)。"""
+    p, bare = _mk_project_with_web_repo(db, tmp_path, "非法字符名导出项目")
+    state_file = tmp_path / "auth" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"cookies": []}', encoding="utf-8")
+    auth = UiAuthState(project_id=p.id, name="bad?name", storage_path=str(state_file))
+    db.add(auth)
+    db.commit()
+    db.refresh(auth)
+    doc = dict(DOC, meta={"target": "web", "auth_state_id": auth.id})
+    s = _mk_web_script(db, p.id, doc)
+    h = _admin_headers(client, db)
+    r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h,
+                    json={"branch": "main", "commit_message": "非法字符名导出"})
+    assert r.status_code in (200, 400)  # 语义:绝不 500
+    if r.status_code == 400:
+        errors = r.json()["detail"]["errors"]
+        assert errors and any("写入失败" in e for e in errors)
+        # 不推送:远程裸仓不得出现任何导出产物
+        out = subprocess.run(["git", "ls-tree", "-r", "--name-only", "main"],
+                             cwd=bare, capture_output=True, text=True).stdout
+        assert "RUN.md" not in out.splitlines()
+    else:
+        # Linux 分支:名字合法 → 正常导出,登录态文件以原名进仓
+        assert "auth_states/bad?name.json" in r.json()["files"]
+
+
+def test_export_auth_state_name_colon_no_500(client, db, repos_dir, tmp_path):
+    """登录态名含 `:` → 绝不 500。平台差异:Windows/NTFS 把 bad:name.json 当
+    ADS(bad 文件 + name.json 流),write_text 反而成功,由 push 阶段 git 拒绝 → 409;
+    Linux 合法名 → 200。三平台均不该 500。"""
+    p, bare = _mk_project_with_web_repo(db, tmp_path, "冒号名导出项目")
+    state_file = tmp_path / "auth" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"cookies": []}', encoding="utf-8")
+    auth = UiAuthState(project_id=p.id, name="bad:name", storage_path=str(state_file))
+    db.add(auth)
+    db.commit()
+    db.refresh(auth)
+    doc = dict(DOC, meta={"target": "web", "auth_state_id": auth.id})
+    s = _mk_web_script(db, p.id, doc)
+    h = _admin_headers(client, db)
+    r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h, json={"branch": "main"})
+    assert r.status_code in (200, 409)  # 语义:绝不 500(Windows ADS → git 拒收 409;Linux → 200)

@@ -188,8 +188,15 @@ def export_script(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, {"errors": bundle.errors})
     for rel, content in bundle.files.items():
         dest = wc / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(content, encoding="utf-8")
+        except OSError as e:
+            # Windows 保留字符(?*<>"|)在写盘即失败;不做字符黑名单(会误伤 Linux 合法名),
+            # 落盘失败按既有 400 errors 收场,绝不让 OSError 冒泡成 500,也绝不带错推送。
+            bundle.errors.append(f"导出文件「{rel}」写入失败:{e}")
+    if bundle.errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"errors": bundle.errors})
     commit_msg = payload.commit_message or f"Web自动化导出 {s.name} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     try:
         result = push_files(repo, sorted(bundle.files), payload.branch, commit_msg)
