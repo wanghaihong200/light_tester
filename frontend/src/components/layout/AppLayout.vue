@@ -2,12 +2,7 @@
   <div class="app-layout">
     <SideMenu :active-key="activeKey" :collapsed="collapsed" @navigate="go" />
     <div class="app-main">
-      <TopHeader
-        :project-name="currentProjectName"
-        :collapsed="collapsed"
-        @navigate="go"
-        @toggle-collapse="collapsed = !collapsed"
-      />
+      <TopHeader :collapsed="collapsed" @navigate="go" @toggle-collapse="collapsed = !collapsed" />
       <TabBar :active-key="activeKey" @select="onTabSelect" @close="onTabClose" />
       <!-- 定高 flex 链:导图编辑器依赖容器有真实尺寸(教训⑦);滚动交给内容区自身 -->
       <main class="app-content">
@@ -36,11 +31,6 @@ const collapsed = ref(false)
 const activeKey = computed(() => {
   const m = route.path.match(/^\/projects\/(\d+)$/)
   return m ? `project-${m[1]}` : 'home'
-})
-
-const currentProjectName = computed(() => {
-  const hit = tabs.value.find((t) => t.key === activeKey.value)
-  return hit && hit.id !== undefined ? hit.name : ''
 })
 
 // 刷新/直达项目路由时页签可能不存在:先占位,ProjectView 加载后回填真名

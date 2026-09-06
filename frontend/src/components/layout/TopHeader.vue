@@ -3,12 +3,24 @@
     <button class="collapse-btn" :title="collapsed ? '展开侧栏' : '收起侧栏'" @click="emit('toggle-collapse')">☰</button>
     <nav class="crumb">
       <span class="crumb-link" @click="emit('navigate', '/')">首页</span>
-      <template v-if="projectName">
+      <template v-if="currentProjectName">
         <span class="crumb-sep">/</span>
-        <span class="crumb-current">{{ projectName }}</span>
+        <span class="crumb-current">{{ currentProjectName }}</span>
       </template>
     </nav>
-    <!-- 右侧用户区:用户管理入口仅管理员可见(#/users 路由由用户管理任务落地) -->
+    <!-- 正中项目切换器:始终显示;数据源 listProjects(权限语义继承,非成员项目后端 404 不可见);切换永远落默认功能页 -->
+    <div class="project-switcher" data-test="project-switcher">
+      <el-select
+        v-model="selectedId"
+        class="switcher-select"
+        filterable
+        placeholder="切换项目"
+        @change="onSwitch"
+      >
+        <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
+      </el-select>
+    </div>
+    <!-- 右侧用户区:用户管理入口仅管理员可见 -->
     <div v-if="user" class="user-area">
       <a v-if="isAdmin" class="admin-link" href="#/users" data-test="admin-link">用户管理</a>
       <span class="user-name" data-test="user-name">{{ user.display_name }}</span>
@@ -18,19 +30,41 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { listProjects } from '../../api/projects'
 import { useAuth } from '../../composables/useAuth'
+import type { Project } from '../../types'
 
-defineProps<{ projectName?: string; collapsed: boolean }>()
+defineProps<{ collapsed: boolean }>()
 const emit = defineEmits<{ (e: 'navigate', path: string): void; (e: 'toggle-collapse'): void }>()
 
+const route = useRoute()
 const { user, isAdmin, fetchMe, logout } = useAuth()
-// 拉取失败不阻塞布局(同 SideMenu 容错);未登录 401 已由 client 统一踢登录
+
+// —— 面包屑名与下拉共用一份项目列表(拉取失败不阻塞布局,同 SideMenu 容错惯例) ——
+const projects = ref<Project[]>([])
+const selectedId = ref<number | null>(null)
+const currentId = computed(() => (route.params.id ? Number(route.params.id) : null))
+const currentProjectName = computed(() => projects.value.find((p) => p.id === currentId.value)?.name ?? '')
+
+// 路由变化(含切换后落地)回写下拉选中值
+watch(currentId, (id) => { selectedId.value = id }, { immediate: true })
+
+function onSwitch(id: number): void {
+  emit('navigate', `/projects/${id}`)
+}
+
 onMounted(async () => {
+  try {
+    projects.value = await listProjects()
+  } catch {
+    /* 忽略 */
+  }
   try {
     await fetchMe()
   } catch {
-    /* 忽略 */
+    /* 忽略;未登录 401 已由 client 统一踢登录 */
   }
 })
 </script>
@@ -46,6 +80,7 @@ onMounted(async () => {
   gap: 12px;
   height: 48px;
   padding: 0 16px;
+  position: relative;
 }
 .collapse-btn {
   background: transparent;
@@ -70,6 +105,13 @@ onMounted(async () => {
 .crumb-current {
   color: var(--el-text-color-primary);
   font-weight: 600;
+}
+/* 正中绝对定位:不受左右两侧宽度差影响,「首页/项目」行的几何中点 */
+.project-switcher {
+  left: 50%;
+  position: absolute;
+  transform: translateX(-50%);
+  width: 240px;
 }
 .user-area {
   align-items: center;
