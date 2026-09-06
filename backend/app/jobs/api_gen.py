@@ -18,6 +18,7 @@ import json
 
 from app.ai.engine import API_FILES_JSON_SCHEMA, SKILL_API, stream_skill_generation
 from app.ai.prompts import build_api_gen_user_prompt
+from app.automation_repo import resolve_repo
 from app.config import settings
 from app.database import SessionLocal
 from app.jobs.bus import bus
@@ -201,9 +202,16 @@ async def process_api_job(job_id: int) -> None:
         # 读文档
         content = Path(job.document.storage_path).read_text(encoding="utf-8")
 
-        # ensure working copy(自动兜底 clone)
-        ensure_repo(project)
-        wc = working_copy_path(project)
+        # plan11(方案 B 严格存储):生成仓按 AutomationRepo(kind=api) 行解析,
+        # 不回退 Project 旧列(写透后旧列停写为空);缺行/空 URL → job failed,文案与 router 侧一致。
+        api_repo = resolve_repo(db, project.id, "api")
+        if api_repo is None or not api_repo.repo_url:
+            raise GitError("repo", "项目未配置接口自动化仓,请先在自动化工程页配置")
+
+        # ensure working copy(自动兜底 clone);project 仍用于 name/id,AutomationRepo 已有
+        # git_repo_url/git_token 鸭子别名可直接进 git_service(working_copy_path 按 kind 落 repo_{id}_api)
+        ensure_repo(api_repo)
+        wc = working_copy_path(api_repo)
         summary = collect_project_summary(wc)
 
         # AI 生成(第 0 轮;修复轮在循环内重调)

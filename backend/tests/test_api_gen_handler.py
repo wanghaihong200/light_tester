@@ -9,16 +9,39 @@ import app.jobs.api_gen as ag
 from app.database import SessionLocal
 from app.jobs import api_gen
 from app.jobs.api_gen import ApiFilesPayload, MvnResult, parse_api_files, write_files, run_mvn_compile, collect_project_summary
-from app.models import Document, GenerationJob, Project
+from app.models import AutomationRepo, Document, GenerationJob, Project
 
 _EMPTY_SUMMARY = {"group_id": None, "artifact_id": None, "has_rest_assured": True,
                   "has_junit5": True, "has_hamcrest": False, "test_packages": [], "has_base_class": False}
 
 
-def _seed_api_job(db, storage_path):
+@pytest.fixture(autouse=True)
+def _clean_automation_repos():
+    """conftest._TABLES 未含 automation_repos;worker 测试开始按 api 仓行解析并留行,
+    projects 被 TRUNCATE 复位自增后 id 复用,残留行会串到后续文件的 jobs api_generation
+    校验(如 test_job_dispatch)。与 tests/test_repo_multikind.py 同款清理。"""
+    yield
+    from sqlalchemy import text
+
+    session = SessionLocal()
+    try:
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        session.execute(text("TRUNCATE TABLE automation_repos"))
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def _seed_api_job(db, storage_path, *, with_repo=True):
     p = Project(name="api任务测试项目", git_repo_url="http://x/repo.git")
     db.add(p)
     db.flush()
+    if with_repo:
+        # 计划 11 Task 3(方案 B,用户批准):worker 改按 AutomationRepo(kind=api) 行解析,
+        # 直插 Project 旧列不再被读取——最小化补种同 URL/token 的 api 仓行,断言不变。
+        db.add(AutomationRepo(project_id=p.id, kind="api", repo_url="http://x/repo.git", repo_token=None))
+        db.commit()
     d = Document(project_id=p.id, filename="api.md", storage_path=storage_path)
     db.add(d)
     db.commit()
@@ -389,5 +412,64 @@ async def test_api_job_uses_structured_result_and_persists_tool_trace(monkeypatc
             if e.get("type") == "tool":
                 tool_events.append(e)
         assert len(tool_events) == 2
+    finally:
+        db.close()
+
+
+async def test_api_job_without_api_repo_row_fails(monkeypatch, tmp_path):
+    """计划 11 方案 B:worker 侧严格按 api 仓行解析,无行(或 URL 空)→ job failed,
+    error 文案与 router 侧一致含「接口自动化仓」;只种 Project 旧列不回退。"""
+    doc_file = tmp_path / "api.md"
+    doc_file.write_text("# API 文档", encoding="utf-8")
+
+    async def fake_stream(*a, **kw):  # 不应被调用到
+        yield ("delta", '{"files": []}')
+
+    monkeypatch.setattr(ag, "stream_skill_generation", fake_stream)
+    monkeypatch.setattr(ag, "ensure_repo", lambda project: None)
+    monkeypatch.setattr(ag, "working_copy_path", lambda project: tmp_path)
+
+    db = SessionLocal()
+    try:
+        job = _seed_api_job(db, str(doc_file), with_repo=False)
+        await ag.process_api_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "failed"
+        assert "接口自动化仓" in got.error
+    finally:
+        db.close()
+
+
+async def test_api_job_reads_api_repo_row(monkeypatch, tmp_path):
+    """worker 传给 git_service 的是 api 仓行(AutomationRepo 鸭子别名),不再是 Project 旧列。"""
+    doc_file = tmp_path / "api.md"
+    doc_file.write_text("# API 文档", encoding="utf-8")
+    wc = tmp_path / "wc"
+    wc.mkdir()
+    seen = {}
+
+    async def fake_stream(*a, **kw):
+        yield ("result", {"files": [{"path": "src/test/java/T.java", "content": "class T{}"}]})
+
+    monkeypatch.setattr(ag, "stream_skill_generation", fake_stream)
+
+    def fake_ensure(repo):
+        seen["repo"] = repo
+
+    monkeypatch.setattr(ag, "ensure_repo", fake_ensure)
+    monkeypatch.setattr(ag, "working_copy_path", lambda project: wc)
+    monkeypatch.setattr(ag, "collect_project_summary", lambda w: dict(_EMPTY_SUMMARY))
+    monkeypatch.setattr(ag, "run_mvn_compile", lambda w: MvnResult(success=True, output="ok"))
+
+    db = SessionLocal()
+    try:
+        job = _seed_api_job(db, str(doc_file))
+        await ag.process_api_job(job.id)
+        db.expire_all()
+        got = db.get(GenerationJob, job.id)
+        assert got.status == "completed"
+        assert type(seen["repo"]).__name__ == "AutomationRepo"
+        assert seen["repo"].repo_url == "http://x/repo.git"
     finally:
         db.close()
