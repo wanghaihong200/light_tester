@@ -46,9 +46,13 @@ _TIMEOUT_CLONE = 120
 
 
 def working_copy_path(project) -> Path:
-    # 必须归一为绝对路径:settings.repos_dir 默认是相对路径("../data/repos"),
-    # 若以相对形式拼进 clone 的 cwd+target 会被二次拼接成 data/data/repos(E2E 实测缺陷)
-    return settings.repos_dir.resolve() / f"repo_{project.id}"
+    # 必须归一为绝对路径(相对路径会二次拼接成 data/data/repos,E2E 实测缺陷)。
+    # 带 kind 属性的形态是 AutomationRepo:按 (project_id, kind) 分目录,与 Project 的 repo_{id} 互不冲突。
+    base = settings.repos_dir.resolve()
+    kind = getattr(project, "kind", None)
+    if kind:
+        return base / f"repo_{project.project_id}_{kind}"
+    return base / f"repo_{project.id}"
 
 
 def validate_repo_url(url: str) -> None:

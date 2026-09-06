@@ -29,6 +29,37 @@ def repos_dir(tmp_path, monkeypatch):
     return d
 
 
+@pytest.fixture(autouse=True)
+def _clean_automation_repos():
+    """计划 11 Task 2(方案 B,用户批准):repo 端点改为按 AutomationRepo 行解析。
+    conftest._TABLES 未含 automation_repos,projects 被 TRUNCATE 复位自增后 id 复用,
+    残留行会串项目(与 tests/test_automation_repo.py 同款清理)。"""
+    yield
+    from sqlalchemy import text
+
+    from app.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        session.execute(text("TRUNCATE TABLE automation_repos"))
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def _seed_api_repo(db, project):
+    """直接建 Project(git_repo_url=...) 的用例补种 kind=api 行,断言不变。"""
+    from app.models import AutomationRepo
+
+    row = AutomationRepo(project_id=project.id, kind="api", repo_url=project.git_repo_url, repo_token=project.git_token)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def _admin_headers(client, db_session):
     """Task 7 补鉴权:bootstrap admin 登录,返回 Authorization 头(admin 直通所有项目)。
     原断言语义不变,仅补鉴权头。"""
@@ -50,6 +81,7 @@ def test_repo_sync_then_files_then_changes_then_push(client, repos_dir, tmp_path
         proj = Project(name="repo 路由项目", git_repo_url=f"file:///{bare.as_posix()}", git_token="tok")
         db.add(proj)
         db.commit()
+        _seed_api_repo(db, proj)  # Task 2(方案 B):端点按 api 仓行解析
         # sync
         r = client.post(f"/api/projects/{proj.id}/repo/sync", json={}, headers=ah)
         assert r.status_code == 200
@@ -85,6 +117,7 @@ def test_repo_files_needs_sync_when_absent(client, repos_dir, tmp_path, db_sessi
         proj = Project(name="未同步项目", git_repo_url=f"file:///{bare.as_posix()}", git_token="tok")
         db.add(proj)
         db.commit()
+        _seed_api_repo(db, proj)  # Task 2(方案 B):files 按 api 仓行解析,行存在但未同步 → needs_sync
         r = client.get(f"/api/projects/{proj.id}/repo/files", headers=ah)
         assert r.status_code == 200
         assert r.json() == {"needs_sync": True}
@@ -102,8 +135,10 @@ def test_repo_push_success(client, repos_dir, tmp_path, db_session):
         proj = Project(name="推送项目", git_repo_url=f"file:///{bare.as_posix()}", git_token="tok")
         db.add(proj)
         db.commit()
+        api_row = _seed_api_repo(db, proj)  # Task 2(方案 B):sync/push 按 api 仓行解析
         client.post(f"/api/projects/{proj.id}/repo/sync", json={}, headers=ah)
-        wc = git_service.working_copy_path(proj)
+        # push 端点落在 api 行的工作副本目录(repo_{id}_api),测试写入同目录
+        wc = git_service.working_copy_path(api_row)
         (wc / "T.java").write_text("class T{}", encoding="utf-8")
         r = client.post(f"/api/projects/{proj.id}/repo/push", json={"files": ["T.java"], "branch": "dev", "commit_message": "test push"}, headers=ah)
         assert r.status_code == 200

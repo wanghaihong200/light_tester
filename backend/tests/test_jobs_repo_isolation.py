@@ -6,6 +6,38 @@ _auth helper 从 tests/test_project_isolation.py(Task 5 修正版)复制为同�
 POST/GET /api/projects/{project_id}/jobs(project_id 在路径上,body 契约以 jobs.JobCreate 为准),
 断言语义不变:viewer 发起 403;非成员项目的 job 不可见(404)。"""
 
+import pytest
+from sqlalchemy import text
+
+
+@pytest.fixture(autouse=True)
+def _clean_automation_repos():
+    """计划 11 Task 2(方案 B,用户批准):repo 端点改为按 AutomationRepo 行解析。
+    conftest._TABLES 未含 automation_repos,projects 被 TRUNCATE 复位自增后 id 复用,
+    残留行会串项目(与 tests/test_automation_repo.py 同款清理)。"""
+    yield
+    from app.database import SessionLocal
+
+    session = SessionLocal()
+    try:
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        session.execute(text("TRUNCATE TABLE automation_repos"))
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def _seed_api_repo(db, project_id, repo_url, repo_token=None):
+    """给已存在的项目补种 kind=api 仓行(Task 3 写透落地前,API 建项目不产生该行)。"""
+    from app.models import AutomationRepo
+
+    row = AutomationRepo(project_id=project_id, kind="api", repo_url=repo_url, repo_token=repo_token)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
 
 def _admin_headers(client, db_session):
     """bootstrap admin 登录,返回 Authorization 头(admin 直通所有项目)。"""
@@ -159,6 +191,8 @@ def test_staging_endpoints_gate(client, db_session, make_user):
 def test_repo_viewer_reads_editor_writes(client, db_session, make_user):
     ah = _admin_headers(client, db_session)
     pid = _project(client, ah, "jr")
+    # Task 2(方案 B):端点按 AutomationRepo 行解析;补种 api 行使 files 走「行存在但未同步」分支
+    _seed_api_repo(db_session, pid, "file:///tmp/jr-none", None)
     vh = _auth(client, db_session, make_user, "jrviewer", project_ids=[pid], role="viewer")
     oh = _auth(client, db_session, make_user, "jroutsider", project_ids=[], role="viewer")
     # 读端点 viewer 可读(未同步 → needs_sync)
@@ -206,6 +240,8 @@ def test_repo_editor_can_sync(tmp_path, monkeypatch, client, db_session, make_us
         json={"name": "editor 同步项目", "git_repo_url": f"file:///{bare.as_posix()}", "git_token": "tok"},
         headers=ah,
     ).json()["id"]
+    # Task 2(方案 B):sync 按 api 仓行解析,补种同 URL/token 行(Task 3 写透后此行由 create_project 产生)
+    _seed_api_repo(db_session, pid, f"file:///{bare.as_posix()}", "tok")
     eh = _auth(client, db_session, make_user, "jreditor", project_ids=[pid], role="editor")
     r = client.post(f"/api/projects/{pid}/repo/sync", json={}, headers=eh)
     assert r.status_code == 200
