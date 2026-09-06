@@ -11,6 +11,7 @@ bcrypt>=4.2
 claude-agent-sdk
 openpyxl
 pillow
+pypinyin
 pytest-asyncio
 playwright==1.60.0  # 本机 ms-playwright 已有 chromium-1223,官方对应 1.60.0(1.62 要 1234 需重新下载)
 pyjwt>=2.9
