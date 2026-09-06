@@ -1,6 +1,6 @@
 <template>
   <div class="app-layout">
-    <SideMenu :active-key="activeKey" :collapsed="collapsed" @navigate="go" />
+    <SideMenu :active-key="activeKey" :collapsed="collapsed" :project-id="projectId" @navigate="go" />
     <div class="app-main">
       <TopHeader :collapsed="collapsed" @navigate="go" @toggle-collapse="collapsed = !collapsed" />
       <!-- 定高 flex 链:导图编辑器依赖容器有真实尺寸(教训⑦);滚动交给内容区自身 -->
@@ -24,8 +24,16 @@ const route = useRoute()
 const router = useRouter()
 const collapsed = ref(false)
 
-// 活跃键由路由派生(单一事实源):项目路由 project-<id>(Task 4 升级为含功能段),其余=home
-const activeKey = computed(() => (route.params.id ? `project-${route.params.id}` : 'home'))
+// 活跃键由路由派生(单一事实源):项目路由 project-<id>:<功能段>,其余=home
+const activeKey = computed(() => {
+  const id = route.params.id
+  if (!id) return 'home'
+  const section = typeof route.name === 'string' && route.name.startsWith('project-')
+    ? route.name.slice('project-'.length)
+    : ''
+  return `project-${id}:${section}`
+})
+const projectId = computed(() => (route.params.id ? Number(route.params.id) : null))
 // 同 activeKey 语义:项目内切换保持实例,项目间/首页切换重挂
 const viewKey = computed(() => (route.params.id ? `project-${route.params.id}` : route.path))
 

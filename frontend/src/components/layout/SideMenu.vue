@@ -8,39 +8,120 @@
       <span class="menu-icon">⌂</span>
       <span v-if="!collapsed" class="menu-name">首页</span>
     </div>
-    <div v-if="!collapsed" class="menu-group">项目</div>
-    <div
-      v-for="p in projects"
-      :key="p.id"
-      class="menu-item"
-      :class="{ active: activeKey === `project-${p.id}` }"
-      :title="collapsed ? p.name : undefined"
-      @click="emit('navigate', `/projects/${p.id}`)"
-    >
-      <span class="menu-icon">{{ p.name.slice(0, 1) }}</span>
-      <span v-if="!collapsed" class="menu-name">{{ p.name }}</span>
-    </div>
+    <!-- 项目态:上下文功能菜单树。分组轴=「AI 是否参与」(ADR-0007);文案见 CONTEXT.md 导航词条,勿改 -->
+    <template v-if="projectId !== null">
+      <template v-for="item in PROJECT_MENU" :key="item.key">
+        <div
+          v-if="isLeaf(item)"
+          class="menu-item"
+          :class="{ active: activeKey === itemKey(item) }"
+          :title="collapsed ? item.label : undefined"
+          @click="go(item)"
+        >
+          <span class="menu-icon">{{ item.icon }}</span>
+          <span v-if="!collapsed" class="menu-name">{{ item.label }}</span>
+        </div>
+        <template v-else>
+          <div
+            class="menu-item menu-group-head"
+            :title="collapsed ? item.label : undefined"
+            @click="collapsed ? go(item.children[0]) : toggle(item.key)"
+          >
+            <span class="menu-icon">{{ item.icon }}</span>
+            <span v-if="!collapsed" class="menu-name">{{ item.label }}</span>
+            <span v-if="!collapsed" class="menu-caret" :class="{ open: expanded.has(item.key) }">▾</span>
+          </div>
+          <template v-if="!collapsed && expanded.has(item.key)">
+            <div
+              v-for="c in item.children"
+              :key="c.key"
+              class="menu-item sub-item"
+              :class="{ active: activeKey === itemKey(c) }"
+              @click="go(c)"
+            >
+              <span class="menu-name">{{ c.label }}</span>
+            </div>
+          </template>
+        </template>
+      </template>
+    </template>
     <div class="menu-spacer" />
   </aside>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { listProjects } from '../../api/projects'
-import type { Project } from '../../types'
+import { ref, watch } from 'vue'
 
-defineProps<{ activeKey: string; collapsed: boolean }>()
+interface MenuLeaf {
+  key: string // 与路由名 project-<key> 对应(cases/knowledge/ai-jobs/ai-repo/ai-cross/ui-web)
+  label: string
+  path: string
+  icon?: string
+}
+interface MenuGroup {
+  key: string
+  label: string
+  icon: string
+  children: MenuLeaf[]
+}
+
+// 分组轴=「AI 是否参与」:AI 组收纳生成任务/自动化工程/多端 UI 自动化;UI 组仅 Web自动化(选择器驱动)
+const PROJECT_MENU: (MenuLeaf | MenuGroup)[] = [
+  { key: 'cases', label: '功能用例管理', path: 'cases', icon: '▦' },
+  { key: 'knowledge', label: '知识库', path: 'knowledge', icon: '📚' },
+  {
+    key: 'ai',
+    label: 'AI测试',
+    icon: '🤖',
+    children: [
+      { key: 'ai-jobs', label: '生成任务', path: 'ai/jobs' },
+      { key: 'ai-repo', label: '自动化工程', path: 'ai/repo' },
+      { key: 'ai-cross', label: '多端 UI 自动化', path: 'ai/cross' },
+    ],
+  },
+  {
+    key: 'ui',
+    label: 'UI自动化',
+    icon: '🖱',
+    children: [{ key: 'ui-web', label: 'Web自动化', path: 'ui/web' }],
+  },
+]
+
+const props = defineProps<{ activeKey: string; collapsed: boolean; projectId: number | null }>()
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 
-const projects = ref<Project[]>([])
-// 拉取失败不阻塞布局:侧栏只是快捷入口,页面内仍有完整错误提示
-onMounted(async () => {
-  try {
-    projects.value = await listProjects()
-  } catch {
-    /* 忽略 */
-  }
-})
+const isLeaf = (item: MenuLeaf | MenuGroup): item is MenuLeaf => !('children' in item)
+
+function itemKey(item: MenuLeaf): string {
+  return `project-${props.projectId}:${item.key}`
+}
+
+// 组默认全展开;可手动折叠;激活项落进某组时自动展开该组
+const expanded = ref(new Set<string>(PROJECT_MENU.filter((i): i is MenuGroup => !isLeaf(i)).map((g) => g.key)))
+
+function toggle(key: string): void {
+  const next = new Set(expanded.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expanded.value = next
+}
+
+watch(
+  () => props.activeKey,
+  (k) => {
+    const m = k.match(/^project-\d+:(.+)$/)
+    if (!m) return
+    const group = PROJECT_MENU.find((i): i is MenuGroup => !isLeaf(i) && m[1].startsWith(`${i.key}-`))
+    if (group && !expanded.value.has(group.key)) {
+      expanded.value = new Set([...expanded.value, group.key])
+    }
+  },
+  { immediate: true },
+)
+
+function go(item: MenuLeaf): void {
+  emit('navigate', `/projects/${props.projectId}/${item.path}`)
+}
 </script>
 
 <style scoped>
@@ -79,11 +160,6 @@ onMounted(async () => {
   font-weight: 700;
   white-space: nowrap;
 }
-.menu-group {
-  color: var(--pro-muted);
-  font-size: 11px;
-  margin: 10px 8px 4px;
-}
 .menu-item {
   align-items: center;
   border-radius: var(--border-radius-base);
@@ -101,6 +177,23 @@ onMounted(async () => {
 .menu-item.active {
   background: var(--el-color-primary);
   color: #fff;
+}
+.menu-group-head .menu-name {
+  flex: 1;
+}
+.menu-caret {
+  color: var(--pro-muted);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+.menu-caret.open {
+  transform: rotate(180deg);
+}
+.sub-item {
+  padding-left: 34px;
+}
+.sub-item .menu-name {
+  font-size: 13px;
 }
 .menu-icon {
   flex-shrink: 0;

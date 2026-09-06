@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { defineComponent, h, onMounted } from 'vue'
 import AppLayout from '../../src/components/layout/AppLayout.vue'
+import SideMenu from '../../src/components/layout/SideMenu.vue'
 
 vi.mock('../../src/api/projects', () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -60,7 +61,7 @@ describe('AppLayout 布局壳', () => {
     })
     await router.push('/projects/1')
     await router.isReady()
-    mount(AppLayout, { global: { plugins: [router] } })
+    mount(AppLayout, { global: { plugins: [router, ElementPlus] } })
     await flushPromises()
     expect(projectMounts).toBe(1)
 
@@ -86,12 +87,40 @@ describe('AppLayout 布局壳', () => {
     })
     await router.push('/projects/1')
     await router.isReady()
-    mount(AppLayout, { global: { plugins: [router] } })
+    mount(AppLayout, { global: { plugins: [router, ElementPlus] } })
     await flushPromises()
     expect(projectMounts).toBe(1)
 
     await router.push({ path: '/projects/1', query: { keep: '1' } })
     await flushPromises()
     expect(projectMounts).toBe(1)
+  })
+
+  it('项目路由:向 SideMenu 下发 projectId,子路由切换时 projectId 稳定', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        {
+          path: '/projects/:id',
+          component: { template: '<div class="project-stub">project</div>' },
+          children: [
+            { path: 'cases', name: 'project-cases', component: { template: '<div/>' } },
+            { path: 'knowledge', name: 'project-knowledge', component: { template: '<div/>' } },
+          ],
+        },
+        { path: '/', component: { template: '<div class="home-stub">home</div>' } },
+      ],
+    })
+    await router.push('/projects/1/cases')
+    await router.isReady()
+    const wrapper = mount(AppLayout, { global: { plugins: [router, ElementPlus], stubs: { 'router-view': true } } })
+    await flushPromises()
+    const menu = wrapper.findComponent(SideMenu)
+    expect(menu.props('projectId')).toBe(1)
+    expect(menu.props('activeKey')).toBe('project-1:cases')
+
+    await router.push('/projects/1/knowledge')
+    await flushPromises()
+    expect(wrapper.findComponent(SideMenu).props('activeKey')).toBe('project-1:knowledge')
   })
 })
