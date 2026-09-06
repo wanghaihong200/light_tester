@@ -8,6 +8,9 @@
 - ai 系动作(run_sub 除外)不可确定性导出 → 记错误拒绝;run_sub 由 Task 5 的内联层处理。
 """
 import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import datetime
 
 from pypinyin import lazy_pinyin
 
@@ -206,3 +209,145 @@ def _candidates(loc: dict | None) -> list[dict]:
         raise ValueError("缺 locator")
     out = [loc] + list(loc.get("fallbacks") or [])
     return [c for c in out if c.get("strategy")]
+
+
+# ---- 组装层:run_sub 内联 + 整文件生成 ----
+
+@dataclass
+class ExportBundle:
+    """导出产物:仓内相对路径 → 文件内容;errors 非空时 files 必为空。"""
+
+    files: dict[str, str] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+
+def _unit_fn_name(script_id: int, name: str, *, is_entry: bool) -> str:
+    """entry → test_<slug>(pytest 收集约定);子脚本 → _sub_<slug>(私有,调用点与 def 同名)。"""
+    return ("test_" if is_entry else "_sub_") + slugify(script_id, name)
+
+
+def _render_with_calls(
+    doc: dict, lookup: Callable[[int], tuple[str, dict] | None],
+) -> tuple[list[str], list[str]]:
+    """按原顺序渲染步骤;run_sub 位置替换为对 _sub_<slug>(page) 的调用行。"""
+    lines: list[str] = []
+    errs: list[str] = []
+    for i, st in enumerate(doc.get("steps") or [], 1):
+        if st.get("action") == "run_sub":
+            ref = (st.get("params") or {}).get("script_id")
+            found = lookup(ref) if isinstance(ref, int) else None
+            if found is None:
+                continue  # 缺失错误已在收集期记录
+            lines.append(f"    {_unit_fn_name(ref, found[0], is_entry=False)}(page)")
+            continue
+        one, e1 = render_steps([st])
+        if e1:
+            errs.extend(f"步骤{i}: {m.split(':', 1)[-1].strip()}" for m in e1)
+        lines.extend(one)
+    return lines, errs
+
+
+def _render_unit(
+    doc: dict, fn_name: str, *, is_test: bool,
+    lookup: Callable[[int], tuple[str, dict] | None],
+) -> tuple[list[str], list[str]]:
+    """一个脚本单元 → [def 行] + 体(run_sub 已内联为调用;错误透传步骤错误)。"""
+    body, errs = _render_with_calls(doc, lookup)
+    sig = f"def {fn_name}(page: Page):" if is_test else f"def {fn_name}(page):"
+    return [sig] + (body or ["pass"]), errs
+
+
+def _render_all_units(units: list[tuple[int, list[str]]], entry_id: int) -> str:
+    """先私有 _sub_ 函数(被引用顺序),最后主 test 函数。units: [(sid, 函数行)]。"""
+    subs: list[str] = []
+    entry = ""
+    for sid, lines in units:
+        if sid == entry_id:
+            entry = "\n".join(lines)
+        else:
+            subs.append("\n".join(lines) + "\n")
+    return "\n\n".join([*subs, entry])
+
+
+def _render_variables(doc: dict) -> str:
+    """entry 变量表 → 多行 repr 风格字典源码(每行一个 "name": "default");空表 → "{}"。"""
+    rows = [
+        f'    {_dq(str(v.get("name") or ""))}: {_dq(str(v.get("default") or ""))}'
+        for v in (doc.get("variables") or [])
+    ]
+    if not rows:
+        return "{}"
+    return "{\n" + ",\n".join(rows) + ",\n}"
+
+
+def _has_auth(doc: dict) -> bool:
+    """entry 是否挂了登录态(auth_state_id;登录态导出小节由 Task 6 接入)。"""
+    return bool((doc.get("meta") or {}).get("auth_state_id"))
+
+
+def collect_export_bundle(
+    script_id: int,
+    script_name: str,
+    entry_doc: dict,
+    lookup: Callable[[int], tuple[str, dict] | None],
+) -> ExportBundle:
+    """组装导出产物:内联 run_sub 依赖图为单文件 pytest 脚本 + RUN.md。
+
+    任一错误(引用缺失/循环引用/步骤不可导出,含嵌套子脚本的步骤错误)→ errors 非空且 files 为空。
+    """
+    bundle = ExportBundle()
+    errors: list[str] = []
+    # 灰黑双色迭代 DFS 收集 run_sub 依赖图:灰=展开中(再遇即回边→环),黑=完成(菱形依赖只收一次)。
+    state: dict[int, int] = {}  # 1=灰 2=黑
+    units: list[tuple[int, str, dict]] = []  # 后序:被引用脚本先出现
+    stack: list[tuple[int, str, dict, bool]] = [(script_id, script_name, entry_doc, False)]
+    while stack:
+        sid, name, doc, done = stack.pop()
+        if done:
+            state[sid] = 2
+            units.append((sid, name, doc))
+            continue
+        mark = state.get(sid)
+        if mark == 1:  # 回边:展开中的祖先又被引用 → 循环
+            errors.append(f"脚本「{name}」(#{sid}) 循环引用,无法导出")
+            continue
+        if mark == 2:  # 已收集过(菱形依赖的第二条入边),不重复入列
+            continue
+        state[sid] = 1
+        stack.append((sid, name, doc, True))
+        for i, st in reversed(list(enumerate(doc.get("steps") or [], 1))):
+            if st.get("action") != "run_sub":
+                continue
+            ref = (st.get("params") or {}).get("script_id")
+            found = lookup(ref) if isinstance(ref, int) else None
+            if found is None:
+                errors.append(f"步骤{i}: run_sub 引用的脚本 #{ref} 不存在或已删除")
+                continue
+            stack.append((ref, found[0], found[1], False))
+    if not errors:
+        rendered: list[tuple[int, list[str]]] = []
+        for sid, name, doc in units:
+            lines, errs = _render_unit(
+                doc, _unit_fn_name(sid, name, is_entry=sid == script_id),
+                is_test=sid == script_id, lookup=lookup,
+            )
+            rendered.append((sid, lines))
+            errors.extend(errs)
+    if errors:
+        bundle.errors = errors
+        return bundle  # 有错误不产文件
+    filename = f"{_unit_fn_name(script_id, script_name, is_entry=True)}.py"
+    code = _PY_HEADER.format(
+        script_id=script_id,
+        script_name=script_name,
+        exported_at=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        filename=filename,
+        auth_note="",
+        variables=_render_variables(entry_doc),
+    ) + "\n" + _render_all_units(rendered, script_id) + "\n"
+    bundle.files[filename] = code
+    bundle.files["RUN.md"] = RUN_MD_TEMPLATE.format(
+        script_id=script_id, script_name=script_name, filename=filename,
+        auth_section="",  # 登录态小节 Task 6 接入
+    )
+    return bundle
