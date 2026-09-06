@@ -83,7 +83,25 @@ def _auth_headers(client, db_session):
     return {"Authorization": f"Bearer {tok}"}
 
 
-def test_repo_endpoints_kind_param(client, db):
+def _auth(client, db_session, make_user, name, *, project_ids=(), role="editor"):
+    """建用户+分配项目+登录,返回 Authorization 头。(照抄 tests/test_jobs_repo_isolation.py 同名 helper)"""
+    u = make_user(db_session, name)
+    from app.models import ProjectMember
+
+    if project_ids is None:
+        pids: list[int] = []
+    elif isinstance(project_ids, (list, tuple)):
+        pids = list(project_ids)
+    else:
+        pids = [project_ids]
+    for pid in pids:
+        db_session.add(ProjectMember(project_id=pid, user_id=u.id, role=role))
+    db_session.commit()
+    r = client.post("/api/auth/login", json={"username": name, "password": f"pw-{name}"})
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def test_repo_endpoints_kind_param(client, db, repos_dir):
     import tempfile
 
     p = Project(name="多仓路由项目")
@@ -145,3 +163,23 @@ def test_automation_repo_config_api(client, db):
     r4 = client.put(f"/api/projects/{p.id}/repo/automation-repos/web",
                     headers=h, json={"repo_url": "ftp://bad"})
     assert r4.status_code == 400
+
+
+def test_automation_repo_put_gate(client, db, make_user):
+    """PUT 仓配置与 update_project 同权:viewer 403,非成员 404,admin 直通。"""
+    p = Project(name="仓配置权限项目")
+    db.add(p); db.commit(); db.refresh(p)
+    h = _auth_headers(client, db)
+    vh = _auth(client, db, make_user, "mkviewer", project_ids=[p.id], role="viewer")
+    oh = _auth(client, db, make_user, "mkoutsider", project_ids=[], role="editor")
+    url = f"/api/projects/{p.id}/repo/automation-repos/web"
+    # viewer → 403
+    assert client.put(url, headers=vh, json={"repo_url": "file:///tmp/x"}).status_code == 403
+    # 非成员 → 404(不泄漏存在性)
+    assert client.put(url, headers=oh, json={"repo_url": "file:///tmp/x"}).status_code == 404
+    # 不存在的项目 → 404
+    assert client.put("/api/projects/999999/repo/automation-repos/web",
+                      headers=h, json={"repo_url": "file:///tmp/x"}).status_code == 404
+    # admin(editor 权直通)→ 200
+    ok = client.put(url, headers=h, json={"repo_url": "file:///tmp/x"})
+    assert ok.status_code == 200 and ok.json()["kind"] == "web"
