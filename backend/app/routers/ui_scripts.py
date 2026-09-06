@@ -1,4 +1,5 @@
 # UI自动化脚本 CRUD:录制产出的步骤 DSL 文档的增删改查(+ Web 端导出 Playwright 推送 web 仓)
+import ast
 from datetime import datetime
 from pathlib import Path
 
@@ -129,10 +130,17 @@ def export_script(
                             f"仅 driver_target=web 的脚本可导出 Playwright(当前 {target})")
 
     def lookup(ref: int) -> tuple[str, dict] | None:
-        sub = db.query(UiScript).filter(UiScript.id == ref, UiScript.is_deleted.is_(False)).first()
+        # 同项目才可被内联(与 ui_runs 执行口径一致):跨项目引用按「不存在」拒绝,防拖库外泄
+        sub = (db.query(UiScript)
+               .filter(UiScript.id == ref, UiScript.is_deleted.is_(False),
+                       UiScript.project_id == s.project_id)
+               .first())
         return (sub.name, sub.script) if sub else None
 
     bundle = collect_export_bundle(s.id, s.name, doc, lookup)
+    if bundle.errors:
+        # 错误先于登录态附件抛出:否则空 files 上取主测试文件会 StopIteration → 500
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"errors": bundle.errors})
 
     # 登录态:meta.auth_state_id → 附带 storage_state 文件 + browser_context_args fixture 注入
     auth_state_id = (doc.get("meta") or {}).get("auth_state_id")
@@ -140,6 +148,8 @@ def export_script(
         auth = db.get(UiAuthState, auth_state_id)
         if auth is None or auth.is_deleted:
             bundle.errors.append(f"登录态 #{auth_state_id} 不存在或已删除,请先在脚本编辑中变更登录态")
+        elif auth.project_id != s.project_id:
+            bundle.errors.append(f"登录态 #{auth_state_id} 不存在或不属于本项目")
         else:
             storage = Path(auth.storage_path)
             if not storage.exists():
@@ -165,6 +175,15 @@ def export_script(
                     bundle.files["RUN.md"].replace("{auth_section}", "").replace("{auth_note}", "")
                     + f"\n本次导出附带登录态「{auth.name}」:文件 `{rel}`(browser_context_args 已注入 storage_state)。\n"
                 )
+
+    # 推送前 ast 守卫:生成的主测试文件必须可 parse(空脚本兜底体、名称含 """ 击穿 docstring 等
+    # 一律收进 400 errors,坏文件绝不落盘/推送)
+    main_py = next(f for f in bundle.files if f.startswith("test_"))
+    try:
+        ast.parse(bundle.files[main_py])
+    except SyntaxError as e:
+        bundle.errors.append(
+            f"导出的主测试文件「{main_py}」语法校验失败:{e.msg},请检查脚本名称或步骤参数是否含特殊字符")
 
     if bundle.errors:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, {"errors": bundle.errors})

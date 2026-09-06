@@ -334,3 +334,92 @@ def test_export_auth_state_name_colon_no_500(client, db, repos_dir, tmp_path):
     h = _admin_headers(client, db)
     r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h, json={"branch": "main"})
     assert r.status_code in (200, 409)  # 语义:绝不 500(Windows ADS → git 拒收 409;Linux → 200)
+
+
+# ---- 终审修复波回归:导出项目作用域 / 错误前置 / 空脚本缩进 + ast 守卫 ----
+
+
+def test_export_run_sub_cross_project_400(client, db, repos_dir, tmp_path):
+    """跨项目 run_sub:引用他项目脚本必须与「不存在」同口径 400,
+    绝不能静默把 B 项目脚本内联进 A 项目的 web 仓(与 ui_runs 执行口径对齐)。"""
+    pa, _bare = _mk_project_with_web_repo(db, tmp_path, "跨项目runsub导出A")
+    pb = Project(name="跨项目runsub导出B")
+    db.add(pb)
+    db.commit()
+    db.refresh(pb)
+    sub_b = _mk_web_script(db, pb.id, DOC, name="B项目子脚本")
+    doc = {"version": 2, "meta": {"target": "web"}, "variables": [],
+           "steps": [{"id": 1, "action": "run_sub", "params": {"script_id": sub_b.id}}]}
+    s = _mk_web_script(db, pa.id, doc)
+    h = _admin_headers(client, db)
+    r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h, json={"branch": "main"})
+    assert r.status_code == 400, r.text  # 修复前:跨项目被静默内联 → 200 推送
+    errors = r.json()["detail"]["errors"]
+    assert isinstance(errors, list)
+    assert any("run_sub" in e and "不存在" in e for e in errors)
+
+
+def test_export_auth_state_cross_project_400(client, db, repos_dir, tmp_path):
+    """跨项目登录态:B 项目的登录态行对 A 项目脚本必须视为不存在 → 400,
+    B 的 storage_state(会话 cookie!)不得写进 A 项目的仓。"""
+    pa, bare = _mk_project_with_web_repo(db, tmp_path, "跨项目登录态导出A")
+    pb = Project(name="跨项目登录态导出B")
+    db.add(pb)
+    db.commit()
+    db.refresh(pb)
+    state_file = tmp_path / "auth_b" / "b_state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    secret = '{"cookies": [{"name": "session", "value": "B_PROJECT_SECRET"}], "origins": []}'
+    state_file.write_text(secret, encoding="utf-8")
+    auth_b = UiAuthState(project_id=pb.id, name="b_state", storage_path=str(state_file))
+    db.add(auth_b)
+    db.commit()
+    db.refresh(auth_b)
+    doc = dict(DOC, meta={"target": "web", "auth_state_id": auth_b.id})
+    s = _mk_web_script(db, pa.id, doc)
+    h = _admin_headers(client, db)
+    r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h, json={"branch": "main"})
+    assert r.status_code == 400, r.text  # 修复前:B 的登录态被写入 A 的仓 → 200 推送
+    errors = r.json()["detail"]["errors"]
+    assert any("登录态" in e and "不属于本项目" in e for e in errors)
+    # 400 路径零推送:B 的 storage 内容不得出现在远程裸仓
+    out = subprocess.run(["git", "ls-tree", "-r", "--name-only", "main"],
+                         cwd=bare, capture_output=True, text=True).stdout
+    assert "RUN.md" not in out.splitlines()
+    assert not any(ln.startswith("auth_states/") for ln in out.splitlines())
+
+
+def test_export_ai_step_with_auth_state_400_not_500(client, db, repos_dir, tmp_path):
+    """混合脚本:合法登录态 + ai 步 → 400 errors(ai_tap)。
+    修复前:错误检查在 auth 附件之后,空 files 上取主文件 StopIteration → 500。"""
+    p, _bare = _mk_project_with_web_repo(db, tmp_path, "混合脚本导出项目")
+    state_file = tmp_path / "auth" / "mix_state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+    auth = UiAuthState(project_id=p.id, name="mix_state", storage_path=str(state_file))
+    db.add(auth)
+    db.commit()
+    db.refresh(auth)
+    doc = {"version": 2, "meta": {"target": "web", "auth_state_id": auth.id},
+           "steps": [{"id": 1, "action": "ai_tap", "params": {"target": "按钮"}}]}
+    s = _mk_web_script(db, p.id, doc)
+    h = _admin_headers(client, db)
+    r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h, json={"branch": "main"})
+    assert r.status_code == 400, r.text
+    errors = r.json()["detail"]["errors"]
+    assert errors and any("ai_tap" in e for e in errors)
+
+
+def test_export_script_name_triple_quote_400_not_500(client, db, repos_dir, tmp_path):
+    """脚本名含三引号会击穿生成文件的 docstring:推送前 ast 守卫必须 400,坏文件绝不入仓。"""
+    p, bare = _mk_project_with_web_repo(db, tmp_path, "三引号名导出项目")
+    s = _mk_web_script(db, p.id, DOC, name='名字"""注入')
+    h = _admin_headers(client, db)
+    r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h,
+                    json={"branch": "main", "commit_message": "三引号名导出"})
+    assert r.status_code == 400, r.text  # 修复前:语法坏文件被照常推送 → 200
+    errors = r.json()["detail"]["errors"]
+    assert errors
+    out = subprocess.run(["git", "ls-tree", "-r", "--name-only", "main"],
+                         cwd=bare, capture_output=True, text=True).stdout
+    assert "RUN.md" not in out.splitlines()

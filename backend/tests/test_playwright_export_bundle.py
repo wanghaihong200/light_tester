@@ -80,3 +80,32 @@ def test_bundle_v1_accepted():
 def test_bundle_code_is_valid_python():
     b = collect_export_bundle(1, "登录流程", ENTRY, _lookup)
     ast.parse(b.files["test_1_dengluliucheng.py"])
+
+
+def test_bundle_zero_step_entry_body_indented():
+    """空脚本(0 步)兜底体必须是缩进的 `    pass`,否则生成文件 IndentationError(导出即坏文件)。"""
+    doc = {"version": 2, "meta": {"target": "web"}, "variables": [], "steps": []}
+    b = collect_export_bundle(7, "空脚本", doc, lambda sid: None)
+    assert b.errors == []
+    main = next(f for f in b.files if f.startswith("test_"))
+    code = b.files[main]
+    assert "def test_7_" in code
+    ast.parse(code)  # 未缩进的裸 pass 在这里炸 IndentationError
+
+
+def test_bundle_zero_step_sub_inlined_still_valid_python():
+    """被 run_sub 引用的空子脚本同样兜底缩进:内联后的整文件必须可 parse。"""
+    entry = {
+        "version": 2, "meta": {"target": "web"}, "variables": [],
+        "steps": [
+            {"id": 1, "action": "goto", "params": {"url": "https://a"}},
+            {"id": 2, "action": "run_sub", "params": {"script_id": 2}},
+        ],
+    }
+    empty_sub = {"version": 2, "meta": {"target": "web"}, "variables": [], "steps": []}
+    b = collect_export_bundle(1, "主流程", entry, lambda sid: ("空子脚本", empty_sub))
+    assert b.errors == []
+    main = next(f for f in b.files if f.startswith("test_"))
+    code = b.files[main]
+    assert "def _sub_2_" in code
+    ast.parse(code)

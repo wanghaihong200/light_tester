@@ -254,7 +254,7 @@ def _render_unit(
     """一个脚本单元 → [def 行] + 体(run_sub 已内联为调用;错误透传步骤错误)。"""
     body, errs = _render_with_calls(doc, lookup)
     sig = f"def {fn_name}(page: Page):" if is_test else f"def {fn_name}(page):"
-    return [sig] + (body or ["pass"]), errs
+    return [sig] + (body or ["    pass"]), errs  # 空脚本兜底体必须缩进,否则生成文件 IndentationError
 
 
 def _render_all_units(units: list[tuple[int, list[str]]], entry_id: int) -> str:
