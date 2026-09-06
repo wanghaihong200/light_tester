@@ -174,4 +174,27 @@ describe('RepoPane', () => {
     expect(w.text()).not.toContain('未配置,保存后可用')
     expect((w.vm as any).cfgUrl).toBe('https://g/new.git')
   })
+
+  it('拖拽分隔条横向调整文件树宽度并记忆,双击复位', async () => {
+    localStorage.removeItem('repo-pane-tree-width')
+    const w = mountPane()
+    await flushPromises()
+
+    const treeEl = () => w.find('.tree').element as HTMLElement
+    expect(treeEl().style.width).toBe('260px')
+
+    // mousedown 记起点,mousemove 按 dx 调宽(260 + 160-100 = 320),mouseup 落 localStorage
+    await w.find('.splitter').trigger('mousedown', { clientX: 100 })
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 160 }))
+    await flushPromises() // 等响应式宽度补丁到 DOM
+    expect(treeEl().style.width).toBe('320px')
+    window.dispatchEvent(new MouseEvent('mouseup', { clientX: 160 }))
+    expect(localStorage.getItem('repo-pane-tree-width')).toBe('320')
+
+    // 双击复位并落盘
+    await w.find('.splitter').trigger('dblclick')
+    await flushPromises()
+    expect(treeEl().style.width).toBe('260px')
+    expect(localStorage.getItem('repo-pane-tree-width')).toBe('260')
+  })
 })

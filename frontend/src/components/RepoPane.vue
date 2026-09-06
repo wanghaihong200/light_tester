@@ -44,7 +44,7 @@
         <span v-if="syncResult" class="sync-info">{{ syncResult.cloned ? '已克隆' : '已更新' }} · {{ syncResult.branch }}@{{ syncResult.commit_short }}</span>
       </div>
       <div class="body">
-        <div class="tree">
+        <div class="tree" :style="{ width: treeWidth + 'px' }">
           <div v-if="treeData.length" class="tree-tools">
             <el-button size="small" text type="primary" @click="setExpandAll(true)">全部展开</el-button>
             <el-button size="small" text type="primary" @click="setExpandAll(false)">全部收起</el-button>
@@ -64,6 +64,12 @@
           <div v-else-if="needsConfig" class="placeholder cfg-empty">该分类仓未配置,请先保存仓配置</div>
           <div v-else class="placeholder">点击「同步工程」拉取仓库</div>
         </div>
+        <div
+          class="splitter"
+          title="拖拽调整文件树宽度,双击复位"
+          @mousedown="onSplitterDown"
+          @dblclick="resetTreeWidth"
+        />
         <div class="editor">
           <div class="file-path">{{ currentPath || '(选择文件)' }}</div>
           <div ref="editorRef" class="monaco-host" />
@@ -231,6 +237,38 @@ function setExpandAll(open: boolean) {
   }
 }
 
+// ── 文件树横向宽度:分隔条拖拽调整(160-560px),localStorage 记忆,双击复位 ──
+const TREE_W_MIN = 160
+const TREE_W_MAX = 560
+const TREE_W_DEFAULT = 260
+const storedW = Number(localStorage.getItem('repo-pane-tree-width'))
+const treeWidth = ref(Math.min(TREE_W_MAX, Math.max(TREE_W_MIN, storedW || TREE_W_DEFAULT)))
+let treeDrag: { x: number; w: number } | null = null
+
+function onTreeDragMove(e: MouseEvent) {
+  if (!treeDrag) return
+  treeWidth.value = Math.min(TREE_W_MAX, Math.max(TREE_W_MIN, treeDrag.w + e.clientX - treeDrag.x))
+}
+function onTreeDragEnd() {
+  if (!treeDrag) return
+  treeDrag = null
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onTreeDragMove)
+  window.removeEventListener('mouseup', onTreeDragEnd)
+  localStorage.setItem('repo-pane-tree-width', String(treeWidth.value))
+}
+function onSplitterDown(e: MouseEvent) {
+  e.preventDefault() // 阻起拖拽选中文本
+  treeDrag = { x: e.clientX, w: treeWidth.value }
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onTreeDragMove)
+  window.addEventListener('mouseup', onTreeDragEnd)
+}
+function resetTreeWidth() {
+  treeWidth.value = TREE_W_DEFAULT
+  localStorage.setItem('repo-pane-tree-width', String(treeWidth.value))
+}
+
 async function onNodeClick(node: FileNode) {
   if (node.is_dir) return
   currentPath.value = node.path
@@ -249,7 +287,7 @@ function onPushed() {
   loadTree()
 }
 onMounted(() => { loadConfig(); loadTree(); loadChanges(); loadBranches() })
-onBeforeUnmount(() => { editor?.dispose() })
+onBeforeUnmount(() => { editor?.dispose(); onTreeDragEnd() })
 watch(() => props.projectId, () => { loadConfig(); loadTree(); loadChanges(); loadBranches() })
 </script>
 
@@ -265,8 +303,10 @@ watch(() => props.projectId, () => { loadConfig(); loadTree(); loadChanges(); lo
 .topbar { padding: 8px 0; display: flex; align-items: center; gap: 12px; }
 .branch-select { width: 160px; }
 .sync-info { color: #67c23a; }
-.body { flex: 1; display: flex; gap: 8px; min-height: 0; }
-.tree { width: 260px; overflow: auto; border-right: 1px solid #ebeef5; padding: 4px; }
+.body { flex: 1; display: flex; gap: 4px; min-height: 0; }
+.tree { overflow: auto; border-right: 1px solid #ebeef5; padding: 4px; flex-shrink: 0; }
+.splitter { width: 6px; cursor: col-resize; border-radius: 3px; flex-shrink: 0; }
+.splitter:hover, .splitter:active { background: #4b6fff; }
 .tree-tools { display: flex; gap: 4px; padding: 2px 0 6px; border-bottom: 1px dashed #ebeef5; margin-bottom: 4px; }
 .node-changed { color: #f56c6c; font-weight: 600; }
 .node-clean { color: #67c23a; }
