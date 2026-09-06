@@ -29,4 +29,24 @@ describe('路由守卫', () => {
     await router.push('/')
     expect(router.currentRoute.value.name).toBe('login')
   })
+
+  it('项目内六功能段:路径/命名契约;空段重定向到功能用例管理', async () => {
+    localStorage.setItem('tt_token', 'jwt-1')
+    await router.push('/projects/1')
+    expect(router.currentRoute.value.path).toBe('/projects/1/cases')
+    expect(router.currentRoute.value.name).toBe('project-cases')
+
+    const table: [string, string][] = [
+      ['/projects/1/knowledge', 'project-knowledge'],
+      ['/projects/1/ai/jobs', 'project-ai-jobs'],
+      ['/projects/1/ai/repo', 'project-ai-repo'],
+      ['/projects/1/ai/cross', 'project-ai-cross'],
+      ['/projects/1/ui/web', 'project-ui-web'],
+    ]
+    for (const [path, name] of table) {
+      await router.push(path)
+      expect(router.currentRoute.value.name).toBe(name)
+    }
+    localStorage.removeItem('tt_token')
+  })
 })

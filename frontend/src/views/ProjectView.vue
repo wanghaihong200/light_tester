@@ -15,26 +15,23 @@
           成员
         </el-button>
       </div>
-      <el-tabs v-model="tab" class="tabs">
-        <el-tab-pane label="用例导图" name="mindmap">
-          <MindmapPane v-if="project" :key="mindmapKey" :project-id="project.id" :project-name="project.name" />
-        </el-tab-pane>
-        <el-tab-pane label="文档库" name="documents">
-          <DocumentsPane v-if="project" :project-id="project.id" />
-        </el-tab-pane>
-        <el-tab-pane label="生成任务" name="jobs">
-          <JobsPane v-if="project" :project-id="project.id" :project="project" @staging-accepted="onStagingAccepted" />
-        </el-tab-pane>
-        <el-tab-pane label="自动化工程" name="repo">
-          <RepoPane v-if="project && tab === 'repo'" :project-id="project.id" :project="project" />
-        </el-tab-pane>
-        <el-tab-pane label="Web自动化" name="webauto">
-          <WebAutoPane v-if="project && tab === 'webauto'" :project-id="project.id" />
-        </el-tab-pane>
-        <el-tab-pane label="多端 UI 自动化" name="crossauto">
-          <CrossAutoPane v-if="project && tab === 'crossauto'" :project-id="project.id" />
-        </el-tab-pane>
-      </el-tabs>
+      <!-- 功能段由嵌套路由渲染;project 未就绪不挂子段(子组件要求 id 非空)。
+           props 按需下发:project-name 仅导图段需要,project 对象仅任务/工程段需要,
+           其余段传 undefined,避免对象落入 $attrs 渲染成脏 DOM 属性 -->
+      <!-- 定高 flex 链(教训⑦):替代原 el-tabs 的 .tabs 高度链,功能段容器要真实尺寸 -->
+      <div class="panel-body">
+        <router-view v-slot="{ Component }">
+          <component
+            :is="Component"
+            v-if="project"
+            :key="componentKey"
+            :project-id="project.id"
+            :project-name="route.name === 'project-cases' ? project.name : undefined"
+            :project="needsProjectObject ? project : undefined"
+            @staging-accepted="onStagingAccepted"
+          />
+        </router-view>
+      </div>
     </div>
     <ProjectMembersDialog v-if="project" :visible="membersVisible" :project-id="project.id" @update:visible="membersVisible = $event" />
   </div>
@@ -42,42 +39,32 @@
 
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import DocumentsPane from '../components/DocumentsPane.vue'
-import JobsPane from '../components/JobsPane.vue'
-import MindmapPane from '../components/MindmapPane.vue'
 import ProjectMembersDialog from '../components/ProjectMembersDialog.vue'
-import RepoPane from '../components/RepoPane.vue'
-import CrossAutoPane from '../components/crossauto/CrossAutoPane.vue'
-import WebAutoPane from '../components/webauto/WebAutoPane.vue'
 import { listProjects } from '../api/projects'
 import type { Project } from '../types'
 
 const route = useRoute()
 const project = ref<Project | null>(null)
 const loaded = ref(false)
-const tab = ref('mindmap')
 const membersVisible = ref(false)
-const mindmapKey = ref(0)
-const mindmapDirty = ref(false)
 
-// 转正后导图需重挂刷新;但导图 tab 隐藏时容器 display:none 尺寸为 0,
-// simple-mind-map 构造会抛"容器元素el的宽高不能为0"——推迟到 tab 激活时再重挂
-function onStagingAccepted() {
-  if (tab.value === 'mindmap') {
-    mindmapKey.value++
-  } else {
-    mindmapDirty.value = true
-  }
+// 任务/工程段(JobsPane/RepoPane)的 props 契约要求完整 project 对象
+const needsProjectObject = computed(
+  () => route.name === 'project-ai-jobs' || route.name === 'project-ai-repo',
+)
+
+// 暂存转正后导图需重挂刷新。重挂键只在 cases 段携带计数:
+// 转正发生在任务段,key 在切回 cases 时才求值,天然实现"延迟到激活时重挂";
+// 其他段 key 恒定,绝不误重挂(任务段 SSE 连接不因重挂中断)
+const remountCases = ref(0)
+const componentKey = computed(() =>
+  route.name === 'project-cases' ? `cases-${remountCases.value}` : String(route.name ?? ''),
+)
+function onStagingAccepted(): void {
+  remountCases.value++
 }
-
-watch(tab, (t) => {
-  if (t === 'mindmap' && mindmapDirty.value) {
-    mindmapDirty.value = false
-    mindmapKey.value++
-  }
-})
 
 onMounted(async () => {
   try {
@@ -127,16 +114,15 @@ onMounted(async () => {
 .members-btn {
   margin-left: auto;
 }
-.tabs {
+.panel-body {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
 }
-.tabs :deep(.el-tabs__content) {
+/* 功能段 Pane 根元素(height:100%/自身 flex 链)在定高容器内撑满剩余空间 */
+.panel-body > :deep(*) {
   flex: 1;
-}
-.tabs :deep(.el-tab-pane) {
-  height: 100%;
+  min-height: 0;
 }
 </style>

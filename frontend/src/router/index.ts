@@ -21,8 +21,17 @@ const router = createRouter({
         },
         {
           path: 'projects/:id',
-          name: 'project-detail',
           component: () => import('../views/ProjectView.vue'),
+          children: [
+            // 默认功能段:功能用例管理(切换项目永远落这里,ADR-0007)
+            { path: '', redirect: (to) => ({ name: 'project-cases', params: to.params }) },
+            { path: 'cases', name: 'project-cases', component: () => import('../components/MindmapPane.vue') },
+            { path: 'knowledge', name: 'project-knowledge', component: () => import('../components/DocumentsPane.vue') },
+            { path: 'ai/jobs', name: 'project-ai-jobs', component: () => import('../components/JobsPane.vue') },
+            { path: 'ai/repo', name: 'project-ai-repo', component: () => import('../components/RepoPane.vue') },
+            { path: 'ai/cross', name: 'project-ai-cross', component: () => import('../components/crossauto/CrossAutoPane.vue') },
+            { path: 'ui/web', name: 'project-ui-web', component: () => import('../components/webauto/WebAutoPane.vue') },
+          ],
         },
         {
           path: 'users',
