@@ -32,6 +32,17 @@ describe('http client', () => {
     expect(err.message).toBe('project name already exists')
   })
 
+  // 钉死生产端 body 传播:dict detail(plan11 导出校验 {errors:[…]})必须随 ApiError.body 抛出,
+  // 否则弹窗侧错误清单静默退化为 [object Object](message 语义保持 String(detail) 不变)
+  it('非 2xx 把解析后的 body 挂到 ApiError.body,message 语义不变', async () => {
+    stubFetch(400, { detail: { errors: ['步骤1: ai_tap 无法导出'] } })
+    const err = await http.post('/ui-scripts/42/export', { branch: 'main' }).catch((e) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect((err as ApiError).status).toBe(400)
+    expect((err as ApiError).body).toEqual({ detail: { errors: ['步骤1: ai_tap 无法导出'] } })
+    expect(err.message).toBe('[object Object]')
+  })
+
   it('非 2xx 且无 JSON body 时 message 回退为 HTTP 状态码', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('boom', { status: 500 })))
     const err = await http.get('/projects').catch((e) => e)
