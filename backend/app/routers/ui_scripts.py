@@ -174,8 +174,18 @@ def export_script(
         sync_repo(repo)  # 同步失败不阻断(首推/离线可继续);wc 就绪后再落盘
     except GitError:
         pass
-    # push_files 只 git add 给定路径,产物必须先写入 working copy(auth_states/ 需先建目录)
+    # push_files 只 git add 给定路径,产物必须先写入 working copy(auth_states/ 需先建目录)。
+    # 写盘前先做与 push_files 同款的路径包含检查:auth.name 未消毒,名字含 ../ 时
+    # 不能等 push 阶段才拦(文件此时已落盘越界),必须在写盘前置 400。
     wc = working_copy_path(repo)
+    wc_resolved = wc.resolve()
+    for rel in bundle.files:
+        try:
+            (wc / rel).resolve().relative_to(wc_resolved)
+        except ValueError:
+            bundle.errors.append(f"导出路径越界:{rel}(登录态名称含非法路径字符,请改名后重试)")
+    if bundle.errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"errors": bundle.errors})
     for rel, content in bundle.files.items():
         dest = wc / rel
         dest.parent.mkdir(parents=True, exist_ok=True)

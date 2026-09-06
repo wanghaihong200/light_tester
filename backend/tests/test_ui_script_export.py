@@ -262,3 +262,26 @@ def test_export_auth_state_file_missing_400(client, db, repos_dir, tmp_path):
     assert r.status_code == 400
     errors = r.json()["detail"]["errors"]
     assert any("缺失" in e and "ghost_state" in e for e in errors)
+
+
+def test_export_auth_state_name_traversal_400(client, db, repos_dir, tmp_path):
+    """登录态名含 ../ 路径穿越 → 400 errors(越界文案);写盘守卫生效,wc 外不得落任何文件。"""
+    p, _bare = _mk_project_with_web_repo(db, tmp_path, "越界名导出项目")
+    state_file = tmp_path / "auth" / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text('{"cookies": []}', encoding="utf-8")
+    auth = UiAuthState(project_id=p.id, name="../../evil", storage_path=str(state_file))
+    db.add(auth)
+    db.commit()
+    db.refresh(auth)
+    doc = dict(DOC, meta={"target": "web", "auth_state_id": auth.id})
+    s = _mk_web_script(db, p.id, doc)
+    h = _admin_headers(client, db)
+    r = client.post(f"/api/ui-scripts/{s.id}/export", headers=h, json={"branch": "main"})
+    assert r.status_code == 400
+    errors = r.json()["detail"]["errors"]
+    assert errors and any("越界" in e for e in errors)
+    # 写穿断言:repos_dir 下除 web 仓 working copy 目录本身,不得出现任何新文件
+    repo_row = db.query(AutomationRepo).filter_by(project_id=p.id, kind="web").first()
+    assert sorted(x.name for x in repos_dir.iterdir()) == [working_copy_path(repo_row).name]
+    assert not (repos_dir / "evil.json").exists()
