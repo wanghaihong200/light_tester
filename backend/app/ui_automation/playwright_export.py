@@ -26,8 +26,8 @@ VARIABLES = {variables}
 
 
 def _v(name: str) -> str:
-    """取变量;未定义时保留 {{name}} 占位符(与平台渲染语义一致)。"""
-    return str(VARIABLES.get(name, "{{" + name + "}}"))
+    """取变量;未定义时保留 {{{{name}}}} 占位符(与平台渲染语义一致)。"""
+    return str(VARIABLES.get(name, "{{{{" + name + "}}}}"))
 
 '''
 

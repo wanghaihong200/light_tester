@@ -1,5 +1,5 @@
 # backend/tests/test_playwright_export.py
-from app.ui_automation.playwright_export import render_locator, render_steps, slugify
+from app.ui_automation.playwright_export import _PY_HEADER, render_locator, render_steps, slugify
 
 
 # ---- slugify ----
@@ -80,3 +80,12 @@ def test_render_steps_rejects_ai_actions():
     assert len(errs) == 1
     assert "步骤1" in errs[0] and "ai_tap" in errs[0]
     assert len(lines) == 1  # 可导出步骤照常渲染
+
+
+# ---- _PY_HEADER 模板:format 后花括号保真(Task 5 将来的调用形态) ----
+def test_py_header_format_keeps_placeholder_braces():
+    out = _PY_HEADER.format(script_id=1, script_name="x", exported_at="2026-09-06 00:00",
+                            filename="test_1_x.py", auth_note="", variables="{}")
+    assert '"{{" + name + "}}"' in out  # _v 兜底表达式 format 后仍保留双花括号
+    assert "{{name}}" in out  # docstring 占位符 format 后仍保留 {{name}}
+    compile(out, "test_1_x.py", "exec")  # 格式化产物语法有效
