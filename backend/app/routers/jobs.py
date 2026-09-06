@@ -9,8 +9,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, get_current_user_sse
+from app.automation_repo import resolve_repo
 from app.config import settings
 from app.database import get_db
+from app.git_service import GitError, validate_repo_url
 from app.jobs.bus import bus
 from app.jobs.pipeline import enqueue_job
 from app.models import Case, Document, FeaturePoint, GenerationJob, Module, Project, Step, StagedCase, User
@@ -120,13 +122,16 @@ def create_job(project_id: int, payload: JobCreate, db: Session = Depends(get_db
     if doc is None or doc.project_id != project_id:
         raise HTTPException(400, "invalid document_id")
     module_id = _resolve_module_id(db, project_id, payload)
-    # api_generation 必须有有效 http(s) git_repo_url(case_generation 不要求)
+    # plan11:api_generation 必须有有效 http(s) 接口自动化仓(读 AutomationRepo kind=api 行,
+    # 不回退 Project 旧列;case_generation 不要求)
     if payload.job_type == "api_generation":
-        from app.git_service import GitError, validate_repo_url
+        api_repo = resolve_repo(db, project_id, "api")
+        if api_repo is None or not api_repo.repo_url:
+            raise HTTPException(400, "项目未配置接口自动化仓,请先在自动化工程页配置")
         try:
-            validate_repo_url(project.git_repo_url or "")
+            validate_repo_url(api_repo.repo_url)
         except GitError:
-            raise HTTPException(400, "项目未配置有效的 git_repo_url")
+            raise HTTPException(400, "接口自动化仓 URL 无效,必须是 http(s)")
     job = GenerationJob(
         project_id=project_id,
         document_id=payload.document_id,

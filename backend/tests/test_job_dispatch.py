@@ -44,9 +44,9 @@ async def test_process_job_dispatches_api_generation(monkeypatch):
 
 
 # Issue D: 用 SessionLocal() 直接操作(无 db_session fixture)
-# Issue E: 创建有效 Document + Module,使校验走到 git_repo_url 而非 document_id
+# Issue E: 创建有效 Document + Module,使校验走到接口仓校验而非 document_id
 def test_create_job_api_generation_requires_git_repo_url(client, db_session):
-    """POST /api/projects/{id}/jobs 带 job_type=api_generation 但项目无 git_repo_url→400。"""
+    """POST /api/projects/{id}/jobs 带 job_type=api_generation 但项目未配 api 仓行→400。"""
     from app.database import SessionLocal
     from app.models import Project, Document, Module
     ah = _admin_headers(client, db_session)
@@ -71,7 +71,8 @@ def test_create_job_api_generation_requires_git_repo_url(client, db_session):
             headers=ah,
         )
         assert r.status_code == 400
-        assert "git_repo_url" in r.json()["detail"]
+        # Task 3 文案:缺 api 仓行时报「项目未配置接口自动化仓…」(不再提旧列名)
+        assert "接口自动化仓" in r.json()["detail"]
     finally:
         db.close()
 

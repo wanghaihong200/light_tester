@@ -240,8 +240,8 @@ def test_repo_editor_can_sync(tmp_path, monkeypatch, client, db_session, make_us
         json={"name": "editor 同步项目", "git_repo_url": f"file:///{bare.as_posix()}", "git_token": "tok"},
         headers=ah,
     ).json()["id"]
-    # Task 2(方案 B):sync 按 api 仓行解析,补种同 URL/token 行(Task 3 写透后此行由 create_project 产生)
-    _seed_api_repo(db_session, pid, f"file:///{bare.as_posix()}", "tok")
+    # Task 3 写透落地:项目经 POST /api/projects 携 git 字段创建,api 仓行已由 create_project 产生;
+    # 此处不再补种(重复种会撞 uq_autorepo_project_kind)
     eh = _auth(client, db_session, make_user, "jreditor", project_ids=[pid], role="editor")
     r = client.post(f"/api/projects/{pid}/repo/sync", json={}, headers=eh)
     assert r.status_code == 200
