@@ -1,8 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import ProjectView from '../../src/views/ProjectView.vue'
-import { resetTabs, useTabs } from '../../src/composables/useTabs'
 
 vi.mock('../../src/api/projects', () => ({
   listProjects: vi.fn().mockResolvedValue([
@@ -24,20 +23,15 @@ async function mountAt(path: string) {
   return mount(ProjectView, { global: { plugins: [router], stubs } })
 }
 
-describe('ProjectView 页签注册', () => {
-  beforeEach(() => resetTabs())
-
-  it('挂载后把项目注册进布局壳页签;未命中项目回填「未知项目」', async () => {
+// 临时形态:页签机制已删除,仅保留页面文案断言(Task 3 全量重写本文件)
+describe('ProjectView 页面渲染', () => {
+  it('挂载后显示项目名;未命中项目显示「项目不存在」', async () => {
     const wrapper = await mountAt('/projects/1')
     await flushPromises()
-    const { tabs } = useTabs()
-    expect(tabs.value.some((t) => t.key === 'project-1' && t.name === '商城系统')).toBe(true)
     expect(wrapper.text()).toContain('商城系统')
 
-    resetTabs()
     const bad = await mountAt('/projects/99')
     await flushPromises()
-    expect(tabs.value.some((t) => t.key === 'project-99' && t.name === '未知项目')).toBe(true)
     expect(bad.text()).toContain('项目不存在')
   })
 })

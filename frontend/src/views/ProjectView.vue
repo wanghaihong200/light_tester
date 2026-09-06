@@ -52,11 +52,9 @@ import RepoPane from '../components/RepoPane.vue'
 import CrossAutoPane from '../components/crossauto/CrossAutoPane.vue'
 import WebAutoPane from '../components/webauto/WebAutoPane.vue'
 import { listProjects } from '../api/projects'
-import { useTabs } from '../composables/useTabs'
 import type { Project } from '../types'
 
 const route = useRoute()
-const { openProject } = useTabs()
 const project = ref<Project | null>(null)
 const loaded = ref(false)
 const tab = ref('mindmap')
@@ -86,7 +84,6 @@ onMounted(async () => {
     const id = Number(route.params.id)
     const all = await listProjects()
     project.value = all.find((p) => p.id === id) ?? null
-    openProject(id, project.value?.name ?? '未知项目') // 页签名回填(已存在则改名)
     if (!project.value) ElMessage.error('项目不存在')
   } catch (e) {
     ElMessage.error(`加载项目失败:${(e as Error).message}`)

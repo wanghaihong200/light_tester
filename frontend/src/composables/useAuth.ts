@@ -31,7 +31,7 @@ export function useAuth() {
   return { token, user, isAdmin, login, logout, fetchMe }
 }
 
-// 仅测试用:模块级状态在用例间共享,需要显式复位(同 useTabs.resetTabs)
+// 仅测试用:模块级状态在用例间共享,需要显式复位
 export function resetAuth(): void {
   setToken(null)
   token.value = null

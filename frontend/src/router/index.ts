@@ -4,7 +4,7 @@ import { useAuth } from '../composables/useAuth'
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    // 登录页在布局壳路由外(不套 SideMenu/TopHeader/TabBar)
+    // 登录页在布局壳路由外(不套 SideMenu/TopHeader)
     {
       path: '/login',
       name: 'login',
