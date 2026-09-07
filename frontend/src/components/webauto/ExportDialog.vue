@@ -79,6 +79,13 @@ function extractExportErrors(e: unknown): string[] {
   return ['导出失败,请检查脚本内容或查看后端日志']
 }
 
+// 成功提示带出导出文件清单:登录态文件(auth_states/)显式标注,避免"不知道登录态有没有附带"
+// 的误判(2026-09-07 冒烟:提示只有 commit 短哈希,用户看不到登录态已随仓附带)。
+function successText(r: { branch: string; commit_short: string; files?: string[] }): string {
+  const list = (r.files ?? []).map((f) => (f.startsWith('auth_states/') ? `${f}(登录态)` : f)).join('、')
+  return list ? `已推送 ${r.branch}@${r.commit_short} · ${list}` : `已推送 ${r.branch}@${r.commit_short}`
+}
+
 async function onConfirm() {
   busy.value = true
   errors.value = []
@@ -87,7 +94,7 @@ async function onConfirm() {
       branch: branch.value,
       commit_message: commitMessage.value || undefined,
     })
-    ElMessage.success(`已推送 ${r.branch}@${r.commit_short}`)
+    ElMessage.success({ message: successText(r), duration: 6000 })
     emit('exported', r.commit_short)
     emit('update:visible', false)
   } catch (e) {

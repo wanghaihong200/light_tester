@@ -52,6 +52,17 @@ describe('ExportDialog', () => {
     expect(w.emitted('update:visible')).toContainEqual([false])
   })
 
+  it('成功提示文案列出导出文件清单并对 auth_states/ 标注登录态', () => {
+    const w = mountDlg(false)
+    const fn = (w.vm as unknown as {
+      successText: (r: { branch: string; commit_short: string; files?: string[] }) => string
+    }).successText
+    expect(fn({ branch: 'main', commit_short: 'ab12cd3', files: ['RUN.md', 'auth_states/testerhome.json', 'test_1_x.py'] }))
+      .toBe('已推送 main@ab12cd3 · RUN.md、auth_states/testerhome.json(登录态)、test_1_x.py')
+    // files 缺省(异常后端形态)不抛错,退回纯 commit 提示
+    expect(fn({ branch: 'main', commit_short: 'ab12cd3' })).toBe('已推送 main@ab12cd3')
+  })
+
   it('400 透传错误文本渲染为错误清单且不 emit(真实 ApiError 形状)', async () => {
     mocks.listBranches.mockResolvedValue({ branches: ['main'] })
     mocks.exportUiScript.mockRejectedValue(new ApiError(400, '步骤1: ai_tap 无法导出'))
