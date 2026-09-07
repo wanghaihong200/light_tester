@@ -64,7 +64,12 @@ def dedupe_and_map(raw_events: list[dict]) -> list[dict]:
                 steps.append({"id": _next_id(), "action": "click", "target": ev["target"]})
         elif kind == "goto":
             flush_input()
-            steps.append({"id": _next_id(), "action": "goto", "params": {"url": ev["url"]}})
+            # Turbolinks/SPA 类站点在真实导航后会做同文档 replaceState,再次触发 framenavigated:
+            # 连续同 URL 的 goto 只保留一条;非连续同 URL 是真实往返(A→B→A),不合并。
+            # 映射流长度仍单调不减(重复只发生在末尾),_sync_locked 的逐位对齐不受影响。
+            url = ev["url"]
+            if not (steps and steps[-1]["action"] == "goto" and steps[-1]["params"]["url"] == url):
+                steps.append({"id": _next_id(), "action": "goto", "params": {"url": url}})
     flush_input()
     return steps
 

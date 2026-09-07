@@ -44,6 +44,24 @@ def test_map_enter_and_goto_and_change():
     assert steps[2]["params"]["key"] == "Enter"
 
 
+def test_dedupe_consecutive_duplicate_goto():
+    # Turbolinks/SPA 类站点会在真实导航后做同文档 replaceState,再次触发 framenavigated:
+    # 连续同 URL 的 goto 只保留一条(2026-09-07 冒烟:testerhome 一次导航录出两条相同 goto)
+    steps = events.dedupe_and_map([
+        {"kind": "goto", "url": "https://x.com/"},
+        {"kind": "goto", "url": "https://x.com/"},
+        {"kind": "goto", "url": "https://x.com/"},
+    ])
+    assert [s["action"] for s in steps] == ["goto"]
+    # 非连续的同 URL 是真实往返(A→B→A),不合并
+    steps = events.dedupe_and_map([
+        {"kind": "goto", "url": "https://x.com/"},
+        {"kind": "goto", "url": "https://y.com/"},
+        {"kind": "goto", "url": "https://x.com/"},
+    ])
+    assert [s["params"]["url"] for s in steps] == ["https://x.com/", "https://y.com/", "https://x.com/"]
+
+
 def test_step_summary_and_locator_candidates():
     step = {"id": "s", "action": "click", "locator": {"strategy": "role", "role": "button", "name": "登录", "fallbacks": [{"strategy": "css", "value": "#b"}]}}
     assert events.step_summary(step) == "点击 登录"
