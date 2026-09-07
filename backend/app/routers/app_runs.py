@@ -4,13 +4,14 @@ import json
 import threading
 import uuid
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.app_automation import case_schema, devices, executor, inspect_check
+from app.app_automation import case_schema, devices, executor, inspect_check, perf_csv
 from app.auth import get_current_user, get_current_user_sse
 from app.config import settings
 from app.database import get_db
@@ -185,3 +186,25 @@ def force_finish(run_id: int, db: Session = Depends(get_db), current: User = Dep
     executor.notify(run_id, {"type": "done", "status": "cancelled"})
     db.refresh(run)
     return run
+
+
+@router.get("/projects/{project_id}/app-runs/comparison")
+def comparison(project_id: int, batch_id: str = Query(...), db: Session = Depends(get_db),
+               current: User = Depends(get_current_user)):
+    """分发批量执行对比矩阵:同批次全部设备行(执行/检查点/性能/启动一并返回,前端拼表)。"""
+    ensure_project_access(db, current, project_id, "viewer")
+    runs = (db.query(AppRun)
+            .filter(AppRun.project_id == project_id, AppRun.batch_id == batch_id,
+                    AppRun.is_deleted.is_(False))
+            .order_by(AppRun.device_serial).all())
+    if not runs:
+        raise HTTPException(404, "batch not found")
+    return {"batch_id": batch_id, "script_id": runs[0].script_id, "script_name": runs[0].script_name,
+            "runs": [AppRunOut.model_validate(r).model_dump(mode="json") for r in runs]}
+
+
+@router.get("/app-runs/{run_id}/perf-series")
+def perf_series(run_id: int, db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    run = _get_run(db, run_id, current, "viewer")
+    series = perf_csv.read_perf_csvs(Path(settings.app_data_dir) / "runs" / str(run.id) / "perf")
+    return {"series": series}
