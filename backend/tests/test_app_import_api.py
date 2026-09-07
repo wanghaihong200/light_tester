@@ -65,6 +65,44 @@ def test_list_device_cases_endpoint(client, device_env, db_session):
     assert r.json() == [{"file_name": "case_a.json"}, {"file_name": "case_b.json"}]
 
 
+class _Completed:
+    def __init__(self, stdout=b"", stderr=b"", rc=0):
+        self.returncode = rc
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_list_device_cases_dir_whitelist(monkeypatch):
+    """终审 I1:?dir= 直通 adb shell,在设备端 sh 里执行,须白名单校验防注入。"""
+    captured: dict = {}
+
+    def fake_run(argv, capture_output, timeout):
+        captured["argv"] = argv
+        return _Completed(stdout=b"/sdcard/x/case_a.json\n")
+
+    monkeypatch.setattr(app_devices.subprocess, "run", fake_run)
+    # 合法目录放行:默认目录 / 含空格短横线的自定义目录
+    assert app_devices.list_device_cases("DEV1") == [{"file_name": "case_a.json"}]
+    assert captured["argv"][-1] == f"{app_devices.HARNESS_IMPORT_DIR}/*.json"
+    captured.clear()
+    assert app_devices.list_device_cases("DEV1", "/sdcard/harness files/v2") == [{"file_name": "case_a.json"}]
+    # 注入载荷被拒且不触达 adb(路由层 except 转 400)
+    captured.clear()
+    with pytest.raises(RuntimeError):
+        app_devices.list_device_cases("DEV1", "y; reboot; ")
+    assert not captured
+
+
+def test_device_cases_endpoint_rejects_injected_dir(client, db_session):
+    """终审 I1 端到端:?dir= 注入载荷被白名单拦下,路由 except 转 400(用真实现,不走 device_env mock)。"""
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "注入项目")
+    r = client.get(f"/api/projects/{pid}/app-scripts/device-cases?serial=DEV1&dir=y%3B%20reboot%3B%20",
+                   headers=h)
+    assert r.status_code == 400
+    assert "设备读取失败" in r.json()["detail"]
+
+
 def test_import_device_creates_script(client, device_env, db_session):
     h = _admin_headers(client, db_session)
     pid = _mk_project(client, h, "拉取项目")

@@ -31,7 +31,11 @@ def list_devices_detailed() -> list[dict]:
 
 
 def list_device_cases(serial: str, remote_dir: str = HARNESS_IMPORT_DIR) -> list[dict]:
-    """列出设备上录制导出的用例 JSON(只列文件名,不拉内容);目录不存在/为空返回 []。"""
+    """列出设备上录制导出的用例 JSON(只列文件名,不拉内容);目录不存在/为空返回 []。
+    ?dir= 会拼进 adb shell 参数、在设备端 sh 里执行,目录须过白名单防注入(终审 I1;
+    保留 ?dir= 覆盖能力,见前置研究修正 #3);不匹配抛 RuntimeError(路由 except 转 400)。"""
+    if not re.fullmatch(r"[/A-Za-z0-9_.\- ]+", remote_dir):
+        raise RuntimeError(f"非法目录: {remote_dir}")
     p = subprocess.run(["adb", "-s", serial, "shell", "ls", f"{remote_dir}/*.json"],
                        capture_output=True, timeout=30)
     names = []
