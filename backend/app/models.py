@@ -326,6 +326,55 @@ class AutomationRepo(Base):
         return self.repo_token
 
 
+class AppScript(Base):
+    __tablename__ = "app_scripts"
+    __table_args__ = {"comment": "APP自动化脚本表：SoloPi 原生用例 JSON 唯一事实源"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="脚本主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    name: Mapped[str] = mapped_column(String(200), comment="脚本名称(平台展示名;用例名 caseName 在 case_json 内)")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="脚本描述")
+    case_json: Mapped[dict] = mapped_column(JSON, comment="SoloPi 原生用例 JSON,原样存储(caseName/targetAppPackage/operationLog.steps…)")
+    app_package: Mapped[str] = mapped_column(String(200), default="", comment="被测应用包名(case_json.targetAppPackage 派生,便于列表展示)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+
+
+class AppRun(Base):
+    __tablename__ = "app_runs"
+    __table_args__ = {"comment": "APP自动化执行记录表：一次 SoloPi 用例回放(单设备一行,批量=多行同 batch_id)"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="执行记录主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    status: Mapped[str] = mapped_column(String(20), default="pending", comment="状态：pending/running/passed/failed/cancelled")
+    script_id: Mapped[int] = mapped_column(ForeignKey("app_scripts.id"), comment="执行的脚本ID")
+    script_name: Mapped[str] = mapped_column(String(200), default="", comment="执行时的脚本名快照(脚本改名/删除不影响历史)")
+    device_serial: Mapped[str] = mapped_column(String(100), comment="设备序列号(adb serial)")
+    batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True, comment="分发批量执行分组 UUID;单设备执行为 NULL")
+    variables: Mapped[dict] = mapped_column(JSON, default=dict, comment="运行参数(Phase 1 预留不消费)")
+    pre_checks: Mapped[list] = mapped_column(JSON, default=list, comment="前置检查点定义列表(inspect 自判)")
+    post_checks: Mapped[list] = mapped_column(JSON, default=list, comment="后置检查点定义列表(inspect 自判)")
+    perf_items: Mapped[list] = mapped_column(JSON, default=list, comment="perf 采集项(CPU/FPS/Memory 等,以 perf-list 动态发现为准)")
+    run_state: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="CLI runId 终态快照:passed/failed/cancelled")
+    results: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="harness results[](失败含 exceptionMessage/exceptionStep/exceptionStepId)")
+    check_results: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment='检查点结果:{"pre":[…],"post":[…]}')
+    perf_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="perf-analyze 描述性统计(逐列 min/max/mean/median/p90)")
+    startup_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="startup-time 统计(LaunchState/ThisTime/TotalTime/WaitTime)")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="失败原因(环境级错误或检查点未通过)")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="开始执行时间")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="终态时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+
+
 class User(Base):
     __tablename__ = "users"
     __table_args__ = {"comment": "平台用户(管理员建号,无自助注册)"}

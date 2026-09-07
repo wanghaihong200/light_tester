@@ -21,9 +21,11 @@ class Settings(BaseSettings):
     ai_vision_model: str = "glm-5.3-flash"   # 冒烟验证 grounding;不稳则切 glm-5v-turbo(仅改配置)
     ai_vision_model_family: str = "glm-v"    # Midscene 必填,决定坐标适配;GLM-V 系列固定 glm-v
     ui_runner_dir: Path = Path("runner-node")  # Node runner 包目录(相对 backend cwd)
+    app_data_dir: Path = Path("../data/app")  # APP自动化(计划 12):runs/{run_id}/(case.json/artifacts/perf)、imports/
 
 
 settings = Settings()
 settings.repos_dir.mkdir(parents=True, exist_ok=True)
 settings.uploads_dir.mkdir(parents=True, exist_ok=True)
 settings.ui_data_dir.mkdir(parents=True, exist_ok=True)
+settings.app_data_dir.mkdir(parents=True, exist_ok=True)

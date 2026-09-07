@@ -174,3 +174,42 @@ class UiRunOut(BaseModel):
     ai_usage: dict | None  # AI 执行用量:{input_tokens,output_tokens,cost_usd,report_path}
     started_at: datetime | None
     finished_at: datetime | None
+
+
+# APP自动化脚本:SoloPi 原生用例 JSON 唯一事实源(计划 12,独立域)
+class AppScriptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    name: str
+    description: str | None
+    case_json: dict
+    app_package: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# APP自动化执行记录:单设备一行,分发批量=多行同 batch_id
+class AppRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    status: str
+    script_id: int
+    script_name: str
+    device_serial: str
+    batch_id: str | None
+    variables: dict
+    pre_checks: list
+    post_checks: list
+    perf_items: list
+    run_state: str | None
+    results: list | None
+    check_results: dict | None
+    perf_summary: dict | None
+    startup_summary: dict | None
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None

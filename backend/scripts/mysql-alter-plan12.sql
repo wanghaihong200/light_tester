@@ -1,0 +1,45 @@
+-- 计划 12:APP自动化独立域(app_scripts / app_runs)
+CREATE TABLE IF NOT EXISTS app_scripts (
+  id INT AUTO_INCREMENT PRIMARY KEY COMMENT '脚本主键ID',
+  project_id INT NOT NULL COMMENT '所属项目ID',
+  name VARCHAR(200) NOT NULL COMMENT '脚本名称(平台展示名)',
+  description TEXT NULL COMMENT '脚本描述',
+  case_json JSON NOT NULL COMMENT 'SoloPi 原生用例 JSON,原样存储',
+  app_package VARCHAR(200) DEFAULT '' COMMENT '被测应用包名',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  is_deleted TINYINT(1) DEFAULT 0 COMMENT '是否已删除(软删除标记)',
+  created_by INT NULL COMMENT '创建人 users.id',
+  updated_by INT NULL COMMENT '最后修改人 users.id',
+  KEY idx_appscripts_project (project_id),
+  CONSTRAINT fk_appscripts_project FOREIGN KEY (project_id) REFERENCES projects (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='APP自动化脚本表：SoloPi 原生用例 JSON 唯一事实源';
+
+CREATE TABLE IF NOT EXISTS app_runs (
+  id INT AUTO_INCREMENT PRIMARY KEY COMMENT '执行记录主键ID',
+  project_id INT NOT NULL COMMENT '所属项目ID',
+  status VARCHAR(20) DEFAULT 'pending' COMMENT '状态：pending/running/passed/failed/cancelled',
+  script_id INT NOT NULL COMMENT '执行的脚本ID',
+  script_name VARCHAR(200) DEFAULT '' COMMENT '执行时的脚本名快照',
+  device_serial VARCHAR(100) NOT NULL COMMENT '设备序列号(adb serial)',
+  batch_id VARCHAR(36) NULL COMMENT '分发批量执行分组 UUID;单设备为 NULL',
+  variables JSON COMMENT '运行参数(预留)',
+  pre_checks JSON COMMENT '前置检查点定义',
+  post_checks JSON COMMENT '后置检查点定义',
+  perf_items JSON COMMENT 'perf 采集项',
+  run_state VARCHAR(20) NULL COMMENT 'CLI runId 终态快照',
+  results JSON NULL COMMENT 'harness results[]',
+  check_results JSON NULL COMMENT '检查点结果 {pre,post}',
+  perf_summary JSON NULL COMMENT 'perf-analyze 统计',
+  startup_summary JSON NULL COMMENT 'startup-time 统计',
+  error TEXT NULL COMMENT '失败原因',
+  started_at DATETIME NULL COMMENT '开始执行时间',
+  finished_at DATETIME NULL COMMENT '终态时间',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  is_deleted TINYINT(1) DEFAULT 0 COMMENT '是否已删除(软删除标记)',
+  KEY idx_appruns_project (project_id),
+  KEY idx_appruns_batch (batch_id),
+  CONSTRAINT fk_appruns_project FOREIGN KEY (project_id) REFERENCES projects (id),
+  CONSTRAINT fk_appruns_script FOREIGN KEY (script_id) REFERENCES app_scripts (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='APP自动化执行记录表：单设备一行,批量=多行同 batch_id';
