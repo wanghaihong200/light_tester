@@ -20,7 +20,7 @@ from app import git_service
 from app.database import SessionLocal
 from app.models import AutomationRepo, AppScript
 
-from tests.test_app_scripts_api import _CASE, _admin_headers, _mk_project
+from tests.test_app_scripts_api import _CASE, _admin_headers, _auth, _mk_project
 
 
 @pytest.fixture()
@@ -102,6 +102,7 @@ def test_export_pushes_to_app_repo(client, db, repos_dir, tmp_path):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ok"] is True
+    assert body["branch"] == "main"
     assert any(f.startswith("test_") for f in body["files"])
     assert "RUN.md" in body["files"]
 
@@ -136,3 +137,25 @@ def test_export_untranslatable_400(client, db, repos_dir, tmp_path):
     r = client.post(f"/api/app-scripts/{s.id}/export", headers=h, json={"branch": "main"})
     assert r.status_code == 400
     assert any("GESTURE" in e for e in r.json()["detail"]["errors"])
+
+
+def test_export_viewer_403(client, db, make_user):
+    """viewer 无导出权:推外部仓 = editor 闸 → 403(非成员才是 404)。
+    模式照抄 tests/test_ui_script_export.py::test_export_viewer_403;建号/赋权走 app 域 _auth 同型 helper。"""
+    h = _admin_headers(client, db)
+    pid = _mk_project(client, h, "viewer导出app项目")
+    s = _mk_script(db, pid)
+    vh = _auth(client, db, make_user, "appexpviewer", project_ids=[pid], role="viewer")
+    r = client.post(f"/api/app-scripts/{s.id}/export", headers=vh, json={"branch": "main"})
+    assert r.status_code == 403
+
+
+def test_export_non_member_404(client, db, make_user):
+    """可见性先行:非项目成员对导出端点是 404(不泄漏存在性)。
+    模式照抄 tests/test_ui_script_export.py::test_export_non_member_404。"""
+    h = _admin_headers(client, db)
+    pid = _mk_project(client, h, "外人导出app项目")
+    s = _mk_script(db, pid)
+    oh = _auth(client, db, make_user, "appexpoutsider", project_ids=[], role="editor")
+    r = client.post(f"/api/app-scripts/{s.id}/export", headers=oh, json={"branch": "main"})
+    assert r.status_code == 404
