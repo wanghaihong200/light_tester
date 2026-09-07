@@ -25,7 +25,8 @@ watch(() => [props.visible, props.run?.id] as const, async ([v, id]) => {
   closeStream()
   if (props.run && !TERMINAL.includes(props.run.status)) {
     closeFn = subscribeAppRunEvents(id, async (e) => {
-      if (e.type === 'done' || e.type === 'error') {
+      // snapshot = SSE 断线兜底回读的终态(api 层 onerror),消费语义与 done 一致
+      if (e.type === 'done' || e.type === 'error' || e.type === 'snapshot') {
         closeStream()
         try { current.value = await getAppRun(id) } catch { /* 忽略 */ }
         emit('changed')

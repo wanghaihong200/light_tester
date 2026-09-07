@@ -4,6 +4,13 @@ import { flushPromises, mount } from '@vue/test-utils'
 const api = vi.hoisted(() => ({ createAppScript: vi.fn(), updateAppScript: vi.fn() }))
 vi.mock('../../src/api/appAutomation', () => api)
 
+// 只换掉 ElMessageBox.confirm(jsdom 里真确认框会挂起等点击),ElMessage 等其余导出保持真实现
+const msgbox = vi.hoisted(() => ({ confirm: vi.fn() }))
+vi.mock('element-plus', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ElMessageBox: msgbox,
+}))
+
 import AppScriptEditor from '../../src/components/appauto/AppScriptEditor.vue'
 
 const EXISTING = {
@@ -80,5 +87,59 @@ describe('AppScriptEditor', () => {
     expect(steps[2].operationMethod.actionEnum).toBe('SCROLL_TO_TOP') // 未支持动作原样保留
     expect(body.case.priority).toBe(2) // 未知顶层字段保留
     expect(body.case.recordMode).toBe('local')
+  })
+
+  // ── 终审 I2:导入时勾了 allow_high_risk 的用例,编辑保存若不带该字段会被后端 PUT 重拦 400,
+  //    编辑器又没有勾选框 = UI 死路;故保存前检测高危动作并确认后代传 allow_high_risk: true ──
+  const RISKY = {
+    ...EXISTING,
+    case_json: {
+      ...EXISTING.case_json,
+      operationLog: {
+        steps: [
+          { operationNode: null,
+            operationMethod: { actionEnum: 'CLEAR_DATA', operationParam: {}, encrypt: false, safeEncrypt: false },
+            operationIndex: 0, operationId: 'g', stepId: 'r1' },
+        ],
+      },
+    },
+  }
+
+  it('编辑含高危动作的导入用例:确认后带 allow_high_risk 保存', async () => {
+    api.updateAppScript.mockResolvedValue(RISKY)
+    msgbox.confirm.mockResolvedValue('confirm')
+    const w = mountEd(RISKY)
+    await flushPromises()
+    await (w.vm as any).save()
+    await flushPromises()
+    expect(msgbox.confirm).toHaveBeenCalledTimes(1)
+    expect(String(msgbox.confirm.mock.calls[0][0])).toContain('CLEAR_DATA') // 文案说明含哪些高危动作
+    expect(api.updateAppScript).toHaveBeenCalledTimes(1)
+    const body = api.updateAppScript.mock.calls[0][1]
+    expect(body.allow_high_risk).toBe(true)
+    expect(body.case.operationLog.steps[0].operationMethod.actionEnum).toBe('CLEAR_DATA')
+    expect(w.emitted('saved')).toBeTruthy()
+  })
+
+  it('高危保存被用户取消:不调 updateAppScript、不 emit saved', async () => {
+    api.updateAppScript.mockResolvedValue(RISKY)
+    msgbox.confirm.mockRejectedValue('cancel')
+    const w = mountEd(RISKY)
+    await flushPromises()
+    await (w.vm as any).save()
+    await flushPromises()
+    expect(msgbox.confirm).toHaveBeenCalledTimes(1)
+    expect(api.updateAppScript).not.toHaveBeenCalled()
+    expect(w.emitted('saved')).toBeFalsy()
+  })
+
+  it('无高危动作的保存不弹确认(维持既有行为)', async () => {
+    api.updateAppScript.mockResolvedValue(EXISTING)
+    const w = mountEd(EXISTING)
+    await flushPromises()
+    await (w.vm as any).save()
+    await flushPromises()
+    expect(msgbox.confirm).not.toHaveBeenCalled()
+    expect(api.updateAppScript).toHaveBeenCalledTimes(1)
   })
 })

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { createAppScript, updateAppScript } from '../../api/appAutomation'
 import type { AppCaseJson, AppCaseStep, AppScript } from '../../types'
 
@@ -10,6 +10,16 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'saved', s: AppScript): void 
 // 与后端 appium_export.SUPPORTED 对齐(勿加 IF/WHILE:官方 CLI 对内部动作编写/导入/回放一律拒绝)
 const ACTIONS = ['CLICK', 'LONG_CLICK', 'INPUT', 'CLICK_AND_INPUT', 'SLEEP', 'ASSERT', 'LET'] as const
 const NODE_ACTIONS = new Set(['CLICK', 'LONG_CLICK', 'INPUT', 'CLICK_AND_INPUT', 'ASSERT'])
+// 与后端 case_schema.high_risk_actions 的高危集对齐:导入勾了 allow_high_risk 的用例,编辑保存
+// 若不带该字段会被后端 PUT 重拦 400(编辑器无勾选框 = 死路),故保存前确认后代传(终审 I2)
+const HIGH_RISK_ACTIONS = ['CLEAR_DATA', 'KILL_PROCESS', 'JUMP_TO_PAGE']
+
+function highRiskActionsOf(drafts: Draft[]): string[] {
+  const acts = drafts
+    .filter((d) => d.raw && HIGH_RISK_ACTIONS.includes(d.raw.operationMethod.actionEnum))
+    .map((d) => d.raw!.operationMethod.actionEnum)
+  return [...new Set(acts)]
+}
 
 interface Draft {
   action: string
@@ -85,8 +95,25 @@ async function save() {
       caseDesc: desc.value || undefined,
       operationLog: { steps: stepsJson },
     }
+    // 编辑既有用例且步骤含高危动作:确认后代传 allow_high_risk,否则后端 PUT 400 且无处勾选。
+    // 新建路径不含高危(ACTIONS 七个动作之外进不来 raw),无需处理。
+    let allowHighRisk = false
+    if (props.script) {
+      const risky = highRiskActionsOf(steps.value)
+      if (risky.length) {
+        try {
+          await ElMessageBox.confirm(
+            `用例包含高危动作:${risky.join('、')}。保存后执行时仍需再次确认,是否继续保存?`,
+            '高危动作确认', { type: 'warning' })
+          allowHighRisk = true
+        } catch {
+          return // 用户取消:中止保存,原用例保持不变
+        }
+      }
+    }
     const saved = props.script
-      ? await updateAppScript(props.script.id, { case: next, name: caseName.value.trim() })
+      ? await updateAppScript(props.script.id, { case: next, name: caseName.value.trim(),
+          ...(allowHighRisk ? { allow_high_risk: true } : {}) })
       : await createAppScript(props.projectId, { case: next })
     ElMessage.success('已保存')
     emit('saved', saved)

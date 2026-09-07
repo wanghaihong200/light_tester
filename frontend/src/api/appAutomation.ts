@@ -1,6 +1,8 @@
 // APP自动化(计划 12):SoloPi 原生用例 JSON 域
 import { http, withSseToken } from './client'
-import type { AppCaseJson, AppPerfSeries, AppRun, AppScript, CheckDef, DeviceInfo } from '../types'
+import type { AppCaseJson, AppPerfSeries, AppRun, AppRunStatus, AppScript, CheckDef, DeviceInfo } from '../types'
+
+const TERMINAL_RUN_STATUS: AppRunStatus[] = ['passed', 'failed', 'cancelled']
 
 export interface DeviceCase {
   file_name: string
@@ -38,6 +40,12 @@ export const updateAppScript = (
 ) => http.put<AppScript>(`/app-scripts/${id}`, body)
 
 export const deleteAppScript = (id: number) => http.del(`/app-scripts/${id}`)
+
+// 导出为 Appium pytest 产物并推送到项目的 app 自动化仓(终审 I3,对齐 exportUiScript);
+// 400 时后端 detail 为字符串或 {errors:[…]}(不可导出步骤清单),由调用方经 e.body?.detail 渲染
+export const exportAppScript = (id: number, body: { branch: string; commit_message?: string }) =>
+  http.post<{ ok: boolean; branch: string; commit_short: string; pushed_files: string[]; files: string[] }>(
+    `/app-scripts/${id}/export`, body)
 
 export const listDeviceCases = (projectId: number, serial: string) =>
   http.get<DeviceCase[]>(
@@ -95,6 +103,22 @@ export function subscribeAppRunEvents(runId: number, onEvent: (e: AppRunEvent) =
     } catch {
       /* 坏帧忽略 */
     }
+  }
+  // 断线兜底(终审 T13①):后端终态断流/网络抖动会触发 onerror,EventSource 默认还会自动重连;
+  // 这里关流防重连,并回读最新状态——已终态给 snapshot(关流+回读语义),否则报连接断开。
+  // handler 置空防「正常 done 后消费方才 close」与迟到 onerror 双触发。
+  es.onerror = () => {
+    es.onerror = null
+    es.close()
+    void getAppRun(runId)
+      .then((run) => {
+        if (TERMINAL_RUN_STATUS.includes(run.status)) {
+          onEvent({ type: 'snapshot', status: run.status, run_state: run.run_state, error: run.error })
+        } else {
+          onEvent({ type: 'error', message: 'SSE 连接断开' })
+        }
+      })
+      .catch(() => onEvent({ type: 'error', message: 'SSE 连接断开' }))
   }
   return () => es.close()
 }

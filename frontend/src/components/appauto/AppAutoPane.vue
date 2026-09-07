@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  deleteAppScript, listAppRuns, listAppScripts,
+  deleteAppScript, exportAppScript, listAppRuns, listAppScripts,
 } from '../../api/appAutomation'
 import type { AppRun, AppScript } from '../../types'
 import AppRunDialog from './AppRunDialog.vue'
@@ -60,6 +60,45 @@ async function onDelete(s: AppScript) {
 
 defineExpose({ onDelete, doDelete })
 
+// 导出 Appium pytest 产物并推送到项目 APP 自动化仓(终审 I3):prompt 输入分支名(默认 main),
+// commit message 走后端默认;成功提示列文件清单(对齐计划 11 导出惯例)。
+// 400 detail 形态:字符串(无仓) / {errors:[…]}(拒导清单) / {error:…}(NothingToCommit),
+// client.ts 把 dict detail 退化成 '[object Object]' 话术,须从 e.body?.detail 还原结构再展示。
+function extractExportErrors(e: unknown): string[] {
+  const err = e as { body?: { detail?: unknown }; message?: string } | null
+  const detail = err?.body?.detail
+  if (detail && typeof detail === 'object' && Array.isArray((detail as { errors?: unknown }).errors)) {
+    return (detail as { errors: unknown[] }).errors.map(String)
+  }
+  if (detail && typeof detail === 'object' && (detail as { error?: unknown }).error) {
+    return [String((detail as { error: unknown }).error)]
+  }
+  if (typeof detail === 'string' && detail) return [detail]
+  if (err?.message && err.message !== '[object Object]') return [err.message]
+  return ['导出失败,请检查用例内容或查看后端日志']
+}
+
+async function onExport(s: AppScript) {
+  let branch = 'main'
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '将用例翻译为 Appium pytest 并推送到项目的 APP 自动化仓,输入目标分支:',
+      `导出「${s.name}」`, { inputValue: 'main', inputPattern: /\S+/, inputErrorMessage: '分支名不能为空' })
+    branch = (value || '').trim() || 'main'
+  } catch {
+    return // 用户取消
+  }
+  try {
+    const r = await exportAppScript(s.id, { branch })
+    const list = (r.files ?? []).join('、')
+    ElMessage.success({ message: `已推送 ${r.branch}@${r.commit_short}${list ? ` · ${list}` : ''}`, duration: 6000 })
+  } catch (e) {
+    const errs = extractExportErrors(e)
+    if (errs.length > 1) ElMessageBox.alert(errs.map((x) => `· ${x}`).join('\n'), '存在不可导出的步骤')
+    else ElMessage.error(errs[0])
+  }
+}
+
 const STATUS_TEXT: Record<string, string> = {
   pending: '排队', running: '执行中', passed: '通过', failed: '失败', cancelled: '已取消',
 }
@@ -83,6 +122,7 @@ const STATUS_TEXT: Record<string, string> = {
           <el-button link type="primary" @click="openRun(row, false)">执行</el-button>
           <el-button link type="primary" @click="openRun(row, true)">批量</el-button>
           <el-button link type="primary" @click="editing = row">编辑</el-button>
+          <el-button link type="success" plain @click="onExport(row)">导出</el-button>
           <el-button link type="danger" @click="onDelete(row)">删除</el-button>
         </template>
       </el-table-column>
