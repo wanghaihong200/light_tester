@@ -1,0 +1,134 @@
+"""Task 8(计划 12):用例导入双通道(设备拉取/文件上传)+ 设备与 perf 项端点 API 测试。
+
+对 brief 样例的仓内现状对齐(非行为偏离):
+- _admin_headers 需带 db_session(Task 7 已提交签名 _admin_headers(client, db_session));
+- 补 db_session 入参 + autouse TRUNCATE app_scripts/app_runs 清理(conftest._TABLES 未含该表,
+  同 tests/test_app_scripts_api.py 的 _clean_app_tables);
+- 顺手项(Task 7 评审遗留,非强制):补「非成员访问 app-scripts(含导入/设备面)→ 404」用例,
+  复用 tests.test_app_scripts_api 的 _auth 同型 helper。"""
+
+import json
+
+import pytest
+from sqlalchemy import text
+
+from app.app_automation import devices as app_devices
+from app.app_automation import solopi_cli
+from app.database import SessionLocal
+
+from tests.test_app_scripts_api import _CASE, _admin_headers, _auth, _mk_project
+
+
+@pytest.fixture
+def device_env(monkeypatch, tmp_path):
+    """无真机:mock 设备清单/文件列表/拉取;app_data_dir 指向临时目录(拉取落盘不污染真实数据目录)。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "app_data_dir", tmp_path)
+    monkeypatch.setattr(app_devices, "list_devices_detailed",
+                        lambda: [{"serial": "DEV1", "state": "device"},
+                                 {"serial": "DEV2", "state": "unauthorized"}])
+    monkeypatch.setattr(app_devices, "list_device_cases",
+                        lambda serial, remote_dir=app_devices.HARNESS_IMPORT_DIR:
+                            [{"file_name": "case_a.json"}, {"file_name": "case_b.json"}])
+
+    def fake_pull(serial, file_name, dest, remote_dir=app_devices.HARNESS_IMPORT_DIR):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(_CASE), encoding="utf-8")
+        return dest
+
+    monkeypatch.setattr(app_devices, "pull_device_case", fake_pull)
+    return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _clean_app_tables():
+    """本文件会写 app_scripts 行;conftest._TABLES 未含该表,projects 被 TRUNCATE 复位自增后
+    id 复用,残留行会串项目污染全量回归(清理方式同 tests/test_app_scripts_api.py)。"""
+    yield
+    session = SessionLocal()
+    try:
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        session.execute(text("TRUNCATE TABLE app_runs"))
+        session.execute(text("TRUNCATE TABLE app_scripts"))
+        session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
+        session.commit()
+    finally:
+        session.close()
+
+
+def test_list_device_cases_endpoint(client, device_env, db_session):
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "导入项目")
+    r = client.get(f"/api/projects/{pid}/app-scripts/device-cases?serial=DEV1", headers=h)
+    assert r.status_code == 200
+    assert r.json() == [{"file_name": "case_a.json"}, {"file_name": "case_b.json"}]
+
+
+def test_import_device_creates_script(client, device_env, db_session):
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "拉取项目")
+    r = client.post(f"/api/projects/{pid}/app-scripts/import-device", headers=h,
+                    json={"serial": "DEV1", "file_name": "case_a.json"})
+    assert r.status_code == 201, r.text
+    assert r.json()["case_json"]["caseName"] == "下单冒烟"
+    # 拉取文件落盘在 app_data_dir/imports(留痕排查用;device_env 已把 app_data_dir 指到 tmp_path)
+    assert (device_env / "imports" / "case_a.json").exists()
+
+
+def test_import_device_high_risk_gate(client, device_env, db_session, monkeypatch):
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "拉取高危项目")
+    risky = json.loads(json.dumps(_CASE))
+    risky["operationLog"]["steps"][0]["operationMethod"]["actionEnum"] = "KILL_PROCESS"
+
+    def pull_risky(serial, file_name, dest, remote_dir=app_devices.HARNESS_IMPORT_DIR):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(risky), encoding="utf-8")
+        return dest
+
+    monkeypatch.setattr(app_devices, "pull_device_case", pull_risky)
+    r = client.post(f"/api/projects/{pid}/app-scripts/import-device", headers=h,
+                    json={"serial": "DEV1", "file_name": "risky.json"})
+    assert r.status_code == 400 and "高危" in r.json()["detail"]
+    r2 = client.post(f"/api/projects/{pid}/app-scripts/import-device", headers=h,
+                     json={"serial": "DEV1", "file_name": "risky.json", "allow_high_risk": True})
+    assert r2.status_code == 201
+
+
+def test_import_upload_endpoint(client, device_env, db_session):
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "上传项目")
+    r = client.post(f"/api/projects/{pid}/app-scripts/import-upload", headers=h,
+                    files={"file": ("up.json", json.dumps(_CASE), "application/json")},
+                    data={"name": "上传的用例"})
+    assert r.status_code == 201
+    assert r.json()["name"] == "上传的用例"
+    # 非法 JSON 400
+    r2 = client.post(f"/api/projects/{pid}/app-scripts/import-upload", headers=h,
+                     files={"file": ("bad.json", b"not json", "application/json")})
+    assert r2.status_code == 400
+    # 超限 400(>1MB)
+    big = b"x" * (1024 * 1024 + 1)
+    r3 = client.post(f"/api/projects/{pid}/app-scripts/import-upload", headers=h,
+                     files={"file": ("big.json", big, "application/json")})
+    assert r3.status_code == 400
+
+
+def test_app_devices_endpoint(client, device_env, db_session):
+    h = _admin_headers(client, db_session)
+    r = client.get("/api/app-devices", headers=h)
+    assert r.status_code == 200
+    assert {d["serial"] for d in r.json()} == {"DEV1", "DEV2"}
+
+
+def test_non_member_gets_404(client, db_session, make_user):
+    """Task 7 评审顺手项:非成员访问 app-scripts(列表/导入/设备面)= 404 不泄漏存在性。"""
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "隔离项目")
+    outsider = _auth(client, db_session, make_user, "appoutsider")
+    assert client.get(f"/api/projects/{pid}/app-scripts", headers=outsider).status_code == 404
+    assert client.get(f"/api/projects/{pid}/app-scripts/device-cases?serial=DEV1",
+                      headers=outsider).status_code == 404
+    assert client.post(f"/api/projects/{pid}/app-scripts/import-device", headers=outsider,
+                       json={"serial": "DEV1", "file_name": "case_a.json"}).status_code == 404
