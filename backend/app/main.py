@@ -7,8 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import Base, engine
 from app.routers import (
-    app_scripts, auth, cases, documents, jobs, members, modules, projects, repo, ui_auth_states,
-    ui_recordings, ui_runs, ui_scripts, users
+    app_runs, app_scripts, auth, cases, documents, jobs, members, modules, projects, repo,
+    ui_auth_states, ui_recordings, ui_runs, ui_scripts, users
 )
 
 import app.models  # noqa: F401 — ensure Base.metadata knows all tables
@@ -63,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_recordings.router)
     app.include_router(ui_auth_states.router)
     app.include_router(app_scripts.router)
+    app.include_router(app_runs.router)
 
     @app.get("/api/health")
     def health() -> dict:

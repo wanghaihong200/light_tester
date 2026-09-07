@@ -5,25 +5,25 @@ import asyncio
 
 class JobEventBus:
     def __init__(self) -> None:
-        self._subscribers: dict[int, list[asyncio.Queue]] = {}
+        self._subscribers: dict[int | str, list[asyncio.Queue]] = {}
 
-    def subscribe(self, job_id: int) -> asyncio.Queue:
+    def subscribe(self, job_id: int | str) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue()
         self._subscribers.setdefault(job_id, []).append(q)
         return q
 
-    def unsubscribe(self, job_id: int, q: asyncio.Queue) -> None:
+    def unsubscribe(self, job_id: int | str, q: asyncio.Queue) -> None:
         queues = self._subscribers.get(job_id, [])
         if q in queues:
             queues.remove(q)
         if not queues:
             self._subscribers.pop(job_id, None)
 
-    def publish_nowait(self, job_id: int, event: dict) -> None:
+    def publish_nowait(self, job_id: int | str, event: dict) -> None:
         for q in self._subscribers.get(job_id, []):
             q.put_nowait(event)
 
-    async def publish(self, job_id: int, event: dict) -> None:
+    async def publish(self, job_id: int | str, event: dict) -> None:
         self.publish_nowait(job_id, event)
 
 
