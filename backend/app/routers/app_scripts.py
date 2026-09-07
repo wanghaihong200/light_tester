@@ -1,16 +1,27 @@
 """APP自动化脚本 API(独立域,不碰 ui_scripts)。用例体 = SoloPi 原生 JSON 唯一事实源,原样存储。"""
 import json
 import subprocess
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.app_automation import devices, solopi_cli
+from app.app_automation.appium_export import collect_export_bundle
 from app.app_automation.case_schema import high_risk_actions, validate_case
+from app.automation_repo import require_repo
 from app.auth import get_current_user
 from app.config import settings
 from app.database import get_db
+from app.git_service import (
+    GitError,
+    NothingToCommit,
+    PushConflict,
+    push_files,
+    sync_repo,
+    working_copy_path,
+)
 from app.models import AppScript, Project, User
 from app.permissions import ensure_project_access
 from app.schemas import AppScriptOut
@@ -198,3 +209,40 @@ def app_device_perf_items(serial: str, current: User = Depends(get_current_user)
         raise HTTPException(400, e.message)
     items = payload.get("items") or payload.get("metrics") or payload.get("keys") or []
     return {"items": [str(i) for i in items]}
+
+
+class AppScriptExportRequest(BaseModel):
+    branch: str
+    commit_message: str | None = None
+
+
+@router.post("/app-scripts/{script_id}/export")
+def export_script(script_id: int, payload: AppScriptExportRequest, db: Session = Depends(get_db),
+                  current: User = Depends(get_current_user)):
+    """翻译 SoloPi JSON 为 Appium pytest 产物并推送 kind=app 仓(对齐 ui_scripts export 语义)。"""
+    s = _get_script(db, current, script_id, "viewer")  # 先可见性(非成员 404)
+    ensure_project_access(db, current, s.project_id, "editor")  # 推外部仓 = editor
+    bundle = collect_export_bundle(s.id, s.name, s.case_json)
+    if bundle.errors:
+        raise HTTPException(400, {"errors": bundle.errors})
+    repo = require_repo(db, s.project_id, "app")
+    try:
+        sync_repo(repo)
+    except GitError:
+        pass  # 同步失败不阻断(push 内部 rebase 兜底;对齐计划 11 导出端点语义)
+    # push_files 只 add 给定路径,产物必须先写入 working copy(计划 11 冒烟教训)。
+    wc = working_copy_path(repo)
+    for rel, content in bundle.files.items():
+        dest = wc / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+    commit_msg = payload.commit_message or f"APP自动化导出 {s.name} {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    try:
+        result = push_files(repo, sorted(bundle.files), payload.branch, commit_msg)
+    except NothingToCommit as e:
+        raise HTTPException(400, {"stage": e.stage, "error": e.message})
+    except PushConflict as e:
+        raise HTTPException(409, {"stage": e.stage, "error": e.message})
+    except GitError as e:
+        raise HTTPException(409, {"stage": e.stage, "error": e.message})
+    return {**result.model_dump(), "files": sorted(bundle.files)}
