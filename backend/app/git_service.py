@@ -287,14 +287,9 @@ def push_files(project, files: list[str], branch: str, commit_msg: str) -> PushR
             _run(["git", "checkout", "-q", "-B", branch, f"origin/{branch}"], cwd=wc)
         else:
             _run(["git", "checkout", "-q", "-b", branch], cwd=wc)
-    # pull --rebase(远程分支存在时)
-    if branch in list_remote_branches(project):
-        r = subprocess.run(["git", "pull", "-q", "--rebase", "origin", branch], cwd=wc, capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if r.returncode != 0:
-            # 冲突→abort
-            subprocess.run(["git", "rebase", "--abort"], cwd=wc, capture_output=True)
-            raise PushConflict("与远程有冲突,请检查 API 文档或重试同步")
-    # add + commit
+    # add + commit 先行:调用方(导出/AI 生成)在 push_files 之前已把文件写入工作区,
+    # 若先 pull --rebase,改写已跟踪文件(再导出覆盖 RUN.md/重推 AI 产物)时工作区带
+    # 未暂存变更,rebase 直接拒绝(exit 128),曾被他报成「与远程冲突」(2026-09-07 冒烟)。
     for f in files:
         _run(["git", "add", "--", f], cwd=wc)
     # 是否有暂存变更
@@ -302,6 +297,23 @@ def push_files(project, files: list[str], branch: str, commit_msg: str) -> PushR
     if not diff.strip():
         raise NothingToCommit()
     _run(["git", "commit", "-qm", commit_msg], cwd=wc)
+    # pull --rebase(远程分支存在时):提交后工作区干净,rebase 才可执行;
+    # 真冲突在此暴露(本地提交重放撞上远程同名文件改动),abort 回到本地分支态
+    if branch in list_remote_branches(project):
+        r = subprocess.run(["git", "pull", "-q", "--rebase", "origin", branch], cwd=wc, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            detail = (r.stderr or r.stdout or "").strip()
+            # 连接类失败(GitLab 未启动/网络断)发生在 fetch 阶段,rebase 尚未开始;
+            # 归 409「与远程冲突」会误导排障,单独归 stage=pull
+            low = detail.lower()
+            if any(sig in low for sig in ("failed to connect", "connection refused",
+                                          "could not resolve host", "connection timed out")):
+                raise GitError("pull", _sanitize(detail.splitlines()[0] if detail else "git pull 失败", token))
+            subprocess.run(["git", "rebase", "--abort"], cwd=wc, capture_output=True)
+            first_line = detail.splitlines()[0] if detail else ""
+            raise PushConflict("与远程有冲突,请检查 API 文档或重试同步"
+                               + (f"({first_line})" if first_line else ""))
+    # rebase 可能改写提交哈希:取 pull 之后的 HEAD,保证上报的是实际推送的 commit
     commit_short = _run(["git", "rev-parse", "--short", "HEAD"], cwd=wc).strip()
     # push
     r = subprocess.run(["git", "push", "-q", "origin", branch], cwd=wc, capture_output=True, text=True, encoding="utf-8", errors="replace")
