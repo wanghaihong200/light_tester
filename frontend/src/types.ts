@@ -197,3 +197,89 @@ export interface UiAuthState {
   kind: 'web_storage' | 'android_snapshot' // 登录态种类:Web 存储快照 / Android 应用快照
   app_package: string | null // Android 快照的应用包名(web 登录态为 null)
 }
+
+// ===== APP自动化(计划 12:SoloPi 原生 JSON 唯一事实源,独立域) =====
+export interface AppCaseStep {
+  operationNode: Record<string, unknown> | null
+  operationMethod: {
+    actionEnum: string
+    operationParam: Record<string, string>
+    encrypt: boolean
+    safeEncrypt: boolean
+  }
+  operationIndex: number
+  operationId: string
+  stepId: string
+}
+
+export interface AppCaseJson {
+  caseName: string
+  caseDesc?: string
+  targetAppPackage: string
+  targetAppLabel?: string
+  recordMode?: string
+  advanceSettings?: string
+  priority?: number
+  operationLog: { steps: AppCaseStep[] }
+  [key: string]: unknown // 原生 JSON 的未知顶层字段原样保留
+}
+
+export interface CheckDef {
+  type: 'element_exists' | 'text_contains'
+  text?: string
+  resource_id?: string
+  description?: string
+  value?: string
+}
+
+export interface CheckResult {
+  type: string
+  passed: boolean
+  detail: string
+}
+
+export interface AppScript {
+  id: number
+  project_id: number
+  name: string
+  description: string | null
+  case_json: AppCaseJson
+  app_package: string
+  created_at: string
+  updated_at: string
+}
+
+export type AppRunStatus = 'pending' | 'running' | 'passed' | 'failed' | 'cancelled'
+
+export interface AppRun {
+  id: number
+  project_id: number
+  status: AppRunStatus
+  script_id: number
+  script_name: string
+  device_serial: string
+  batch_id: string | null
+  variables: Record<string, string>
+  pre_checks: CheckDef[]
+  post_checks: CheckDef[]
+  perf_items: string[]
+  run_state: string | null
+  results: unknown[] | null
+  check_results: { pre: CheckResult[] | null; post: CheckResult[] | null } | null
+  perf_summary: Record<string, unknown> | null
+  startup_summary: Record<string, unknown> | null
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+}
+
+export interface DeviceInfo {
+  serial: string
+  state: string
+}
+
+export interface AppPerfSeries {
+  item: string
+  columns: string[]
+  rows: string[][]
+}

@@ -31,6 +31,7 @@ const router = createRouter({
             { path: 'ai/repo', name: 'project-ai-repo', component: () => import('../components/RepoPane.vue') },
             { path: 'ai/cross', name: 'project-ai-cross', component: () => import('../components/crossauto/CrossAutoPane.vue') },
             { path: 'ui/web', name: 'project-ui-web', component: () => import('../components/webauto/WebAutoPane.vue') },
+            { path: 'ui/app', name: 'project-ui-app', component: () => import('../components/appauto/AppAutoPane.vue') },
           ],
         },
         {

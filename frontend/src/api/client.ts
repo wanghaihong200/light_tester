@@ -107,7 +107,10 @@ export const http = {
   put: <T>(path: string, body: unknown) => request<T>(path, { method: 'PUT', body: JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown) => request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   del: (path: string) => request<void>(path, { method: 'DELETE' }),
-  upload: <T>(path: string, file: File) => {
+  // file 传 FormData 时直接作 body(计划 12 导入上传:调用方自建表单需携带 file 之外的字段);
+  // 传 File 时行为不变(此处自建单 file 字段表单)
+  upload: <T>(path: string, file: File | FormData) => {
+    if (file instanceof FormData) return request<T>(path, { method: 'POST', body: file })
     const fd = new FormData()
     fd.append('file', file)
     return request<T>(path, { method: 'POST', body: fd })

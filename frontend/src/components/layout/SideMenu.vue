@@ -53,7 +53,7 @@
 import { ref, watch } from 'vue'
 
 interface MenuLeaf {
-  key: string // 与路由名 project-<key> 对应(cases/knowledge/ai-jobs/ai-repo/ai-cross/ui-web)
+  key: string // 与路由名 project-<key> 对应(cases/knowledge/ai-jobs/ai-repo/ai-cross/ui-web/ui-app)
   label: string
   path: string
   icon?: string
@@ -65,7 +65,7 @@ interface MenuGroup {
   children: MenuLeaf[]
 }
 
-// 分组轴=「AI 是否参与」:AI 组收纳生成任务/自动化工程/多端 UI 自动化;UI 组仅 Web自动化(选择器驱动)
+// 分组轴=「AI 是否参与」:AI 组收纳生成任务/自动化工程/多端 UI 自动化;UI 组收纳 Web/APP 自动化(选择器驱动/SoloPi 驱动)
 const PROJECT_MENU: (MenuLeaf | MenuGroup)[] = [
   { key: 'cases', label: '功能用例管理', path: 'cases', icon: '▦' },
   { key: 'knowledge', label: '知识库', path: 'knowledge', icon: '📚' },
@@ -83,7 +83,10 @@ const PROJECT_MENU: (MenuLeaf | MenuGroup)[] = [
     key: 'ui',
     label: 'UI自动化',
     icon: '🖱',
-    children: [{ key: 'ui-web', label: 'Web自动化', path: 'ui/web' }],
+    children: [
+      { key: 'ui-web', label: 'Web自动化', path: 'ui/web' },
+      { key: 'ui-app', label: 'APP自动化', path: 'ui/app' },
+    ],
   },
 ]
 
