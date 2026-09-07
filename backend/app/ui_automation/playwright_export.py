@@ -1,10 +1,13 @@
 # app/ui_automation/playwright_export.py
 """DSL → Python·pytest(Playwright)翻译器。纯函数零 IO,便于单测。
 
-保真约定(2026-09-06 grilling 拍板):
-- fallbacks → locator.or_() 链;variables → 文件顶部 VARIABLES 字典;{{name}} → _v('name')(未定义保留占位符,
-  与 dsl.render_text 语义一致);set_var → 运行时对 VARIABLES 赋值;assert_text mode=equals/contains →
-  to_have_text/to_contain_text(Playwright 文本断言自带空白归一化,与平台 normalize_ws 语义对齐);
+保真约定(2026-09-06 grilling 拍板;fallbacks 语义 2026-09-07 冒烟后修正):
+- fallbacks → 生成 _first() 帮助函数逐候选尝试(对齐 runner._locate:首个命中候选取 .first;
+  原 or_() 链方案是并集匹配,宽泛 fallback 在严格模式下报 resolved to N elements,已证伪弃用);
+  单候选也补 .first(runner 对命中候选恒取首个,容忍多元素匹配);variables → 文件顶部 VARIABLES 字典;
+  {{name}} → _v('name')(未定义保留占位符,与 dsl.render_text 语义一致);set_var → 运行时对 VARIABLES 赋值;
+  assert_text mode=equals/contains → to_have_text/to_contain_text(Playwright 文本断言自带空白归一化,
+  与平台 normalize_ws 语义对齐);
 - ai 系动作(run_sub 除外)不可确定性导出 → 记错误拒绝;run_sub 由 Task 5 的内联层处理。
 """
 import re
@@ -31,6 +34,15 @@ VARIABLES = {variables}
 def _v(name: str) -> str:
     """取变量;未定义时保留 {{{{name}}}} 占位符(与平台渲染语义一致)。"""
     return str(VARIABLES.get(name, "{{{{" + name + "}}}}"))
+
+
+def _first(*locs):
+    """逐候选尝试(与平台执行器同语义):首个有命中的定位器取其第一个元素;
+    全未命中回退首个候选(让动作在等待超时报错,与执行器口径一致)。"""
+    for loc in locs:
+        if loc.count() > 0:
+            return loc.first
+    return locs[0].first
 
 '''
 
@@ -101,7 +113,8 @@ def slugify(script_id: int, name: str) -> str:
 
 
 def render_locator(candidates: list[dict]) -> str:
-    """主定位器 + fallbacks → or_ 链(任一命中即操作,语义对齐 runner 的逐候选尝试)。"""
+    """主定位器 + fallbacks → 逐候选尝试语义:多候选包进 _first(...) 调用,
+    单候选补 .first(与 runner._locate「命中恒取首个」对齐)。"""
     parts: list[str] = []
     for c in candidates:
         s = c.get("strategy")
@@ -115,7 +128,9 @@ def render_locator(candidates: list[dict]) -> str:
             parts.append(_CAND[s](c))
     if not parts:
         raise ValueError("无可识别定位策略")
-    return ".or_(".join(parts) + ")" * (len(parts) - 1)
+    if len(parts) == 1:
+        return parts[0] + ".first"
+    return "_first(" + ", ".join(parts) + ")"
 
 
 def _interpolate(value: str) -> str:
@@ -176,7 +191,9 @@ def _render_single(st: dict) -> str:
     loc = st.get("locator")
     p = st.get("params") or {}
     if action == "goto":
-        return f"page.goto({_interpolate(p['url'])})"
+        # wait_until 对齐 runner(domcontentloaded):默认 load 会被第三方统计脚本拖到超时,
+        # 平台执行能过而导出脚本挂(2026-09-07 终验实测)
+        return f'page.goto({_interpolate(p["url"])}, wait_until="domcontentloaded")'
     if action in ("click", "fill", "press", "select_option"):
         base = render_locator(_candidates(loc))
         if action == "click":
