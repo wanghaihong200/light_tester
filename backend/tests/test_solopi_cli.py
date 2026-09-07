@@ -1,4 +1,6 @@
 # backend/tests/test_solopi_cli.py
+import json
+
 import pytest
 
 from app.app_automation import solopi_cli
@@ -95,3 +97,55 @@ def test_unparsable_stdout_rc0_raises(cli_ok, monkeypatch):
                         lambda *a, **k: _FakeCompleted(rc=0, stdout=b"not json"))
     with pytest.raises(solopi_cli.CliError):
         solopi_cli.list_cases("s1")
+
+
+# ── 终审 C1:同步 run 以终态 failed/cancelled 结束时 CLI 退出码 2、完整 run JSON 在 stdout;
+#    仅 run_case 放行(其余命令 rc=2 仍是环境失败),且要求载荷携带终态 run 对象 ──
+
+_RC2_FAILED = {"run": {"state": "failed", "error": "ASSERT failed at step s2",
+                       "results": [{"stepId": "s2", "status": "failed",
+                                    "exceptionMessage": "断言失败", "exceptionStep": "ASSERT"}]}}
+
+
+def _patch_rc(rc, stdout, stderr=b"cli error"):
+    return lambda *a, **k: _FakeCompleted(rc=rc, stdout=stdout, stderr=stderr)
+
+
+def test_run_case_accepts_rc2_terminal_payload(cli_ok, monkeypatch):
+    body = json.dumps(_RC2_FAILED).encode("utf-8")
+    monkeypatch.setattr(solopi_cli.subprocess, "run", _patch_rc(2, body))
+    payload = solopi_cli.run_case("smoke", "s1", "C:/art")
+    assert payload == _RC2_FAILED  # 业务失败的 run_state/results 不丢
+
+
+def test_run_case_accepts_rc2_top_level_state(cli_ok, monkeypatch):
+    body = json.dumps({"state": "cancelled", "error": "用户中断", "results": []}).encode("utf-8")
+    monkeypatch.setattr(solopi_cli.subprocess, "run", _patch_rc(2, body))
+    assert solopi_cli.run_case("smoke", "s1", "C:/art")["state"] == "cancelled"
+
+
+def test_run_case_rc2_non_terminal_payload_still_raises(cli_ok, monkeypatch):
+    # rc=2 但载荷无终态 state(如 duplicate_case / 设备未就绪)→ 照旧按环境失败抛
+    body = json.dumps({"detail": "duplicate_case: already exists"}).encode("utf-8")
+    monkeypatch.setattr(solopi_cli.subprocess, "run", _patch_rc(2, body))
+    with pytest.raises(solopi_cli.CliError) as ei:
+        solopi_cli.run_case("smoke", "s1", "C:/art")
+    assert ei.value.stage == "device" and ei.value.returncode == 2
+
+
+def test_run_case_rc4_terminal_payload_still_raises(cli_ok, monkeypatch):
+    # 只有 rc==2 放行;rc=4 即使带终态载荷也是协议错
+    body = json.dumps(_RC2_FAILED).encode("utf-8")
+    monkeypatch.setattr(solopi_cli.subprocess, "run", _patch_rc(4, body))
+    with pytest.raises(solopi_cli.CliError) as ei:
+        solopi_cli.run_case("smoke", "s1", "C:/art")
+    assert ei.value.stage == "protocol"
+
+
+def test_other_calls_rc2_terminal_payload_still_raises(cli_ok, monkeypatch):
+    # 放行仅限 run_case:case_import 等的 rc=2 不因载荷恰好带 state 被误放行
+    body = json.dumps(_RC2_FAILED).encode("utf-8")
+    monkeypatch.setattr(solopi_cli.subprocess, "run", _patch_rc(2, body))
+    with pytest.raises(solopi_cli.CliError) as ei:
+        solopi_cli.case_import("C:/c.json", "s1", replace=True)
+    assert ei.value.stage == "device"

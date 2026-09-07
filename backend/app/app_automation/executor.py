@@ -97,7 +97,10 @@ def execute_app_run(run_id: int, case_json: dict, *, device_serial: str, perf_it
         run_dir.mkdir(parents=True, exist_ok=True)
         case_file = run_dir / "case.json"
         case_file.write_text(json.dumps(case_json, ensure_ascii=False), encoding="utf-8")
-        solopi_cli.case_import(str(case_file), device_serial, confirm_high_risk=confirm)
+        # --replace 整覆盖:同设备已有同名用例时端上回 duplicate_case(rc=2),同一脚本将永远无法
+        # 第二次执行(HarnessSchemeResolver.java:411)。平台 case_json 是唯一事实源,执行前整覆盖
+        # 是正确幂等;同设备并发已被 per-serial 锁串行化(终审 C2)。
+        solopi_cli.case_import(str(case_file), device_serial, replace=True, confirm_high_risk=confirm)
 
         if perf_items:
             started = solopi_cli.perf_start(device_serial, perf_items, target_package=app_package or None)

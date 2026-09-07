@@ -21,6 +21,19 @@ class CliError(RuntimeError):
         self.returncode = returncode
 
 
+_TERMINAL_STATES = ("passed", "failed", "cancelled")
+
+
+def _has_terminal_run(payload: object) -> bool:
+    """payload 是否携带终态 run 对象:嵌套 "run" 或顶层 state(与 executor._extract_run 同型)。
+    仅用于 rc=2 的 run 载荷判别;CLI 其余 rc=2 提前返回(用例查询失败/插件缺失/已有回放运行)
+    的载荷均无 terminal state,判别式安全(终审 C1 已逐分支核对)。"""
+    if not isinstance(payload, dict):
+        return False
+    run = payload["run"] if isinstance(payload.get("run"), dict) else payload
+    return run.get("state") in _TERMINAL_STATES
+
+
 def cli_available() -> bool:
     return importlib.util.find_spec("solopi_harness") is not None
 
@@ -32,7 +45,8 @@ def _argv(cmd_args: list[str], serial: str | None = None) -> list[str]:
     return [*argv, "--pretty", *cmd_args]
 
 
-def _call(cmd_args: list[str], serial: str | None = None, timeout: int = 180) -> dict:
+def _call(cmd_args: list[str], serial: str | None = None, timeout: int = 180,
+          accept_terminal_rc2: bool = False) -> dict:
     if not cli_available():
         raise CliError("install", "solopi-ai CLI 未安装:cd backend && source .venv/Scripts/activate && bash scripts/setup-solopi.sh", -1)
     try:
@@ -46,6 +60,10 @@ def _call(cmd_args: list[str], serial: str | None = None, timeout: int = 180) ->
     except (json.JSONDecodeError, ValueError):
         pass
     if p.returncode == 0 and isinstance(payload, dict):
+        return payload
+    # 同步 run 以终态 failed/cancelled 结束时 CLI 退出码 2、完整 run JSON 在 stdout(终审 C1):
+    # 这是业务失败不是环境失败,须把载荷交还 executor 收口(run_state/results 不能丢)。
+    if p.returncode == 2 and accept_terminal_rc2 and _has_terminal_run(payload):
         return payload
     err = (p.stderr.decode("utf-8", "replace") or out).strip()[-300:]
     stage = {2: "device", 3: "usage", 4: "protocol", 124: "timeout"}.get(p.returncode, "unknown")
@@ -90,7 +108,8 @@ def run_case(case_name: str, serial: str, artifacts_dir: str, *,
         args.append("--no-restart-app")
     if confirm_high_risk:
         args.append("--confirm-high-risk")
-    return _call(args, serial=serial, timeout=run_timeout + 120)
+    # 仅 run 放行 rc=2 终态载荷(failed/cancelled 是业务终态,非环境失败)
+    return _call(args, serial=serial, timeout=run_timeout + 120, accept_terminal_rc2=True)
 
 
 def result(run_id: str, serial: str) -> dict:

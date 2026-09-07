@@ -76,8 +76,14 @@ _OK_RUN = {"run": {"state": "passed", "error": None, "results": [{"stepId": "s1"
 
 @pytest.fixture
 def happy_cli(monkeypatch):
-    """全链路 happy path 的 CLI mock:import/run/inspect 均成功。"""
-    monkeypatch.setattr(solopi_cli, "case_import", lambda *a, **k: {"success": True})
+    """全链路 happy path 的 CLI mock:import/run/inspect 均成功;捕获 case_import kwargs 供断言。"""
+    captured: dict = {"import_kwargs": None}
+
+    def fake_import(*a, **k):
+        captured["import_kwargs"] = k
+        return {"success": True}
+
+    monkeypatch.setattr(solopi_cli, "case_import", fake_import)
     monkeypatch.setattr(solopi_cli, "run_case", lambda *a, **k: dict(_OK_RUN))
     monkeypatch.setattr(solopi_cli, "inspect", lambda serial: {"success": True, "page": {
         "text": "", "children": [{"text": "首页", "resourceId": "com.example.app:id/home",
@@ -86,6 +92,7 @@ def happy_cli(monkeypatch):
     monkeypatch.setattr(solopi_cli, "perf_stop", lambda *a, **k: {"success": True})
     monkeypatch.setattr(solopi_cli, "perf_analyze", lambda *a, **k: {"columns": []})
     monkeypatch.setattr(solopi_cli, "startup_time", lambda *a, **k: {"samples": []})
+    yield captured
 
 
 def test_pass_flow_persists_terminal(db, monkeypatch, tmp_path, happy_cli):
@@ -103,6 +110,19 @@ def test_pass_flow_persists_terminal(db, monkeypatch, tmp_path, happy_cli):
     assert run.status == "passed"
     assert run.run_state == "passed"
     assert run.results == _OK_RUN["run"]["results"]
+
+
+def test_case_import_overrides_existing(db, monkeypatch, tmp_path, happy_cli):
+    """终审 C2:case_import 必须整覆盖(--replace)。同设备已有同名用例且无 --replace 时端上回
+    duplicate_case(rc=2),同一脚本永远无法第二次执行;平台 case_json 是唯一事实源,执行前整覆盖。"""
+    monkeypatch.setattr(executor.settings, "app_data_dir", tmp_path)
+    _p, r = _mk_run(db)
+    case = db.get(AppScript, r.script_id).case_json
+    executor.execute_app_run(r.id, case, device_serial="DEV1", perf_items=[],
+                             pre_checks=[], post_checks=[], include_startup=False,
+                             allow_high_risk=False, app_package="com.example.app")
+    assert happy_cli["import_kwargs"] is not None
+    assert happy_cli["import_kwargs"].get("replace") is True
 
 
 def test_pre_check_failure_aborts_before_import(db, monkeypatch, tmp_path):
