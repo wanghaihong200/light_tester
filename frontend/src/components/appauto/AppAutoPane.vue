@@ -5,9 +5,11 @@ import {
   deleteAppScript, listAppRuns, listAppScripts,
 } from '../../api/appAutomation'
 import type { AppRun, AppScript } from '../../types'
+import AppRunDialog from './AppRunDialog.vue'
 import AppScriptEditor from './AppScriptEditor.vue'
+import ComparisonDialog from './ComparisonDialog.vue'
 import ImportDialog from './ImportDialog.vue'
-// 执行/批量/详情/对比由 Task 16 接入本 Pane
+import RunDetailDrawer from './RunDetailDrawer.vue'
 
 const props = defineProps<{ projectId: number }>()
 
@@ -23,6 +25,12 @@ async function loadAll() {
 }
 
 onMounted(loadAll)
+
+// 执行/批量目标(null=弹窗关);runFor=详情抽屉的 run;batchFor=对比矩阵的批量号
+const runTarget = ref<{ script: AppScript; multi: boolean } | null>(null)
+const runFor = ref<AppRun | null>(null)
+const batchFor = ref<string | null>(null)
+function openRun(s: AppScript, multi: boolean) { runTarget.value = { script: s, multi } }
 
 // 删除目标在弹确认框前置位,使 doDelete 成为 onDelete(确认框)与测试直调共用的删除入口,
 // 二者共用 deleteAppScript(brief 实现注意②;brief 原稿 doDelete 空函数体无法满足其自身测试断言)
@@ -72,6 +80,8 @@ const STATUS_TEXT: Record<string, string> = {
       </el-table-column>
       <el-table-column label="操作">
         <template #default="{ row }">
+          <el-button link type="primary" @click="openRun(row, false)">执行</el-button>
+          <el-button link type="primary" @click="openRun(row, true)">批量</el-button>
           <el-button link type="primary" @click="editing = row">编辑</el-button>
           <el-button link type="danger" @click="onDelete(row)">删除</el-button>
         </template>
@@ -87,10 +97,22 @@ const STATUS_TEXT: Record<string, string> = {
         <template #default="{ row }">{{ STATUS_TEXT[row.status] ?? row.status }}</template>
       </el-table-column>
       <el-table-column prop="run_state" label="端上终态" />
+      <el-table-column label="操作">
+        <template #default="{ row }">
+          <el-button link type="primary" @click="runFor = row">详情</el-button>
+          <el-button v-if="row.batch_id" link type="primary" @click="batchFor = row.batch_id">对比</el-button>
+        </template>
+      </el-table-column>
     </el-table>
 
     <ImportDialog v-model:visible="importVisible" :project-id="projectId" @imported="loadAll" />
     <AppScriptEditor v-if="editing !== undefined" :project-id="projectId" :script="editing"
                      @close="editing = undefined" @saved="(() => { editing = undefined; loadAll() })" />
+    <AppRunDialog v-if="runTarget" :project-id="projectId" :scripts="[runTarget.script]"
+                  :multi="runTarget.multi" :visible="!!runTarget"
+                  @update:visible="!$event && (runTarget = null)" @started="loadAll" />
+    <RunDetailDrawer :visible="!!runFor" :run="runFor"
+                     @update:visible="!$event && (runFor = null)" @changed="loadAll" />
+    <ComparisonDialog v-if="batchFor" :project-id="projectId" :batch-id="batchFor" @close="batchFor = null" />
   </div>
 </template>
