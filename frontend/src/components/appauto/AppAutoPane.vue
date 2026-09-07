@@ -5,14 +5,17 @@ import {
   deleteAppScript, listAppRuns, listAppScripts,
 } from '../../api/appAutomation'
 import type { AppRun, AppScript } from '../../types'
+import AppScriptEditor from './AppScriptEditor.vue'
 import ImportDialog from './ImportDialog.vue'
-// 编辑器挂载由 Task 15 接入本 Pane;执行/批量/详情/对比由 Task 16 接入
+// 执行/批量/详情/对比由 Task 16 接入本 Pane
 
 const props = defineProps<{ projectId: number }>()
 
 const scripts = ref<AppScript[]>([])
 const runs = ref<AppRun[]>([])
 const importVisible = ref(false)
+// undefined=关闭;null=新建;对象=编辑既有用例
+const editing = ref<AppScript | null | undefined>(undefined)
 
 async function loadAll() {
   scripts.value = await listAppScripts(props.projectId)
@@ -58,6 +61,7 @@ const STATUS_TEXT: Record<string, string> = {
   <div class="app-auto-pane">
     <div class="toolbar">
       <el-button type="primary" @click="importVisible = true">导入用例</el-button>
+      <el-button @click="editing = null">新建空白用例</el-button>
     </div>
 
     <el-table :data="scripts">
@@ -68,6 +72,7 @@ const STATUS_TEXT: Record<string, string> = {
       </el-table-column>
       <el-table-column label="操作">
         <template #default="{ row }">
+          <el-button link type="primary" @click="editing = row">编辑</el-button>
           <el-button link type="danger" @click="onDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -85,5 +90,7 @@ const STATUS_TEXT: Record<string, string> = {
     </el-table>
 
     <ImportDialog v-model:visible="importVisible" :project-id="projectId" @imported="loadAll" />
+    <AppScriptEditor v-if="editing !== undefined" :project-id="projectId" :script="editing"
+                     @close="editing = undefined" @saved="(() => { editing = undefined; loadAll() })" />
   </div>
 </template>

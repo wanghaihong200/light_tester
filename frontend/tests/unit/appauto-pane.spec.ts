@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   listAppDevices: vi.fn(),
   listDeviceCases: vi.fn(),
   importDeviceCase: vi.fn(),
+  // 占位对齐 webauto 预防式写法:后续用例直调上传导入时不因 mock 缺键而 undefined 调用
+  importUploadCase: vi.fn(),
 }))
 
 vi.mock('../../src/api/appAutomation', () => api)
