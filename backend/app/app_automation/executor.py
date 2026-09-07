@@ -35,7 +35,9 @@ def notify(run_id: int, event: dict) -> None:
     from app.jobs.bus import bus
     from app.ui_automation.loopref import ui_loop
     loop = ui_loop()
-    if loop is not None:
+    if loop is not None and not loop.is_closed():
+        # 已关闭的 loop 不投递(SSE 消费侧容忍丢事件):否则 run_coroutine_threadsafe 抛
+        # RuntimeError,会被 execute_app_run 的 except 误判为环境失败。
         asyncio.run_coroutine_threadsafe(bus.publish(f"app-{run_id}", event), loop)
 
 

@@ -35,6 +35,24 @@ def _clear_force():
     executor._FORCE_FINISHED.clear()
 
 
+def test_notify_on_closed_loop_is_silent():
+    """回归:上个测试文件经 main.py lifespan set_ui_loop 后,残留的 loop 已随
+    TestClient 关闭;notify 对已关闭 loop 不得抛 RuntimeError,否则会被
+    execute_app_run 的 except(RuntimeError)误判为环境失败把 run 判 failed。"""
+    import asyncio
+
+    from app.ui_automation import loopref
+
+    prev = loopref.ui_loop()
+    closed = asyncio.new_event_loop()
+    closed.close()
+    loopref.set_ui_loop(closed)
+    try:
+        executor.notify(1, {"type": "status"})
+    finally:
+        loopref.set_ui_loop(prev)  # 还原全局 loop,防污染后续用例
+
+
 def _mk_run(db, status="pending") -> tuple[Project, AppRun]:
     p = Project(name=f"exec_{id(db)}")
     db.add(p); db.commit(); db.refresh(p)
