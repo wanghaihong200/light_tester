@@ -60,6 +60,9 @@ def test_body_condition_jsonpath_typed_and_invalid_json():
     assert rule_matches(r_str, "GET", "/x", {}, {}, '{"name": "王"}'.encode()) is not None
     r_bool = _rule(path="/x", conditions=[{"scope": "body", "key": "$.flag", "match": "eq", "value": "true"}])
     assert rule_matches(r_bool, "GET", "/x", {}, {}, b'{"flag": true}') is not None
+    assert rule_matches(r_bool, "GET", "/x", {}, {}, b'{"flag": 1}') is None  # 严格类型:1 ≠ true
+    r_bool_num = _rule(path="/x", conditions=[{"scope": "body", "key": "$.flag", "match": "eq", "value": "1"}])
+    assert rule_matches(r_bool_num, "GET", "/x", {}, {}, b'{"flag": true}') is None  # 严格类型:true ≠ 1
     r_missing = _rule(path="/x", conditions=[{"scope": "body", "key": "$.nope", "match": "eq", "value": "1"}])
     assert rule_matches(r_missing, "GET", "/x", {}, {}, b'{"a": 1}') is None  # 无节点不成立
     r_badpath = _rule(path="/x", conditions=[{"scope": "body", "key": "$$bad", "match": "eq", "value": "1"}])

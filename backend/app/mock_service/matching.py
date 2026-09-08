@@ -63,7 +63,7 @@ def _value_matches(match_mode: str, expected: str, node) -> bool:
             return False  # 非法正则=条件不成立,不抛 500
     ok, typed = _typed(expected)
     if ok and not isinstance(typed, str):
-        return node == typed or _node_str(node) == expected
+        return type(node) is type(typed) and node == typed or _node_str(node) == expected
     return _node_str(node) == expected
 
 
