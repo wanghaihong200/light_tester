@@ -121,7 +121,11 @@ def create_mock_app(instance_id: int) -> FastAPI:
                            method=method, path=path[:500],
                            query=request.url.query[:1000] if request.url.query else None,
                            request_headers=dict(request.headers) or None,
-                           request_body=body[:HIT_BODY_MAX].decode("utf-8", "replace") if body else None,
+                           # 解码→按字节截断→replace 兜尾:先解码把非法字节收成 U+FFFD,再按字节截到
+                           # 65,532(TEXT 容量 65,535 减余量);截口可能落在 U+FFFD 序列中间(残 1~2 字节),
+                           # 末次 replace 会把残序列回涨成 3 字节,最多 +2 ⇒ 终值 ≤65,534,必在 TEXT 容量内。
+                           # (若直接截原始字节再解码,1 非法字节→3 字节膨胀,严格模式下 commit 炸成 500)
+                           request_body=body[:HIT_BODY_MAX].decode("utf-8", "replace").encode()[:HIT_BODY_MAX - 4].decode("utf-8", "replace") if body else None,
                            matched=rule is not None, response_status=status_code,
                            delay_ms=delay_ms, elapsed_ms=elapsed, error=hold_error))
             _trim_hits(db, instance_id)

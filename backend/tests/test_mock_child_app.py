@@ -126,3 +126,14 @@ def test_instance_removed_serves_404(db_session):
     app = create_mock_app(inst.id + 100000)  # 不存在的实例
     with TestClient(app) as c:
         assert c.get("/x").status_code == 404
+
+
+def test_oversized_and_binary_body_hit_still_served(db_session):
+    inst = _setup(db_session)  # 无规则
+    with _client(db_session, inst) as c:
+        r = c.post("/upload", content=bytes(range(256)) * 300)  # ≈76,800 字节,大量非法 utf-8
+    assert r.status_code == 404  # 大体/二进制不把 mock 打成 500
+    assert r.json() == {"error": "no mock rule matched"}
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.request_body
+    assert len(hit.request_body.encode("utf-8")) <= 65535  # TEXT 容量(65,535 字节)内
