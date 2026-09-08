@@ -31,21 +31,43 @@
 import { ElMessage } from 'element-plus'
 import { computed, ref, watch } from 'vue'
 import { listBranches, pushFiles } from '../api/repo'
+import type { RepoKind } from '../api/repo'
 import type { ChangeFile } from '../types'
 
-const props = defineProps<{ visible: boolean; projectId: number; changes: ChangeFile[] }>()
+// plan12 补遗:kind 缺省 'api' 保持既有调用方零破坏(api 仓直推行为不变)
+const props = withDefaults(
+  defineProps<{ visible: boolean; projectId: number; changes: ChangeFile[]; kind?: RepoKind }>(),
+  { kind: 'api' },
+)
 const emit = defineEmits<{ 'update:visible': [boolean]; pushed: [] }>()
 
 const branches = ref<string[]>([])
-const branch = ref(localStorage.getItem(`push_branch_${props.projectId}`) || 'dev')
 const selected = ref<string[]>([])
-const commitMessage = ref(`AI 生成接口测试 ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`)
 const pushing = ref(false)
+
+// 分支记忆按 kind 隔离;api 读新 key 未命中时回退读改造前旧 key(只读迁移,不回写旧 key)
+function branchStorageKey(): string {
+  return `push_branch_${props.projectId}_${props.kind}`
+}
+function readRememberedBranch(): string {
+  return (
+    localStorage.getItem(branchStorageKey())
+    || (props.kind === 'api' ? localStorage.getItem(`push_branch_${props.projectId}`) : null)
+    || 'dev'
+  )
+}
+const branch = ref(readRememberedBranch())
+// PushDialog 在 RepoPane 内常挂载,kind 切换不重建实例,需重读记忆
+watch(() => props.kind, () => { branch.value = readRememberedBranch() })
+
+const commitMessage = ref(
+  `${props.kind === 'api' ? 'AI 生成接口测试' : '自动化测试推送'} ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+)
 
 const canPush = computed(() => selected.value.length > 0 && branch.value.trim())
 watch(() => props.visible, async (v) => {
   if (v) {
-    try { branches.value = (await listBranches(props.projectId)).branches } catch {}
+    try { branches.value = (await listBranches(props.projectId, props.kind)).branches } catch {}
     selected.value = props.changes.filter((f) => f.status !== 'deleted').map((f) => f.path)
   }
 }, { immediate: true })
@@ -53,8 +75,8 @@ function statusText(s: string) { return s === 'added' ? '新增' : s === 'modifi
 async function onPush() {
   pushing.value = true
   try {
-    const r = await pushFiles(props.projectId, selected.value, branch.value.trim(), commitMessage.value)
-    localStorage.setItem(`push_branch_${props.projectId}`, branch.value.trim())
+    const r = await pushFiles(props.projectId, selected.value, branch.value.trim(), commitMessage.value, props.kind)
+    localStorage.setItem(branchStorageKey(), branch.value.trim())
     ElMessage.success(`已推送到 ${r.branch}@${r.commit_short}`)
     emit('pushed')
   } catch (e: any) {

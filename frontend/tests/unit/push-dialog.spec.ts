@@ -9,7 +9,10 @@ vi.mock('../../src/api/repo', () => ({
 }))
 
 describe('PushDialog', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
 
   it('打开时拉分支并默认勾选非删除文件', async () => {
     const changes = [
@@ -35,7 +38,7 @@ describe('PushDialog', () => {
     expect((w.vm as any).canPush).toBeFalsy()
   })
 
-  it('点击推送调用 pushFiles 并 emit pushed', async () => {
+  it('点击推送调用 pushFiles 并 emit pushed(缺省 kind=api)', async () => {
     const { pushFiles } = await import('../../src/api/repo')
     const changes = [{ path: 'T.java', status: 'added', tracked: false }] as any
     const w = mount(PushDialog, {
@@ -43,12 +46,49 @@ describe('PushDialog', () => {
       global: { plugins: [ElementPlus] },
     })
     await flushPromises()
-    // 默认选中 T.java + 分支 dev → canPush 真(canPush 是 selected.length>0 && branch.trim(),JS && 返回 branch 字符串)
+    // 默认选中 T.java + 分支 dev → canPush 真(JS && 返回 branch 字符串)
     expect((w.vm as any).canPush).toBeTruthy()
-    // 触发推送
     await (w.vm as any).onPush()
     await flushPromises()
-    expect(pushFiles).toHaveBeenCalledWith(2, ['T.java'], 'dev', expect.any(String))
+    expect(pushFiles).toHaveBeenCalledWith(2, ['T.java'], 'dev', expect.any(String), 'api')
     expect(w.emitted('pushed')).toBeTruthy()
+  })
+
+  // ── plan12 补遗:kind 透传 + 文案分支 + 成功写新记忆 key ──
+
+  it('kind=app 时 listBranches/pushFiles 透传 app,默认文案为中性措辞,成功写新记忆 key', async () => {
+    const { listBranches, pushFiles } = await import('../../src/api/repo')
+    const changes = [{ path: 'T.java', status: 'added', tracked: false }] as any
+    const w = mount(PushDialog, {
+      props: { visible: true, projectId: 2, changes, kind: 'app' },
+      global: { plugins: [ElementPlus] },
+    })
+    await flushPromises()
+    expect((w.vm as any).commitMessage).toContain('自动化测试推送')
+    expect((w.vm as any).commitMessage).not.toContain('接口')
+    await (w.vm as any).onPush()
+    await flushPromises()
+    expect(listBranches).toHaveBeenCalledWith(2, 'app')
+    expect(pushFiles).toHaveBeenCalledWith(2, ['T.java'], 'dev', expect.any(String), 'app')
+    expect(localStorage.getItem('push_branch_2_app')).toBe('dev')
+  })
+
+  it('分支记忆按 kind 隔离;api 回退读旧 key;kind 变化时重读', async () => {
+    localStorage.setItem('push_branch_3_web', 'web-branch')
+    localStorage.setItem('push_branch_3', 'old-api-branch')
+
+    const w = mount(PushDialog, {
+      props: { visible: false, projectId: 3, changes: [], kind: 'web' },
+      global: { plugins: [ElementPlus] },
+    })
+    expect((w.vm as any).branch).toBe('web-branch')
+
+    // 切到 api:新 key 无记录 → 回退读旧 key(只读迁移)
+    await w.setProps({ kind: 'api' })
+    expect((w.vm as any).branch).toBe('old-api-branch')
+
+    // 切到 app:无任何记忆 → 默认 dev
+    await w.setProps({ kind: 'app' })
+    expect((w.vm as any).branch).toBe('dev')
   })
 })
