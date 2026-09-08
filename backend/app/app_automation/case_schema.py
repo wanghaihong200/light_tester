@@ -2,6 +2,7 @@
 校验哲学:只挡「确定非法」——缺顶层必填/含导入器管理字段/steps 非空数组/步骤缺 actionEnum/
 参数值非字符串/内部运行时动作(IF/WHILE 系,CLI 编写/导入/回放一律拒)/ASSERT 缺断言参数;
 动作白名单不穷举(100+ 动作随分支演进);高危动作单独盘点供执行前显式确认。"""
+import json
 
 TOP_REQUIRED = ("caseName", "targetAppPackage")
 FORBIDDEN_TOP = ("id", "gmtCreate", "gmtModify", "selected", "caseFingerprint", "storePath")
@@ -64,3 +65,30 @@ def high_risk_actions(case: dict) -> list[str]:
              and isinstance(st.get("operationMethod"), dict)
              and st["operationMethod"].get("actionEnum") in HIGH_RISK_ACTIONS}
     return sorted(found)
+
+
+_RECORD_TOP_KEYS = ("caseName", "caseDesc", "targetAppPackage", "targetAppLabel",
+                    "recordMode", "advanceSettings", "priority")
+
+
+def normalize_case(raw: dict) -> dict:
+    """RecordCaseInfo 包装结构 → 原生用例;原生 dict 恒等返回。
+    包装判据 = operationLog 是 str:手机 App 回放列表「导出用例」写 /sdcard/solopi/export 的
+    文件(真机实测)顶层另带 id/gmtCreate/gmtModify/selected/storePath,operationLog 是内嵌
+    GeneralOperationLogBean JSON 字符串({"steps":[…], "storePath":…}),原样过不了 validate_case
+    的禁字段闸。归一化只保留业务顶层键 + {"steps": …};包装层管理字段与内嵌 storePath 一律丢弃;
+    operationLog 非 str(原生/harness 推送文件)恒等;operationLog 字符串解析失败抛 ValueError。"""
+    if not isinstance(raw, dict):
+        raise ValueError("用例必须是 JSON 对象")
+    log = raw.get("operationLog")
+    if not isinstance(log, str):
+        return raw
+    try:
+        inner = json.loads(log)
+    except (json.JSONDecodeError, ValueError) as e:
+        raise ValueError(f"operationLog 内嵌 JSON 解析失败: {e}") from e
+    if not isinstance(inner, dict) or not isinstance(inner.get("steps"), list):
+        raise ValueError("operationLog 内嵌 JSON 须为含 steps 数组的对象")
+    out = {k: raw[k] for k in _RECORD_TOP_KEYS if k in raw}
+    out["operationLog"] = {"steps": inner["steps"]}
+    return out

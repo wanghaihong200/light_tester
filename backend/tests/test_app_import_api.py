@@ -29,8 +29,9 @@ def device_env(monkeypatch, tmp_path):
                         lambda: [{"serial": "DEV1", "state": "device"},
                                  {"serial": "DEV2", "state": "unauthorized"}])
     monkeypatch.setattr(app_devices, "list_device_cases",
-                        lambda serial, remote_dir=app_devices.HARNESS_IMPORT_DIR:
-                            [{"file_name": "case_a.json"}, {"file_name": "case_b.json"}])
+                        lambda serial, remote_dir=None:
+                            [{"file_name": "case_a.json", "source": "harness"},
+                             {"file_name": "case_b.json", "source": "export"}])
 
     def fake_pull(serial, file_name, dest, remote_dir=app_devices.HARNESS_IMPORT_DIR):
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +63,8 @@ def test_list_device_cases_endpoint(client, device_env, db_session):
     pid = _mk_project(client, h, "导入项目")
     r = client.get(f"/api/projects/{pid}/app-scripts/device-cases?serial=DEV1", headers=h)
     assert r.status_code == 200
-    assert r.json() == [{"file_name": "case_a.json"}, {"file_name": "case_b.json"}]
+    assert r.json() == [{"file_name": "case_a.json", "source": "harness"},
+                        {"file_name": "case_b.json", "source": "export"}]
 
 
 class _Completed:
@@ -72,20 +74,43 @@ class _Completed:
         self.stderr = stderr
 
 
-def test_list_device_cases_dir_whitelist(monkeypatch):
-    """终审 I1:?dir= 直通 adb shell,在设备端 sh 里执行,须白名单校验防注入。"""
-    captured: dict = {}
+def test_list_device_cases_scans_both_dirs(monkeypatch):
+    """真机实测校正:App「导出用例」写 /sdcard/solopi/export,推送通道写 harness-import,
+    默认扫两目录各带 source;?dir= 显式覆盖仍只扫该目录(白名单防注入不变)。"""
+    captured: list = []
 
     def fake_run(argv, capture_output, timeout):
-        captured["argv"] = argv
+        captured.append(argv)
         return _Completed(stdout=b"/sdcard/x/case_a.json\n")
 
     monkeypatch.setattr(app_devices.subprocess, "run", fake_run)
-    # 合法目录放行:默认目录 / 含空格短横线的自定义目录
-    assert app_devices.list_device_cases("DEV1") == [{"file_name": "case_a.json"}]
-    assert captured["argv"][-1] == f"{app_devices.HARNESS_IMPORT_DIR}/*.json"
+    assert app_devices.list_device_cases("DEV1") == [
+        {"file_name": "case_a.json", "source": "export"},
+        {"file_name": "case_a.json", "source": "harness"},
+    ]
+    assert captured[0][-1] == f"{app_devices.HARNESS_IMPORT_DIR}/*.json"
+    assert captured[1][-1] == f"{app_devices.SOLOPI_EXPORT_DIR}/*.json"
     captured.clear()
-    assert app_devices.list_device_cases("DEV1", "/sdcard/harness files/v2") == [{"file_name": "case_a.json"}]
+    assert app_devices.list_device_cases("DEV1", "/sdcard/harness files/v2") == [
+        {"file_name": "case_a.json", "source": "harness"}]
+    assert captured[-1][-1] == "/sdcard/harness files/v2/*.json"
+
+
+def test_list_device_cases_dir_whitelist(monkeypatch):
+    """终审 I1:?dir= 直通 adb shell,在设备端 sh 里执行,须白名单校验防注入。"""
+    captured: list = []
+
+    def fake_run(argv, capture_output, timeout):
+        captured.append(argv)
+        return _Completed(stdout=b"/sdcard/x/case_a.json\n")
+
+    monkeypatch.setattr(app_devices.subprocess, "run", fake_run)
+    # 合法目录放行:默认双目录 / 含空格短横线的自定义目录
+    assert len(app_devices.list_device_cases("DEV1")) == 2
+    assert captured[0][-1] == f"{app_devices.HARNESS_IMPORT_DIR}/*.json"
+    captured.clear()
+    assert app_devices.list_device_cases("DEV1", "/sdcard/harness files/v2") == [
+        {"file_name": "case_a.json", "source": "harness"}]
     # 注入载荷被拒且不触达 adb(路由层 except 转 400)
     captured.clear()
     with pytest.raises(RuntimeError):
@@ -112,6 +137,47 @@ def test_import_device_creates_script(client, device_env, db_session):
     assert r.json()["case_json"]["caseName"] == "下单冒烟"
     # 拉取文件落盘在 app_data_dir/imports(留痕排查用;device_env 已把 app_data_dir 指到 tmp_path)
     assert (device_env / "imports" / "case_a.json").exists()
+
+
+def test_import_device_source_export_pulls_solopi_dir_and_unwraps(client, device_env, db_session,
+                                                                  monkeypatch):
+    """真机实测校正:App「导出用例」写 /sdcard/solopi/export 且是 RecordCaseInfo 包装结构
+    (operationLog 为内嵌 JSON 字符串)。source=export 须按该目录 pull,且落库前剥包装过原生校验。"""
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "App导出拉取项目")
+    wrapped = {"id": 3, "caseName": "App导出用例", "caseDesc": "回放列表导出",
+               "targetAppPackage": "com.example.app", "targetAppLabel": "示例",
+               "recordMode": 1, "advanceSettings": {}, "priority": 0,
+               "gmtCreate": "2026-09-08 10:00:00", "gmtModify": "2026-09-08 10:00:00",
+               "selected": False, "storePath": "/sdcard/solopi/store/x",
+               "operationLog": json.dumps({"steps": _CASE["operationLog"]["steps"],
+                                           "storePath": "/sdcard/solopi/store/x"})}
+    captured: dict = {}
+
+    def fake_pull(serial, file_name, dest, remote_dir=app_devices.HARNESS_IMPORT_DIR, **kw):
+        captured["remote_dir"] = remote_dir
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(wrapped), encoding="utf-8")
+        return dest
+
+    monkeypatch.setattr(app_devices, "pull_device_case", fake_pull)
+    r = client.post(f"/api/projects/{pid}/app-scripts/import-device", headers=h,
+                    json={"serial": "DEV1", "file_name": "export_case.json", "source": "export"})
+    assert r.status_code == 201, r.text
+    assert captured["remote_dir"] == app_devices.SOLOPI_EXPORT_DIR
+    cj = r.json()["case_json"]
+    assert isinstance(cj["operationLog"]["steps"], list) and cj["operationLog"]["steps"]
+    for bad in ("id", "gmtCreate", "gmtModify", "selected", "storePath"):
+        assert bad not in cj
+    assert cj["caseName"] == "App导出用例"
+
+
+def test_import_device_source_invalid_400(client, device_env, db_session):
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h, "来源校验项目")
+    r = client.post(f"/api/projects/{pid}/app-scripts/import-device", headers=h,
+                    json={"serial": "DEV1", "file_name": "case_a.json", "source": "bogus"})
+    assert r.status_code == 400 and "source" in r.json()["detail"]
 
 
 def test_import_device_high_risk_gate(client, device_env, db_session, monkeypatch):

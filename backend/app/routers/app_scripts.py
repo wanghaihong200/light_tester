@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.app_automation import devices, solopi_cli
 from app.app_automation.appium_export import collect_export_bundle
-from app.app_automation.case_schema import high_risk_actions, validate_case
+from app.app_automation.case_schema import high_risk_actions, normalize_case, validate_case
 from app.automation_repo import require_repo
 from app.auth import get_current_user
 from app.config import settings
@@ -45,13 +45,21 @@ def _get_script(db: Session, current: User, script_id: int, min_role: str) -> Ap
     return s
 
 
-def _check_case(case: dict, allow_high_risk: bool) -> None:
+def _check_case(case: dict, allow_high_risk: bool) -> dict:
+    """校验闸 + 归一化统一入口:App「导出用例」RecordCaseInfo 包装结构(operationLog 为内嵌
+    JSON 字符串)先剥成原生用例再校验,包装层禁字段(id/gmtCreate/…)被剥除后方能过闸;
+    创建/更新/上传/设备拉取四条路都经此收敛,返回归一化后的 case 供落库。"""
+    try:
+        case = normalize_case(case)
+    except ValueError as e:
+        raise HTTPException(400, f"用例不合法: {e}")
     errs = validate_case(case)
     if errs:
         raise HTTPException(400, "用例不合法: " + ";".join(errs[:3]))
     risky = high_risk_actions(case)
     if risky and not allow_high_risk:
         raise HTTPException(400, f"用例含高危动作({','.join(risky)}),需勾选「允许高危动作」确认")
+    return case
 
 
 class AppScriptSave(BaseModel):
@@ -73,11 +81,11 @@ def create_script(project_id: int, payload: AppScriptSave, db: Session = Depends
                   current: User = Depends(get_current_user)):
     _get_project(db, project_id)
     ensure_project_access(db, current, project_id, "editor")
-    _check_case(payload.case, payload.allow_high_risk)
+    case = _check_case(payload.case, payload.allow_high_risk)
     s = AppScript(project_id=project_id,
-                  name=payload.name or str(payload.case.get("caseName") or "") or "未命名用例",
-                  description=payload.description, case_json=payload.case,
-                  app_package=str(payload.case.get("targetAppPackage") or ""),
+                  name=payload.name or str(case.get("caseName") or "") or "未命名用例",
+                  description=payload.description, case_json=case,
+                  app_package=str(case.get("targetAppPackage") or ""),
                   created_by=current.id, updated_by=current.id)
     db.add(s)
     db.commit()
@@ -104,9 +112,9 @@ def update_script(script_id: int, payload: AppScriptPatch, db: Session = Depends
                   current: User = Depends(get_current_user)):
     s = _get_script(db, current, script_id, "editor")
     if payload.case is not None:
-        _check_case(payload.case, payload.allow_high_risk)
-        s.case_json = payload.case
-        s.app_package = str(payload.case.get("targetAppPackage") or "")
+        case = _check_case(payload.case, payload.allow_high_risk)
+        s.case_json = case
+        s.app_package = str(case.get("targetAppPackage") or "")
     if payload.name is not None:
         s.name = payload.name
     if payload.description is not None:
@@ -131,13 +139,14 @@ _IMPORT_MAX_BYTES = 1024 * 1024
 class DeviceImport(BaseModel):
     serial: str
     file_name: str
+    source: str = "harness"  # harness=PC CLI 推送目录;export=手机 App「导出用例」目录(真机实测)
     name: str | None = None
     allow_high_risk: bool = False
 
 
 def _create_from_case(db: Session, current: User, project_id: int, case: dict,
                       name: str | None, allow_high_risk: bool) -> AppScript:
-    _check_case(case, allow_high_risk)
+    case = _check_case(case, allow_high_risk)
     s = AppScript(project_id=project_id,
                   name=name or str(case.get("caseName") or "") or "未命名用例",
                   case_json=case, app_package=str(case.get("targetAppPackage") or ""),
@@ -154,9 +163,12 @@ def device_cases(project_id: int, serial: str, dir_: str | None = Query(None, al
     _get_project(db, project_id)
     ensure_project_access(db, current, project_id, "editor")  # 读设备=写会话语义(对齐录制流闸 editor)
     try:
-        return devices.list_device_cases(serial, dir_ or devices.HARNESS_IMPORT_DIR)
+        return devices.list_device_cases(serial, dir_)  # dir_=None 默认双目录(harness + App导出)
     except (RuntimeError, subprocess.SubprocessError, OSError) as e:
         raise HTTPException(400, f"设备读取失败: {e}")
+
+
+_SOURCE_DIRS = {"harness": devices.HARNESS_IMPORT_DIR, "export": devices.SOLOPI_EXPORT_DIR}
 
 
 @router.post("/projects/{project_id}/app-scripts/import-device", response_model=AppScriptOut, status_code=201)
@@ -164,14 +176,19 @@ def import_device(project_id: int, payload: DeviceImport, db: Session = Depends(
                   current: User = Depends(get_current_user)):
     _get_project(db, project_id)
     ensure_project_access(db, current, project_id, "editor")
+    remote_dir = _SOURCE_DIRS.get(payload.source)
+    if remote_dir is None:
+        raise HTTPException(400, "source 须为 harness(PC推送)或 export(App导出)")
     dest = settings.app_data_dir / "imports" / payload.file_name
     try:
-        devices.pull_device_case(payload.serial, payload.file_name, dest)
+        devices.pull_device_case(payload.serial, payload.file_name, dest, remote_dir=remote_dir)
         case = json.loads(dest.read_text(encoding="utf-8-sig"))
     except (RuntimeError, subprocess.SubprocessError, OSError) as e:
         raise HTTPException(400, f"拉取失败: {e}")
     except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
         raise HTTPException(400, f"文件不是合法 JSON: {payload.file_name}")
+    # App 导出文件是 RecordCaseInfo 包装结构(operationLog 为内嵌 JSON 字符串),
+    # 归一化在 _create_from_case → _check_case 统一入口完成。
     return _create_from_case(db, current, project_id, case, payload.name, payload.allow_high_risk)
 
 

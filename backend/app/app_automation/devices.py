@@ -12,6 +12,11 @@ _locks_guard = threading.Lock()
 DEVICE_LOCKS: dict[str, threading.BoundedSemaphore] = {}
 
 HARNESS_IMPORT_DIR = "/sdcard/Android/data/com.alipay.hulu/files/harness-import"
+# 手机 App 回放列表「导出用例」实际写入目录(FileUtils.getSubDir("export"),真机实测):
+# harness-import 只是 HarnessSchemeResolver(PC CLI case-import 推送)的写入目录,与 App 导出无关。
+SOLOPI_EXPORT_DIR = "/sdcard/solopi/export"
+
+_CASE_SOURCES = ((HARNESS_IMPORT_DIR, "harness"), (SOLOPI_EXPORT_DIR, "export"))
 
 
 def lock_for(serial: str) -> threading.BoundedSemaphore:
@@ -30,20 +35,28 @@ def list_devices_detailed() -> list[dict]:
     return rows
 
 
-def list_device_cases(serial: str, remote_dir: str = HARNESS_IMPORT_DIR) -> list[dict]:
+def list_device_cases(serial: str, remote_dir: str | None = None) -> list[dict]:
     """列出设备上录制导出的用例 JSON(只列文件名,不拉内容);目录不存在/为空返回 []。
-    ?dir= 会拼进 adb shell 参数、在设备端 sh 里执行,目录须过白名单防注入(终审 I1;
-    保留 ?dir= 覆盖能力,见前置研究修正 #3);不匹配抛 RuntimeError(路由 except 转 400)。"""
-    if not re.fullmatch(r"[/A-Za-z0-9_.\- ]+", remote_dir):
-        raise RuntimeError(f"非法目录: {remote_dir}")
-    p = subprocess.run(["adb", "-s", serial, "shell", "ls", f"{remote_dir}/*.json"],
-                       capture_output=True, timeout=30)
-    names = []
-    for ln in p.stdout.decode("utf-8", "replace").splitlines():
-        ln = ln.strip()
-        if ln.endswith(".json") and "No such file" not in ln:
-            names.append(ln.rsplit("/", 1)[-1])
-    return [{"file_name": n} for n in sorted(names)]
+    默认扫两目录:harness-import(PC CLI 推送)+ /sdcard/solopi/export(App「导出用例」),
+    每条带 source 标明来源;同名文件两目录都有时两条都返回,按 (file_name, source) 排序。
+    显式传 remote_dir(?dir= 覆盖,见前置研究修正 #3)只扫该目录,source 归 harness(调试通道)。
+    ?dir= 会拼进 adb shell 参数、在设备端 sh 里执行,目录须过白名单防注入(终审 I1);
+    不匹配抛 RuntimeError(路由 except 转 400)。"""
+    if remote_dir is not None:
+        dirs = ((remote_dir, "harness"),)
+    else:
+        dirs = _CASE_SOURCES
+    out: list[dict] = []
+    for d, source in dirs:
+        if not re.fullmatch(r"[/A-Za-z0-9_.\- ]+", d):
+            raise RuntimeError(f"非法目录: {d}")
+        p = subprocess.run(["adb", "-s", serial, "shell", "ls", f"{d}/*.json"],
+                           capture_output=True, timeout=30)
+        for ln in p.stdout.decode("utf-8", "replace").splitlines():
+            ln = ln.strip()
+            if ln.endswith(".json") and "No such file" not in ln:
+                out.append({"file_name": ln.rsplit("/", 1)[-1], "source": source})
+    return sorted(out, key=lambda r: (r["file_name"], r["source"]))
 
 
 def pull_device_case(serial: str, file_name: str, dest: Path, remote_dir: str = HARNESS_IMPORT_DIR) -> Path:

@@ -1,5 +1,9 @@
 # backend/tests/test_app_case_schema.py
-from app.app_automation.case_schema import high_risk_actions, validate_case
+import json
+
+import pytest
+
+from app.app_automation.case_schema import high_risk_actions, normalize_case, validate_case
 
 
 def _step(action="SLEEP", params=None, node=None):
@@ -66,3 +70,50 @@ def test_high_risk_actions_detected():
              _step(action="CLEAR_DATA", params={"text": ""})]
     assert high_risk_actions(_case(steps=steps)) == ["CLEAR_DATA", "KILL_PROCESS"]
     assert high_risk_actions(_case()) == []
+
+
+# ---- normalize_case:App「导出用例」RecordCaseInfo 包装结构 → 原生用例(真机实测校正)----
+
+def _wrapped(steps=None, **over):
+    """手机 App 回放列表「导出用例」写的包装结构:顶层多 id/gmtCreate/gmtModify/selected/storePath,
+    operationLog 是内嵌 GeneralOperationLogBean JSON 字符串({"steps":[…], "storePath":…})。"""
+    inner_steps = steps if steps is not None else [_step(), _step(action="CLICK", params={"text": ""})]
+    raw = {"caseName": "App导出用例", "caseDesc": "回放列表导出", "targetAppPackage": "com.example.app",
+           "targetAppLabel": "示例App", "recordMode": 1, "advanceSettings": {}, "priority": 0,
+           "id": 7, "gmtCreate": "2026-09-08 10:00:00", "gmtModify": "2026-09-08 10:00:00",
+           "selected": True, "storePath": "/sdcard/solopi/store/smoke",
+           "operationLog": json.dumps({"steps": inner_steps,
+                                       "storePath": "/sdcard/solopi/store/smoke"})}
+    raw.update(over)
+    return raw
+
+
+def test_normalize_wrapped_record_case_to_native():
+    out = normalize_case(_wrapped())
+    assert isinstance(out["operationLog"], dict)
+    assert len(out["operationLog"]["steps"]) == 2
+    assert out["caseName"] == "App导出用例"
+    assert out["targetAppPackage"] == "com.example.app"
+    # 包装层 id/gmtCreate/gmtModify/selected/storePath 一律丢弃(operationLog 字符串已换成 dict)
+    for bad in ("id", "gmtCreate", "gmtModify", "selected", "storePath"):
+        assert bad not in out
+    # 剥包装后过原生校验(禁字段闸 + steps 非空数组)
+    assert validate_case(out) == []
+
+
+def test_normalize_wrapped_bad_operation_log_raises():
+    raw = _wrapped()
+    raw["operationLog"] = "{not json"
+    with pytest.raises(ValueError):
+        normalize_case(raw)
+
+
+def test_normalize_native_dict_identity():
+    case = _case(id=1)  # 原生(harness/手贴)恒等返回,禁字段交由 validate_case 继续把守
+    assert normalize_case(case) is case
+
+
+def test_normalize_non_dict_raises():
+    for bad in (None, "x", 3, [1]):
+        with pytest.raises(ValueError):
+            normalize_case(bad)
