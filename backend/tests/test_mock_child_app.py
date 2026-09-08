@@ -137,3 +137,27 @@ def test_oversized_and_binary_body_hit_still_served(db_session):
     hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
     assert hit.request_body
     assert len(hit.request_body.encode("utf-8")) <= 65535  # TEXT 容量(65,535 字节)内
+
+
+def test_real_subprocess_end_to_end(db_session):
+    """真 spawn 一例子进程:supervisor 启动 → 真端口命中 → 停止。走真实 DB(test 库)。"""
+    from app.mock_service import supervisor
+
+    p = Project(name="p-child-real")
+    db_session.add(p)
+    db_session.commit()
+    inst = MockInstance(project_id=p.id, name="real", port=9499, token="real" + "0" * 28)
+    db_session.add(inst)
+    db_session.commit()
+    db_session.add(MockRule(instance_id=inst.id, method="GET", path_template="/hi",
+                            response_status=200, response_body="hello"))
+    db_session.commit()
+    try:
+        status, msg = supervisor.start_instance(db_session, inst)
+        assert status == "running", msg
+        r = httpx.get("http://127.0.0.1:9499/hi", timeout=3)
+        assert r.status_code == 200 and r.text == "hello"
+        supervisor.stop_instance(db_session, inst)
+        assert inst.status == "stopped"
+    finally:
+        supervisor.shutdown_all()

@@ -23,18 +23,24 @@ async def lifespan(app: FastAPI):
 
     with SessionLocal() as _db:
         ensure_bootstrap_admin(_db)
+        # Mock 实例开机对账:desired=running 的实例重新拉起(空表 no-op,测试安全)
+        from app.mock_service import supervisor
+        supervisor.reconcile(_db)
     # 无条件注册主事件循环,使 enqueue_job 可跨线程安全投递(线程安全)
     from app.jobs.pipeline import set_loop
     set_loop(asyncio.get_running_loop())
     # UI 执行器线程同样经主循环把预览帧/步骤事件投递回 bus
     from app.ui_automation.loopref import set_ui_loop
     set_ui_loop(asyncio.get_running_loop())
+    supervisor.start_probe_task()  # Mock 实例探活循环(10s 一轮,异常吞掉绝不炸平台)
     workers: list[asyncio.Task] = []
     if settings.anthropic_api_key:  # 无 key 的环境(测试/离线)不启动 worker
         from app.jobs.pipeline import worker_loop
 
         workers = [asyncio.create_task(worker_loop()) for _ in range(3)]
     yield
+    supervisor.stop_probe_task()
+    supervisor.shutdown_all()  # 平台停机:全部 mock 子进程关停
     for w in workers:
         w.cancel()
     if workers:
