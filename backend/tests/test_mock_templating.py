@@ -38,3 +38,10 @@ def test_undefined_renders_empty_and_plain_text_passthrough():
     assert _render("{{ nope }}") == ""
     assert _render("hello world") == "hello world"
     assert _render("{{ path.id }}", path_vars={}) == ""    # 不抛未定义错误
+
+
+def test_undefined_chained_access_renders_empty():
+    # 链式取值(属性/下标)同样渲染空串,不抛 UndefinedError(契约:未定义不抛错)
+    assert _render("{{ nope.foo }}") == ""
+    assert _render("{{ body.user.name }}", body_json=None) == ""
+    assert _render("{{ body['a']['b'] }}", body_json={}) == ""

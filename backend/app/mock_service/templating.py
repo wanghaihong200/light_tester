@@ -4,11 +4,11 @@ import random
 import time
 import uuid
 
-from jinja2 import Environment
+from jinja2 import Environment, ChainableUndefined
 
 from jsonpath_ng.ext import parse as _jsonpath_parse
 
-_env = Environment()  # 平台自用工具,非对外沙箱;Undefined 默认渲染空串
+_env = Environment(undefined=ChainableUndefined)  # 平台自用工具,非对外沙箱;Undefined(含链式取值)渲染空串
 
 
 def render_template(template: str, *, path_vars: dict[str, str],
