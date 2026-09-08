@@ -213,3 +213,115 @@ class AppRunOut(BaseModel):
     error: str | None
     started_at: datetime | None
     finished_at: datetime | None
+
+
+class MockCondition(BaseModel):
+    scope: Literal["query", "header", "body"]
+    key: str
+    match: Literal["eq", "regex"] = "eq"
+    value: str
+
+
+class MockInstanceSave(BaseModel):
+    name: str
+    description: str | None = None
+    port: int | None = None          # None=自动分配
+    cors_enabled: bool = False
+    default_status: int = Field(404, ge=100, le=599)
+    default_body: str | None = None
+
+
+class MockInstancePatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    port: int | None = None          # None=不改
+    cors_enabled: bool | None = None
+    default_status: int | None = Field(None, ge=100, le=599)
+    default_body: str | None = None
+
+
+class MockInstanceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    project_id: int
+    name: str
+    description: str | None
+    port: int
+    cors_enabled: bool
+    default_status: int
+    default_body: str | None
+    desired: str
+    status: str
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MockRuleSave(BaseModel):
+    method: str
+    path_template: str
+    conditions: list[MockCondition] = []
+    enabled: bool = True
+    response_status: int = Field(200, ge=100, le=599)
+    response_headers: dict[str, str] = {}
+    response_body: str | None = None
+    enable_template: bool = False
+    delay_ms: int = Field(0, ge=0)
+    timeout_enabled: bool = False
+    timeout_seconds: int = Field(30, ge=1, le=3600)
+
+
+class MockRulePatch(MockRuleSave):
+    method: str | None = None
+    path_template: str | None = None
+    conditions: list[MockCondition] | None = None
+    enabled: bool | None = None
+    response_status: int | None = Field(None, ge=100, le=599)
+    response_headers: dict[str, str] | None = None
+    delay_ms: int | None = Field(None, ge=0)
+    timeout_enabled: bool | None = None
+    timeout_seconds: int | None = Field(None, ge=1, le=3600)
+
+
+class MockRuleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    instance_id: int
+    method: str
+    path_template: str
+    conditions: list
+    enabled: bool
+    response_status: int
+    response_headers: dict
+    response_body: str | None
+    enable_template: bool
+    delay_ms: int
+    timeout_enabled: bool
+    timeout_seconds: int
+    sort_order: int
+    updated_at: datetime
+
+
+class MockHitOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    instance_id: int
+    rule_id: int | None
+    method: str
+    path: str
+    query: str | None
+    matched: bool
+    response_status: int | None
+    delay_ms: int
+    elapsed_ms: int
+    error: str | None
+    created_at: datetime
+
+
+class MockHitDetailOut(MockHitOut):
+    request_headers: dict | None
+    request_body: str | None
+
+
+class MockReorderBody(BaseModel):
+    rule_ids: list[int]

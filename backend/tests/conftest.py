@@ -16,11 +16,11 @@ from sqlalchemy.orm import Session
 from app.database import Base, SessionLocal, engine
 from app.main import create_app
 from app.models import (
-    Case, Document, FeaturePoint, GenerationJob, Module, Project, ProjectMember,
-    StagedCase, Step, UiAuthState, UiRun, UiScript, User,
+    Case, Document, FeaturePoint, GenerationJob, MockHit, MockInstance, MockRule,
+    Module, Project, ProjectMember, StagedCase, Step, UiAuthState, UiRun, UiScript, User,
 )
 
-_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState, User, ProjectMember)
+_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState, User, MockHit, MockInstance, MockRule, ProjectMember)
 
 
 @pytest.fixture(scope="session", autouse=True)

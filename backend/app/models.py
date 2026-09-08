@@ -403,3 +403,74 @@ class ProjectMember(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), comment="用户ID")
     role: Mapped[str] = mapped_column(String(16), comment="owner/editor/viewer")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class MockInstance(Base):
+    __tablename__ = "mock_instances"
+    __table_args__ = (UniqueConstraint("port", name="uq_mock_instance_port"),
+                      {"comment": "Mock服务实例表：项目下可多个,一实例=一独立进程+端口=一 base_url"})
+    id: Mapped[int] = mapped_column(primary_key=True, comment="实例主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    name: Mapped[str] = mapped_column(String(200), comment="实例名称")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="实例描述")
+    port: Mapped[int] = mapped_column(Integer, comment="监听端口(全局唯一,含软删行=端口预留)")
+    token: Mapped[str] = mapped_column(String(64), comment="实例令牌(uuid hex):健康/关停端点鉴权+孤儿识别")
+    cors_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="CORS 放行:* 头+OPTIONS 预检直放")
+    default_status: Mapped[int] = mapped_column(Integer, default=404, comment="无命中兜底状态码")
+    default_body: Mapped[str | None] = mapped_column(Text, nullable=True, comment="无命中兜底响应体(空则用内置 JSON)")
+    desired: Mapped[str] = mapped_column(String(16), default="stopped", comment="期望状态:running/stopped(声明式)")
+    status: Mapped[str] = mapped_column(String(16), default="stopped", comment="实际状态:stopped/starting/running/error")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="error 态原因")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+
+
+class MockRule(Base):
+    __tablename__ = "mock_rules"
+    __table_args__ = {"comment": "Mock规则表：实例内有序的匹配条件组→响应定义,第一条命中生效"}
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("mock_instances.id"))
+    method: Mapped[str] = mapped_column(String(10), comment="HTTP 方法(大写)")
+    path_template: Mapped[str] = mapped_column(String(500), comment="路径:精确或 /a/{var} 模板")
+    conditions: Mapped[list] = mapped_column(JSON, default=list,
+        comment='条件行:[{scope:"query|header|body", key, match:"eq|regex", value}];AND 语义')
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="停用规则不参与匹配")
+    response_status: Mapped[int] = mapped_column(Integer, default=200, comment="响应状态码(100-599)")
+    response_headers: Mapped[dict] = mapped_column(JSON, default=dict, comment="响应头 kv")
+    response_body: Mapped[str | None] = mapped_column(Text, nullable=True, comment="响应体(可含模板)")
+    enable_template: Mapped[bool] = mapped_column(Boolean, default=False, comment="响应体启用 Jinja2 模板渲染")
+    delay_ms: Mapped[int] = mapped_column(Integer, default=0, comment="固定延迟毫秒")
+    timeout_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="模拟超时:挂住不回")
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=30, comment="模拟超时挂住秒数(1-3600)")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, comment="实例内排序,小者先匹配")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+
+
+class MockHit(Base):
+    __tablename__ = "mock_hits"
+    __table_args__ = {"comment": "命中记录表：打到实例的请求及处理结果(append-only,清空=硬删)"}
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("mock_instances.id"))
+    rule_id: Mapped[int | None] = mapped_column(ForeignKey("mock_rules.id"), nullable=True, comment="命中的规则;NULL=未命中走兜底")
+    method: Mapped[str] = mapped_column(String(10))
+    path: Mapped[str] = mapped_column(String(500))
+    query: Mapped[str | None] = mapped_column(String(1000), nullable=True, comment="原始 query 串(无 ?)")
+    request_headers: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    request_body: Mapped[str | None] = mapped_column(Text, nullable=True, comment="截断 64KB 的 utf-8 摘录")
+    matched: Mapped[bool] = mapped_column(Boolean, default=False)
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="回写状态码(超时挂住=规则状态)")
+    delay_ms: Mapped[int] = mapped_column(Integer, default=0)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="如 timeout-simulated")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
