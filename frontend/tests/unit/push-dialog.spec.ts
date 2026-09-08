@@ -71,6 +71,7 @@ describe('PushDialog', () => {
     expect(listBranches).toHaveBeenCalledWith(2, 'app')
     expect(pushFiles).toHaveBeenCalledWith(2, ['T.java'], 'dev', expect.any(String), 'app')
     expect(localStorage.getItem('push_branch_2_app')).toBe('dev')
+    expect(localStorage.getItem('push_branch_2')).toBeNull() // 旧 key 只读迁移:成功推送也不回写
   })
 
   it('分支记忆按 kind 隔离;api 回退读旧 key;kind 变化时重读', async () => {
@@ -90,5 +91,16 @@ describe('PushDialog', () => {
     // 切到 app:无任何记忆 → 默认 dev
     await w.setProps({ kind: 'app' })
     expect((w.vm as any).branch).toBe('dev')
+  })
+
+  it('kind 变化时默认文案重算(复现真实挂载路径:api 起步再切 web)', async () => {
+    const w = mount(PushDialog, {
+      props: { visible: false, projectId: 4, changes: [], kind: 'api' },
+      global: { plugins: [ElementPlus] },
+    })
+    expect((w.vm as any).commitMessage).toContain('AI 生成接口测试')
+    await w.setProps({ kind: 'web' })
+    expect((w.vm as any).commitMessage).toContain('自动化测试推送')
+    expect((w.vm as any).commitMessage).not.toContain('接口')
   })
 })

@@ -58,11 +58,12 @@ function readRememberedBranch(): string {
 }
 const branch = ref(readRememberedBranch())
 // PushDialog 在 RepoPane 内常挂载,kind 切换不重建实例,需重读记忆
-watch(() => props.kind, () => { branch.value = readRememberedBranch() })
+watch(() => props.kind, () => { branch.value = readRememberedBranch(); commitMessage.value = defaultCommitMessage() })
 
-const commitMessage = ref(
-  `${props.kind === 'api' ? 'AI 生成接口测试' : '自动化测试推送'} ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
-)
+function defaultCommitMessage() {
+  return `${props.kind === 'api' ? 'AI 生成接口测试' : '自动化测试推送'} ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`
+}
+const commitMessage = ref(defaultCommitMessage())
 
 const canPush = computed(() => selected.value.length > 0 && branch.value.trim())
 watch(() => props.visible, async (v) => {
