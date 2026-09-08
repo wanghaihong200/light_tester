@@ -45,7 +45,7 @@ describe('AppAutoPane', () => {
     api.listAppScripts.mockResolvedValue([SCRIPT])
     api.listAppRuns.mockResolvedValue([RUN])
     api.listAppDevices.mockResolvedValue([{ serial: 'DEV-A', state: 'device' }])
-    api.listDeviceCases.mockResolvedValue([{ file_name: 'case_a.json' }])
+    api.listDeviceCases.mockResolvedValue([{ file_name: 'case_a.json', source: 'harness' }])
   })
 
   it('加载脚本与运行历史', async () => {

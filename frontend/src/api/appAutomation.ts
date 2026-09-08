@@ -6,6 +6,8 @@ const TERMINAL_RUN_STATUS: AppRunStatus[] = ['passed', 'failed', 'cancelled']
 
 export interface DeviceCase {
   file_name: string
+  // harness = PC CLI 推送写入 harness-import;export = 手机 App「导出用例」写入 /sdcard/solopi/export
+  source: 'harness' | 'export'
 }
 
 export interface AppRunCreateBody {
@@ -53,7 +55,7 @@ export const listDeviceCases = (projectId: number, serial: string) =>
 
 export const importDeviceCase = (
   projectId: number,
-  body: { serial: string; file_name: string; name?: string; allow_high_risk?: boolean },
+  body: { serial: string; file_name: string; source?: 'harness' | 'export'; name?: string; allow_high_risk?: boolean },
 ) => http.post<AppScript>(`/projects/${projectId}/app-scripts/import-device`, body)
 
 export const importUploadCase = (

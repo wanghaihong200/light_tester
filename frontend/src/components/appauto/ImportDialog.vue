@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import {
   importDeviceCase, importUploadCase, listAppDevices, listDeviceCases,
 } from '../../api/appAutomation'
+import type { DeviceCase } from '../../api/appAutomation'
 import type { AppScript, DeviceInfo } from '../../types'
 
 const props = defineProps<{ projectId: number; visible: boolean }>()
@@ -12,10 +13,13 @@ const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'importe
 const tab = ref('device')
 const devices = ref<DeviceInfo[]>([])
 const serial = ref('')
-const cases = ref<{ file_name: string }[]>([])
-const fileName = ref('')
+const cases = ref<DeviceCase[]>([])
+// 选中整个 DeviceCase(同名文件可能同时存在于推送/App导出两目录,单 file_name 区分不了来源)
+const sel = ref<DeviceCase | null>(null)
 const allowHighRisk = ref(false)
 const busy = ref(false)
+
+const caseLabel = (c: DeviceCase) => `${c.file_name}(${c.source === 'export' ? 'App导出' : '推送'})`
 
 watch(() => props.visible, async (v) => {
   if (!v) return
@@ -27,7 +31,7 @@ watch(() => props.visible, async (v) => {
 
 watch(serial, async (s) => {
   cases.value = []
-  fileName.value = ''
+  sel.value = null
   if (!s) return
   try {
     cases.value = await listDeviceCases(props.projectId, s)
@@ -35,11 +39,12 @@ watch(serial, async (s) => {
 })
 
 async function onImportDevice() {
-  if (!serial.value || !fileName.value) return
+  if (!serial.value || !sel.value) return
   busy.value = true
   try {
     const s = await importDeviceCase(props.projectId, {
-      serial: serial.value, file_name: fileName.value, allow_high_risk: allowHighRisk.value })
+      serial: serial.value, file_name: sel.value.file_name, source: sel.value.source,
+      allow_high_risk: allowHighRisk.value })
     ElMessage.success(`已导入「${s.name}」`)
     emit('imported', s)
     emit('update:visible', false)
@@ -76,8 +81,10 @@ async function onFileChange(e: Event) {
           <el-option v-for="d in devices" :key="d.serial" :value="d.serial"
                      :label="`${d.serial}(${d.state})`" />
         </el-select>
-        <el-select v-model="fileName" placeholder="选择设备上的用例文件" style="width: 100%; margin-top: 8px">
-          <el-option v-for="c in cases" :key="c.file_name" :value="c.file_name" :label="c.file_name" />
+        <el-select v-model="sel" value-key="source" placeholder="选择设备上的用例文件"
+                   style="width: 100%; margin-top: 8px">
+          <el-option v-for="c in cases" :key="`${c.source}:${c.file_name}`" :value="c"
+                     :label="caseLabel(c)" />
         </el-select>
       </el-tab-pane>
       <el-tab-pane label="文件上传" name="upload">
@@ -87,7 +94,7 @@ async function onFileChange(e: Event) {
     <el-checkbox v-model="allowHighRisk" style="margin-top: 8px">允许高危动作(CLEAR_DATA / KILL_PROCESS / JUMP_TO_PAGE)</el-checkbox>
     <template #footer>
       <el-button @click="emit('update:visible', false)">取消</el-button>
-      <el-button type="primary" :loading="busy" :disabled="tab !== 'device' || !fileName" @click="onImportDevice">
+      <el-button type="primary" :loading="busy" :disabled="tab !== 'device' || !sel" @click="onImportDevice">
         导入所选
       </el-button>
     </template>
