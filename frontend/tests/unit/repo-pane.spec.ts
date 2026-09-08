@@ -23,6 +23,7 @@ const repoApi = vi.hoisted(() => ({
 vi.mock('../../src/api/repo', () => repoApi)
 
 import RepoPane from '../../src/components/RepoPane.vue'
+import PushDialog from '../../src/components/PushDialog.vue'
 
 const mountPane = (projectId = 1) =>
   mount(RepoPane, {
@@ -114,10 +115,13 @@ describe('RepoPane', () => {
 
   // ── plan11 Task 8:接口/Web 双仓切换 + 仓配置表单 ──
 
-  it('加载时拉仓配置并以 kind=api 拉文件树,APP 工程项禁用提示计划 12', async () => {
+  // ── plan12 补遗:APP 工程页签放开 + 三仓统一直推 ──
+
+  it('加载时拉仓配置并以 kind=api 拉文件树,三仓页签齐备且 APP 可选', async () => {
     repoApi.listAutomationRepos.mockResolvedValue([
       { id: 1, kind: 'api', repo_url: 'https://g/api.git', repo_token: 't' },
       { id: 2, kind: 'web', repo_url: 'https://g/web.git', repo_token: null },
+      { id: 3, kind: 'app', repo_url: 'https://g/app.git', repo_token: null },
     ])
     repoApi.listFiles.mockResolvedValue({ name: 'api', path: '', is_dir: true, children: [] })
 
@@ -126,11 +130,34 @@ describe('RepoPane', () => {
 
     expect(repoApi.listAutomationRepos).toHaveBeenCalledWith(1)
     expect(repoApi.listFiles).toHaveBeenCalledWith(1, 'api')
-    // kind 切换器:接口/Web 可选,APP 禁用并提示计划 12 提供
+    // 三页签齐备,计划 12 占位提示消失,无 disabled 页签
     expect(w.text()).toContain('接口工程')
     expect(w.text()).toContain('Web工程')
     expect(w.text()).toContain('APP工程')
-    expect(w.text()).toContain('计划 12 提供')
+    expect(w.text()).not.toContain('计划 12 提供')
+    const radios = w.findAll('.el-radio-button')
+    expect(radios.length).toBe(3)
+    expect(radios.every((r) => !r.classes().includes('is-disabled'))).toBe(true)
+  })
+
+  it('切到 APP 工程后文件树带 kind=app,footer 直推按钮可用且 PushDialog 收到 kind', async () => {
+    repoApi.listAutomationRepos.mockResolvedValue([{ id: 3, kind: 'app', repo_url: 'https://g/app.git' }])
+    repoApi.listFiles.mockResolvedValue({ name: 'app', path: '', is_dir: true, children: [] })
+    // clearAllMocks 不清 mock 实现,上方「树节点着色」用例遗留的 listChanges 返回会漏进来,显式钉回空变更
+    repoApi.listChanges.mockResolvedValue({ files: [] })
+
+    const w = mountPane()
+    await flushPromises()
+
+    ;(w.vm as any).kind = 'app'
+    await flushPromises()
+
+    expect(repoApi.listFiles).toHaveBeenLastCalledWith(1, 'app')
+    // footer:三 kind 恒显「变更文件 N」直推按钮,原「导出流程」提示删除
+    expect(w.text()).toContain('变更文件 0')
+    expect(w.text()).not.toContain('导出」流程')
+    // PushDialog 收到当前 kind
+    expect(w.findComponent(PushDialog).props('kind')).toBe('app')
   })
 
   it('切到 Web 工程后文件树带 kind=web', async () => {

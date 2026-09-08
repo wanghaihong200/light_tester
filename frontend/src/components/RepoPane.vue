@@ -6,7 +6,7 @@
         <el-radio-group v-model="kind" size="small">
           <el-radio-button value="api">接口工程</el-radio-button>
           <el-radio-button value="web">Web工程</el-radio-button>
-          <el-radio-button value="app" disabled>APP工程<span class="app-sub">计划 12 提供</span></el-radio-button>
+          <el-radio-button value="app">APP工程</el-radio-button>
         </el-radio-group>
         <el-form class="repo-form" inline @submit.prevent>
           <el-form-item label="仓地址">
@@ -76,10 +76,9 @@
         </div>
       </div>
       <div class="footer">
-        <el-button v-if="kind === 'api'" @click="pushVisible = true">变更文件 {{ changeCount }}</el-button>
-        <span v-else class="footer-hint">Web 仓推送请走 Web 自动化页的「导出」流程</span>
+        <el-button @click="pushVisible = true">变更文件 {{ changeCount }}</el-button>
       </div>
-      <PushDialog v-model:visible="pushVisible" :project-id="projectId" :changes="changes" @pushed="onPushed" />
+      <PushDialog v-model:visible="pushVisible" :project-id="projectId" :changes="changes" :kind="kind" @pushed="onPushed" />
     </template>
   </div>
 </template>
@@ -94,7 +93,7 @@ import PushDialog from './PushDialog.vue'
 
 const props = defineProps<{ projectId: number; project: Project }>()
 
-// ── plan11:接口/Web 双仓。所有 repo 调用都携带当前 kind;kind='api' 时行为与改造前一致 ──
+// ── plan11 多仓 + plan12 补遗:api/web/app 三仓。所有 repo 调用都携带当前 kind;kind='api' 时行为与改造前一致 ──
 const kind = ref<RepoKind>('api')
 const repos = ref<AutomationRepoRow[]>([])
 const cfgUrl = ref('')
@@ -295,7 +294,6 @@ watch(() => props.projectId, () => { loadConfig(); loadTree(); loadChanges(); lo
 .repo-pane { display: flex; flex-direction: column; height: 100%; }
 .hint { padding: 16px; color: #909399; }
 .repobar { padding: 8px 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.app-sub { font-size: 12px; color: #c0c4cc; margin-left: 4px; }
 .repo-form { display: flex; align-items: center; gap: 8px; }
 .repo-form :deep(.el-form-item) { margin: 0; }
 .cfg-input { width: 260px; }
@@ -316,5 +314,4 @@ watch(() => props.projectId, () => { loadConfig(); loadTree(); loadChanges(); lo
 .placeholder { color: #c0c4cc; padding: 12px; }
 .cfg-empty { color: #e6a23c; }
 .footer { padding: 8px 0; border-top: 1px solid #ebeef5; }
-.footer-hint { color: #909399; font-size: 12px; }
 </style>
