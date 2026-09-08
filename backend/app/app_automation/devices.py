@@ -6,8 +6,6 @@ import subprocess
 import threading
 from pathlib import Path
 
-_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
-
 _locks_guard = threading.Lock()
 DEVICE_LOCKS: dict[str, threading.BoundedSemaphore] = {}
 
@@ -60,8 +58,13 @@ def list_device_cases(serial: str, remote_dir: str | None = None) -> list[dict]:
 
 
 def pull_device_case(serial: str, file_name: str, dest: Path, remote_dir: str = HARNESS_IMPORT_DIR) -> Path:
-    """adb pull 单个用例文件到平台侧 dest;文件名白名单防路径穿越。"""
-    if not _NAME_RE.fullmatch(file_name) or file_name in (".", ".."):
+    """adb pull 单个用例文件到平台侧 dest;文件名黑名单防路径穿越——拦空串、点点、
+    路径分隔符(/ \\)与控制字符(含 \\x00),其余(含中文)放行。
+    真机实测校正:App「导出用例」文件名 = <用例名>-<gmtCreate>.json,中文用例名被旧
+    ASCII 白名单误拒(400「非法文件名」);白名单本意只是防穿越,黑名单不弱化该能力。"""
+    if (not file_name or file_name in (".", "..")
+            or "/" in file_name or "\\" in file_name
+            or any(ord(c) < 0x20 or ord(c) == 0x7F for c in file_name)):
         raise RuntimeError(f"非法文件名: {file_name}")
     dest.parent.mkdir(parents=True, exist_ok=True)
     p = subprocess.run(["adb", "-s", serial, "pull", f"{remote_dir}/{file_name}", str(dest)],

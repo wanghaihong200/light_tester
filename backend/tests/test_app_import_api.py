@@ -8,6 +8,7 @@
   复用 tests.test_app_scripts_api 的 _auth 同型 helper。"""
 
 import json
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -178,6 +179,29 @@ def test_import_device_source_invalid_400(client, device_env, db_session):
     r = client.post(f"/api/projects/{pid}/app-scripts/import-device", headers=h,
                     json={"serial": "DEV1", "file_name": "case_a.json", "source": "bogus"})
     assert r.status_code == 400 and "source" in r.json()["detail"]
+
+
+def test_pull_device_case_allows_chinese_file_name(monkeypatch, tmp_path):
+    """真机实测校正(修复二批):App「导出用例」文件名 = <用例名>-<gmtCreate>.json,
+    中文用例名被旧 ASCII 白名单误拒(400「非法文件名」);黑名单语义下须放行。"""
+    captured: dict = {}
+
+    def fake_run(argv, capture_output, timeout):
+        captured["argv"] = argv
+        return _Completed(stdout=b"", stderr=b"", rc=0)
+
+    monkeypatch.setattr(app_devices.subprocess, "run", fake_run)
+    dest = tmp_path / "imports" / "用例甲-1788832000000.json"
+    assert app_devices.pull_device_case("DEV1", "用例甲-1788832000000.json", dest) == dest
+    assert captured["argv"][-2] == f"{app_devices.HARNESS_IMPORT_DIR}/用例甲-1788832000000.json"
+    assert captured["argv"][-1] == str(dest)
+
+
+def test_pull_device_case_rejects_traversal():
+    """防穿越语义不回退:空串/点点/路径分隔符/控制字符全拦(不触达 adb)。"""
+    for bad in ("../evil.json", "a/b.json", "a\\b.json", "..", ".", "", "a\x00b", "a\nb"):
+        with pytest.raises(RuntimeError):
+            app_devices.pull_device_case("DEV1", bad, Path("unused") / "dest.json")
 
 
 def test_import_device_high_risk_gate(client, device_env, db_session, monkeypatch):
