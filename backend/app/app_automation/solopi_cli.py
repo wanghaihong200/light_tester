@@ -70,6 +70,10 @@ def _call(cmd_args: list[str], serial: str | None = None, timeout: int = 180,
     if p.returncode == 2 and accept_terminal_rc2 and _has_terminal_run(payload):
         return payload
     err = (p.stderr.decode("utf-8", "replace") or out).strip()[-300:]
+    # 冒烟实测:rc=2 时设备 JSON 的 error 字段在 stdout 头部,尾部 300 字符截取会把真实
+    # 原因(如 Target application is not installed: xxx)截掉,载荷带非空 error 时优先取其前 200 字符。
+    if isinstance(payload, dict) and str(payload.get("error") or "").strip():
+        err = str(payload["error"])[:200]
     stage = {2: "device", 3: "usage", 4: "protocol", 124: "timeout"}.get(p.returncode, "unknown")
     raise CliError(stage, f"CLI {' '.join(cmd_args[:2])} 失败(rc={p.returncode}): {err}", p.returncode)
 

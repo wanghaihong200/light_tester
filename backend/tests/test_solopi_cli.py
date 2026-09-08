@@ -201,3 +201,25 @@ def test_call_forces_utf8_child_env(cli_ok, monkeypatch):
     env = captured["env"]
     assert env["PYTHONUTF8"] == "1"
     assert "PATH" in env  # 原 environ 其余键保留
+
+
+# ── 冒烟实测校正(2026-09-08):rc=2 失败时设备 JSON 的 error 字段在 stdout 头部,
+#    原消息只取尾部 300 字符,把真实原因(Target application is not installed: xxx)截掉;
+#    载荷带非空 error 时消息须优先带上,否则才回退尾部截取 ──
+
+def test_rc2_json_error_field_wins_over_tail(cli_ok, monkeypatch):
+    # error 在头部、其后跟长字段:尾部 300 字符截取必然截掉 error,消息仍须带出
+    body = json.dumps({"error": "Target application is not installed: com.a",
+                       "detail": "x" * 400}).encode("utf-8")
+    monkeypatch.setattr(solopi_cli.subprocess, "run", _patch_rc(2, body, stderr=b""))
+    with pytest.raises(solopi_cli.CliError) as ei:
+        solopi_cli.perf_start("s1", ["CPU"], target_package="com.a")
+    assert "Target application is not installed: com.a" in ei.value.message
+
+
+def test_rc2_non_json_stdout_falls_back_to_tail(cli_ok, monkeypatch):
+    monkeypatch.setattr(solopi_cli.subprocess, "run",
+                        _patch_rc(2, b"not json", stderr=b"device not ready"))
+    with pytest.raises(solopi_cli.CliError) as ei:
+        solopi_cli.list_cases("s1")
+    assert "device not ready" in ei.value.message  # 无 error 字段 → 保留尾部截取
