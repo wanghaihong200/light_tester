@@ -149,3 +149,37 @@ def test_other_calls_rc2_terminal_payload_still_raises(cli_ok, monkeypatch):
     with pytest.raises(solopi_cli.CliError) as ei:
         solopi_cli.case_import("C:/c.json", "s1", replace=True)
     assert ei.value.stage == "device"
+
+
+# ── 冒烟实测校正(2026-09-08):perf-start 的 argparse 要求 --target-package 与 --global
+#    二选一必填,两者都缺 → usage error(rc=3);包名为空时须回退 --global(全局采集)──
+
+def test_perf_start_without_package_falls_back_to_global(cli_ok, monkeypatch):
+    captured = {}
+
+    def fake_run(argv, capture_output, timeout):
+        captured["argv"] = argv
+        return _FakeCompleted(stdout=b'{"sessionId": "ps1"}')
+
+    monkeypatch.setattr(solopi_cli.subprocess, "run", fake_run)
+    solopi_cli.perf_start("s1", ["CPU"])
+    argv = captured["argv"]
+    assert "--global" in argv
+    assert "--target-package" not in argv
+    i = argv.index("perf-start")
+    assert argv[i + 1:i + 3] == ["--items", "CPU"]
+
+
+def test_perf_start_with_package_uses_target_package(cli_ok, monkeypatch):
+    captured = {}
+
+    def fake_run(argv, capture_output, timeout):
+        captured["argv"] = argv
+        return _FakeCompleted(stdout=b'{"sessionId": "ps1"}')
+
+    monkeypatch.setattr(solopi_cli.subprocess, "run", fake_run)
+    solopi_cli.perf_start("s1", ["CPU", "MEM"], target_package="com.a")
+    argv = captured["argv"]
+    assert "--global" not in argv
+    assert argv[argv.index("--target-package") + 1] == "com.a"
+    assert argv[argv.index("--items") + 1] == "CPU,MEM"

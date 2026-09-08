@@ -131,10 +131,13 @@ def perf_list(serial: str) -> dict:
 
 
 def perf_start(serial: str, items: list[str], target_package: str | None = None) -> dict:
-    # ⚠ --items 的分隔符按逗号实现;若 Task 17 冒烟实测 CLI 只认空格/重复 flag,只改这一行。
+    # 冒烟实测(2026-09-08):--items 逗号分隔确认可用;argparse 要求 --target-package 与
+    # --global 二选一必填,两者都缺 → usage error(rc=3),故包名为空回退 --global(全局采集)。
     args = ["perf-start", "--items", ",".join(items)]
     if target_package:
         args += ["--target-package", target_package]
+    else:
+        args.append("--global")
     return _call(args, serial=serial, timeout=120)
 
 
