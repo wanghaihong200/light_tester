@@ -160,6 +160,31 @@ def test_app_devices_endpoint(client, device_env, db_session):
     assert {d["serial"] for d in r.json()} == {"DEV1", "DEV2"}
 
 
+def test_app_device_perf_items(client, db_session, monkeypatch):
+    """冒烟实测校正(2026-09-08):perf-list 响应键确认为 items,但每项是对象
+    {"key": "CPU", "name": …, "permissions": […]};端点须提取 key 字段返回字符串数组,
+    而非 str(dict) 出的 "{'key': 'CPU', …}" 垃圾串。"""
+    monkeypatch.setattr(solopi_cli, "perf_list", lambda serial: {"items": [
+        {"key": "CPU", "name": "CPU", "permissions": ["adb"], "tip": "", "trigger": ""},
+        {"key": "FPS", "name": "FPS", "permissions": [], "tip": "", "trigger": ""},
+    ]})
+    h = _admin_headers(client, db_session)
+    r = client.get("/api/app-devices/DEV1/perf-items", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json() == {"items": ["CPU", "FPS"]}
+
+
+def test_app_device_perf_items_fallback_shapes(client, db_session, monkeypatch):
+    """兜底语义:键名回退(metrics/keys)+ 非字典项兜底 str + dict 缺 key 过滤。"""
+    h = _admin_headers(client, db_session)
+    monkeypatch.setattr(solopi_cli, "perf_list", lambda serial: {"metrics": ["MEM", {"key": "NET"}]})
+    r = client.get("/api/app-devices/DEV1/perf-items", headers=h)
+    assert r.json() == {"items": ["MEM", "NET"]}
+    monkeypatch.setattr(solopi_cli, "perf_list", lambda serial: {"keys": [{"name": "无 key"}]})
+    r2 = client.get("/api/app-devices/DEV1/perf-items", headers=h)
+    assert r2.json() == {"items": []}  # dict 无 key 时过滤,不吐 "None"
+
+
 def test_non_member_gets_404(client, db_session, make_user):
     """Task 7 评审顺手项:非成员访问 app-scripts(列表/导入/设备面)= 404 不泄漏存在性。"""
     h = _admin_headers(client, db_session)

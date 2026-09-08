@@ -208,7 +208,11 @@ def app_device_perf_items(serial: str, current: User = Depends(get_current_user)
     except solopi_cli.CliError as e:
         raise HTTPException(400, e.message)
     items = payload.get("items") or payload.get("metrics") or payload.get("keys") or []
-    return {"items": [str(i) for i in items]}
+    # 冒烟实测(2026-09-08):items 每项是对象 {"key": "CPU", "name": …, "permissions": […]}。
+    # dict 取 key 字段;非字典项兜底 str;dict 缺 key 过滤(不向前端吐 "None"/stringify 串)。
+    return {"items": [str(i.get("key")) if isinstance(i, dict) else str(i)
+                      for i in items
+                      if not isinstance(i, dict) or i.get("key") is not None]}
 
 
 class AppScriptExportRequest(BaseModel):
