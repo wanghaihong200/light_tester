@@ -29,7 +29,7 @@ def test_cli_unavailable_raises_install(monkeypatch):
 def test_doctor_composes_argv_and_parses(cli_ok, monkeypatch):
     captured = {}
 
-    def fake_run(argv, capture_output, timeout):
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
         captured["argv"], captured["timeout"] = argv, timeout
         return _FakeCompleted(stdout=b'{"success": true}')
 
@@ -44,7 +44,7 @@ def test_doctor_composes_argv_and_parses(cli_ok, monkeypatch):
 def test_run_case_flags_and_timeout(cli_ok, monkeypatch):
     captured = {}
 
-    def fake_run(argv, capture_output, timeout):
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
         captured["argv"], captured["timeout"] = argv, timeout
         return _FakeCompleted(stdout=b'{"run": {"state": "passed"}}')
 
@@ -63,7 +63,7 @@ def test_run_case_flags_and_timeout(cli_ok, monkeypatch):
 def test_case_import_flags(cli_ok, monkeypatch):
     captured = {}
 
-    def fake_run(argv, capture_output, timeout):
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
         captured["argv"] = argv
         return _FakeCompleted(stdout=b"{}")
 
@@ -157,7 +157,7 @@ def test_other_calls_rc2_terminal_payload_still_raises(cli_ok, monkeypatch):
 def test_perf_start_without_package_falls_back_to_global(cli_ok, monkeypatch):
     captured = {}
 
-    def fake_run(argv, capture_output, timeout):
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
         captured["argv"] = argv
         return _FakeCompleted(stdout=b'{"sessionId": "ps1"}')
 
@@ -173,7 +173,7 @@ def test_perf_start_without_package_falls_back_to_global(cli_ok, monkeypatch):
 def test_perf_start_with_package_uses_target_package(cli_ok, monkeypatch):
     captured = {}
 
-    def fake_run(argv, capture_output, timeout):
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
         captured["argv"] = argv
         return _FakeCompleted(stdout=b'{"sessionId": "ps1"}')
 
@@ -183,3 +183,21 @@ def test_perf_start_with_package_uses_target_package(cli_ok, monkeypatch):
     assert "--global" not in argv
     assert argv[argv.index("--target-package") + 1] == "com.a"
     assert argv[argv.index("--items") + 1] == "CPU,MEM"
+
+
+# ── 冒烟实测校正(2026-09-08):Windows 管道下 CLI(Python)stdout 中文按 GBK 输出,
+#    包装器用 utf-8/replace 解码 → 设备中文文案(错误信息/caseName/targetApp)乱码入库;
+#    须以 PYTHONUTF8=1 启动子进程,令其按 UTF-8 写 stdout ──
+
+def test_call_forces_utf8_child_env(cli_ok, monkeypatch):
+    captured = {}
+
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
+        captured["env"] = kw.get("env")
+        return _FakeCompleted(stdout=b"{}")
+
+    monkeypatch.setattr(solopi_cli.subprocess, "run", fake_run)
+    solopi_cli.list_cases("s1")
+    env = captured["env"]
+    assert env["PYTHONUTF8"] == "1"
+    assert "PATH" in env  # 原 environ 其余键保留

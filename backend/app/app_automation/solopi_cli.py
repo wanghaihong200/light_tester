@@ -7,6 +7,7 @@
 - CLI 未安装抛 CliError("install"),端点层转 400(不 500)。"""
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 
@@ -50,7 +51,10 @@ def _call(cmd_args: list[str], serial: str | None = None, timeout: int = 180,
     if not cli_available():
         raise CliError("install", "solopi-ai CLI 未安装:cd backend && source .venv/Scripts/activate && bash scripts/setup-solopi.sh", -1)
     try:
-        p = subprocess.run(_argv(cmd_args, serial), capture_output=True, timeout=timeout)
+        # Windows 管道下子进程(Python CLI)stdout 中文默认按 GBK 写,utf-8 解码必乱码
+        # (真机实测:设备返回的错误文案/caseName/targetApp 全成乱码字节),强制其 UTF-8 输出。
+        p = subprocess.run(_argv(cmd_args, serial), capture_output=True, timeout=timeout,
+                           env={**os.environ, "PYTHONUTF8": "1"})
     except subprocess.TimeoutExpired as e:
         raise CliError("timeout", f"CLI 超时({timeout}s): {' '.join(cmd_args[:2])}", 124) from e
     payload = None
