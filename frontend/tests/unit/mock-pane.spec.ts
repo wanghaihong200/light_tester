@@ -79,6 +79,7 @@ describe('MockPane', () => {
       ...mkInstance({ id: 9, name: body.name, port: 19000 }),
     }))
     api.listMockRules.mockResolvedValue([R1, R2, R3])
+    api.listMockHits.mockResolvedValue([]) // 选中实例即挂 HitsPanel(T11):默认空命中,个别用例自覆写
     api.reorderMockRules.mockImplementation(async (_iid: number, ids: number[]) => {
       const byId = new Map([R1, R2, R3].map((r) => [r.id, r]))
       return ids.map((id) => byId.get(id)!)
@@ -158,7 +159,7 @@ describe('MockPane', () => {
     w.unmount()
   })
 
-  it('选中实例后右侧详情展示头部、「命中记录」占位与规则真实列表(占位已替换)', async () => {
+  it('选中实例后右侧详情展示头部、规则真实列表与 HitsPanel(T11 占位已替换)', async () => {
     const w = mountPane()
     await flushPromises()
     expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(false) // 未选中时不渲染详情
@@ -167,11 +168,12 @@ describe('MockPane', () => {
     expect(w.text()).toContain('订单Mock')
     expect(w.text()).toContain('http://localhost:18081')
     expect(w.text()).toContain('命中记录')
-    // 规则占位已被真实列表替换(T10),命中占位保留(T11 填充)
+    // 两个占位都已被真实组件替换(T10 规则 / T11 命中)
     expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(false)
-    const hits = w.find('[data-test="hits-placeholder"]')
-    expect(hits.exists()).toBe(true)
-    expect(hits.text()).toBe('')
+    expect(w.find('[data-test="hits-placeholder"]').exists()).toBe(false)
+    // HitsPanel 挂载即按选中实例拉命中(全部过滤;limit 走 api 默认 200)
+    expect(api.listMockHits).toHaveBeenCalledWith(1, 'all')
+    expect(w.find('[data-test="hits-table"]').exists()).toBe(true)
     w.unmount()
   })
 

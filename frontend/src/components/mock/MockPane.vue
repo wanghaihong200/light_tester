@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 计划13 T9/T10:HTTP Mock 面板(左实例列表 + 右详情;规则页签 T10 已填充,命中记录 T11)
+// 计划13 T9/T10/T11:HTTP Mock 面板(左实例列表 + 右详情;规则 T10、命中记录 T11 均已填充)
 // projectId 按 brief 无 prop、经 useRoute().params.id 自取;列表 5s 轮询(仅 starting/running 时)
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -10,6 +10,7 @@ import {
 } from '../../api/mock'
 import type { MockInstance, MockInstanceStatus, MockRule } from '../../types'
 import InstanceDialog from './InstanceDialog.vue'
+import HitsPanel from './HitsPanel.vue'
 import RuleDialog from './RuleDialog.vue'
 
 defineOptions({ inheritAttrs: false })
@@ -302,7 +303,7 @@ function onRuleSaved() { dialogRule.value = undefined; reloadRules() }
               </div>
             </el-tab-pane>
             <el-tab-pane label="命中记录" name="hits">
-              <div data-test="hits-placeholder" class="tab-slot"></div>
+              <HitsPanel :instance-id="selected.id" />
             </el-tab-pane>
           </el-tabs>
         </template>
