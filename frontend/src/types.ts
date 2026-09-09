@@ -1,4 +1,6 @@
 // 与后端 pydantic 契约一一对应(backend/app/schemas.py、routers/modules.py get_tree)
+import type { PerfSummary } from './components/perf/perfOption'
+
 export type Priority = 'P0' | 'P1' | 'P2'
 
 export interface Project {
@@ -282,6 +284,47 @@ export interface AppPerfSeries {
   item: string
   columns: string[]
   rows: string[][]
+}
+
+// ── 性能测试域(计划 14 / ADR-0010,契约=backend PerfRecordOut 与 routers/perf.py)──
+// PerfSummary 从 perfOption 回导:两端各有一半字段语义,type-only import 不产生运行时环
+export type PerfSource = 'run' | 'import'
+export interface PerfRecord {
+  id: number
+  project_id: number
+  source: PerfSource
+  source_ref: string | null   // import=设备端历史 id(Task5 导入契约,防重复导入)
+  name: string
+  app_run_id: number | null
+  script_id: number | null
+  script_name: string
+  device_serial: string
+  perf_items: string[]
+  data_complete: boolean
+  perf_summary: PerfSummary | null
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+export interface DevicePerfHistoryItem {
+  id: string
+  start_time: number | null
+  end_time: number | null
+  file_count: number | null
+  size_bytes: number | null
+  metrics: string[]
+  imported_record_id: number | null
+}
+export interface TrendPoint {
+  record_id: number
+  finished_at: string
+  series: Record<string, { mean: number | null; p90: number | null }>
+}
+export interface TrendGroup {
+  script_id: number | null
+  script_name: string
+  device_serial: string
+  points: TrendPoint[]
 }
 
 // ── 接口Mock(计划13)──
