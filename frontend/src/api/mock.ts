@@ -24,8 +24,9 @@ export const createMockRule = (instanceId: number, body: MockRuleBody) =>
 export const updateMockRule = (id: number, body: Partial<MockRuleBody>) =>
   http.put<MockRule>(`/mock-rules/${id}`, body)
 export const deleteMockRule = (id: number) => http.del(`/mock-rules/${id}`)
+// 后端 reorder 返回重排后的完整规则列表(T10 前端直接回贴,免二次拉取)
 export const reorderMockRules = (instanceId: number, ruleIds: number[]) =>
-  http.put(`/mock-instances/${instanceId}/rules/reorder`, { rule_ids: ruleIds })
+  http.put<MockRule[]>(`/mock-instances/${instanceId}/rules/reorder`, { rule_ids: ruleIds })
 
 export type MockHitsFilter = 'all' | 'matched' | 'unmatched'
 export const listMockHits = (instanceId: number, filter: MockHitsFilter = 'all', limit = 200) =>

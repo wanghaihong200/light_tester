@@ -1,15 +1,16 @@
 <script setup lang="ts">
-// 计划13 T9:HTTP Mock 面板(整壳重写,替换 T8 占位)
-// 左实例列表(启停/编辑/删除)+ 右详情(规则/命中记录为真实空 div 占位, T10/T11 填充)
+// 计划13 T9/T10:HTTP Mock 面板(左实例列表 + 右详情;规则页签 T10 已填充,命中记录 T11)
 // projectId 按 brief 无 prop、经 useRoute().params.id 自取;列表 5s 轮询(仅 starting/running 时)
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  deleteMockInstance, listMockInstances, startMockInstance, stopMockInstance,
+  deleteMockInstance, deleteMockRule, listMockInstances, listMockRules,
+  reorderMockRules, startMockInstance, stopMockInstance, updateMockRule,
 } from '../../api/mock'
-import type { MockInstance, MockInstanceStatus } from '../../types'
+import type { MockInstance, MockInstanceStatus, MockRule } from '../../types'
 import InstanceDialog from './InstanceDialog.vue'
+import RuleDialog from './RuleDialog.vue'
 
 defineOptions({ inheritAttrs: false })
 
@@ -125,6 +126,74 @@ async function onDelete(row: MockInstance) {
 // el-table 作用域插槽 row 是 any,经这两个小函数收敛映射类型(any 入参合法,索引收进函数体内)
 function tagTypeOf(s: MockInstanceStatus): TagType { return STATUS_TAG[s] ?? 'info' }
 function statusTextOf(s: MockInstanceStatus): string { return STATUS_TEXT[s] ?? s }
+
+// ── 规则页签(T10):随选中实例拉取;选中 id 不变时轮询刷新不重拉(避免 5s 打一次规则接口)──
+const rules = ref<MockRule[]>([])
+const rulesLoading = ref(false)
+const dialogRule = ref<MockRule | null | undefined>(undefined) // undefined=关,null=新建,对象=编辑既有
+
+watch(() => selected.value?.id, () => { reloadRules() })
+
+async function reloadRules() {
+  if (!selected.value) {
+    rules.value = []
+    return
+  }
+  rulesLoading.value = true
+  try {
+    rules.value = await listMockRules(selected.value.id)
+  } catch (e) {
+    ElMessage.error(`加载规则失败:${(e as Error).message}`)
+  } finally {
+    rulesLoading.value = false
+  }
+}
+
+// 排序:交换后以新序全量提交 rule_ids,后端返回重排后的完整列表直接回贴
+async function moveRule(index: number, delta: -1 | 1) {
+  const target = selected.value
+  const next = rules.value.slice()
+  const j = index + delta
+  if (!target || j < 0 || j >= next.length) return
+  ;[next[index], next[j]] = [next[j], next[index]]
+  try {
+    rules.value = await reorderMockRules(target.id, next.map((r) => r.id))
+  } catch (e) {
+    ElMessage.error(`排序失败:${(e as Error).message}`)
+  }
+}
+
+// 开关走受控形态:不监听 update:modelValue,等 API 成功回贴后才翻(失败自动留在原态)
+async function onToggleRule(row: MockRule, val: string | number | boolean) {
+  try {
+    const saved = await updateMockRule(row.id, { enabled: Boolean(val) })
+    const i = rules.value.findIndex((r) => r.id === row.id)
+    if (i >= 0) rules.value[i] = saved
+  } catch (e) {
+    ElMessage.error(`更新规则失败:${(e as Error).message}`)
+  }
+}
+
+async function onDeleteRule(row: MockRule) {
+  try {
+    await ElMessageBox.confirm(`删除规则「${row.method} ${row.path_template}」?`, '删除规则', {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    })
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await deleteMockRule(row.id)
+    ElMessage.success('已删除')
+    await reloadRules()
+  } catch (e) {
+    ElMessage.error(`删除规则失败:${(e as Error).message}`)
+  }
+}
+
+function openRuleCreate() { dialogRule.value = null }
+function openRuleEdit(row: MockRule) { dialogRule.value = row }
+function onRuleSaved() { dialogRule.value = undefined; reloadRules() }
 </script>
 
 <template>
@@ -178,7 +247,59 @@ function statusTextOf(s: MockInstanceStatus): string { return STATUS_TEXT[s] ?? 
           </div>
           <el-tabs model-value="rules">
             <el-tab-pane label="规则" name="rules">
-              <div data-test="rules-placeholder" class="tab-slot"></div>
+              <div class="rules-tab">
+                <div class="rules-toolbar">
+                  <span class="rules-hint">按顺序匹配,命中即返回</span>
+                  <el-button type="primary" size="small" data-test="new-rule" @click="openRuleCreate">新建规则</el-button>
+                </div>
+                <el-table
+                  v-loading="rulesLoading" :data="rules" row-key="id" border
+                  data-test="rules-table" class="rules-table"
+                >
+                  <el-table-column label="排序" width="90" align="center">
+                    <template #default="{ $index }">
+                      <el-button
+                        link size="small" data-test="rule-up" :disabled="$index === 0"
+                        @click="moveRule($index, -1)"
+                      >↑</el-button>
+                      <el-button
+                        link size="small" data-test="rule-down" :disabled="$index === rules.length - 1"
+                        @click="moveRule($index, 1)"
+                      >↓</el-button>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="method / path" min-width="220">
+                    <template #default="{ row }">
+                      <span class="rule-route" data-test="rule-route">{{ row.method }} {{ row.path_template }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="条件数" width="72" align="center">
+                    <template #default="{ row }">{{ row.conditions.length }}</template>
+                  </el-table-column>
+                  <el-table-column prop="response_status" label="状态码" width="72" align="center" />
+                  <el-table-column label="启用" width="68" align="center">
+                    <template #default="{ row }">
+                      <el-switch :model-value="row.enabled" @change="onToggleRule(row, $event)" />
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="延迟" width="80" align="center">
+                    <template #default="{ row }">{{ row.delay_ms > 0 ? `${row.delay_ms}ms` : '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="超时" width="72" align="center">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.timeout_enabled" type="warning" size="small">{{ row.timeout_seconds }}s</el-tag>
+                      <span v-else>-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="120">
+                    <template #default="{ row }">
+                      <el-button link size="small" @click="openRuleEdit(row)">编辑</el-button>
+                      <el-button link size="small" type="danger" @click="onDeleteRule(row)">删除</el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-if="!rulesLoading && rules.length === 0" description="暂无规则,点击右上角新建" />
+              </div>
             </el-tab-pane>
             <el-tab-pane label="命中记录" name="hits">
               <div data-test="hits-placeholder" class="tab-slot"></div>
@@ -192,6 +313,10 @@ function statusTextOf(s: MockInstanceStatus): string { return STATUS_TEXT[s] ?? 
     <InstanceDialog
       v-if="dialogInstance !== undefined" :instance="dialogInstance"
       @close="dialogInstance = undefined" @saved="onSaved"
+    />
+    <RuleDialog
+      v-if="dialogRule !== undefined" :instance-id="selected?.id ?? 0" :rule="dialogRule"
+      @close="dialogRule = undefined" @saved="onRuleSaved"
     />
   </div>
 </template>
@@ -267,5 +392,25 @@ function statusTextOf(s: MockInstanceStatus): string { return STATUS_TEXT[s] ?? 
 }
 .tab-slot {
   min-height: 120px;
+}
+.rules-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rules-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+.rules-hint {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-right: auto;
+}
+.rule-route {
+  font-family: var(--el-font-family-mono, ui-monospace, Consolas, monospace);
+  font-size: 12px;
+  word-break: break-all;
 }
 </style>

@@ -24,7 +24,7 @@ vi.mock('../../src/api/mock', () => api)
 
 import InstanceDialog from '../../src/components/mock/InstanceDialog.vue'
 import MockPane from '../../src/components/mock/MockPane.vue'
-import type { MockInstance, MockInstanceStatus } from '../../src/types'
+import type { MockInstance, MockInstanceStatus, MockRule } from '../../src/types'
 
 function mkInstance(over: Partial<MockInstance> = {}): MockInstance {
   return {
@@ -41,6 +41,20 @@ const ERRORED = mkInstance({
   id: 3, name: '库存Mock', port: 18083, desired: 'running', status: 'error' as MockInstanceStatus,
   error_message: '端口 18083 被占用',
 })
+
+function mkRule(over: Partial<MockRule> = {}): MockRule {
+  return {
+    id: 11, instance_id: 1, method: 'GET', path_template: '/users/{id}',
+    conditions: [{ scope: 'query', key: 'id', match: 'eq', value: '42' }],
+    enabled: true, response_status: 200, response_headers: {}, response_body: null,
+    enable_template: false, delay_ms: 0, timeout_enabled: false, timeout_seconds: 30,
+    sort_order: 0, updated_at: '2026-09-08T10:00:00',
+    ...over,
+  }
+}
+const R1 = mkRule({ id: 11, method: 'GET', path_template: '/users/{id}' })
+const R2 = mkRule({ id: 12, method: 'POST', path_template: '/orders', conditions: [], response_status: 201, delay_ms: 300 })
+const R3 = mkRule({ id: 13, method: 'DELETE', path_template: '/items/{id}', timeout_enabled: true, timeout_seconds: 10 })
 
 // el-table 作用域插槽形态对齐 appauto-pane.spec:装真 Element Plus,不桩 el-table/el-dialog
 const mountPane = () =>
@@ -64,6 +78,11 @@ describe('MockPane', () => {
     api.createMockInstance.mockImplementation(async (_pid: number, body: { name: string }) => ({
       ...mkInstance({ id: 9, name: body.name, port: 19000 }),
     }))
+    api.listMockRules.mockResolvedValue([R1, R2, R3])
+    api.reorderMockRules.mockImplementation(async (_iid: number, ids: number[]) => {
+      const byId = new Map([R1, R2, R3].map((r) => [r.id, r]))
+      return ids.map((id) => byId.get(id)!)
+    })
   })
 
   afterEach(() => {
@@ -139,7 +158,7 @@ describe('MockPane', () => {
     w.unmount()
   })
 
-  it('选中实例后右侧详情展示头部与「规则/命中记录」两个占位空 div', async () => {
+  it('选中实例后右侧详情展示头部、「命中记录」占位与规则真实列表(占位已替换)', async () => {
     const w = mountPane()
     await flushPromises()
     expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(false) // 未选中时不渲染详情
@@ -147,14 +166,11 @@ describe('MockPane', () => {
     await flushPromises()
     expect(w.text()).toContain('订单Mock')
     expect(w.text()).toContain('http://localhost:18081')
-    expect(w.text()).toContain('规则')
     expect(w.text()).toContain('命中记录')
-    // 占位必须是真实空 div(T10/T11 填充),不是 TODO 注释
-    const rules = w.find('[data-test="rules-placeholder"]')
+    // 规则占位已被真实列表替换(T10),命中占位保留(T11 填充)
+    expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(false)
     const hits = w.find('[data-test="hits-placeholder"]')
-    expect(rules.exists()).toBe(true)
     expect(hits.exists()).toBe(true)
-    expect(rules.text()).toBe('')
     expect(hits.text()).toBe('')
     w.unmount()
   })
@@ -164,7 +180,7 @@ describe('MockPane', () => {
     await flushPromises()
     w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
     await flushPromises()
-    expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(true)
+    expect(w.find('[data-test="rules-table"]').exists()).toBe(true)
     // 模拟轮询/操作刷新:同 id 全新对象引用整体替换数组(评审指出的引用失效场景)
     api.listMockInstances.mockResolvedValue([
       mkInstance({ id: 1, name: '订单Mock', port: 18081, desired: 'running', status: 'running' }),
@@ -173,9 +189,102 @@ describe('MockPane', () => {
     await rowBtn(w, 0, '停止').trigger('click')
     await flushPromises()
     // 修复前:旧引用不在新数组 → EP 将 currentRow 置 null 并 emit current-change(null) → 详情坍缩
-    expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(true)
+    expect(w.find('[data-test="rules-table"]').exists()).toBe(true)
     expect(w.text()).toContain('订单Mock')
     expect(w.text()).not.toContain('选择左侧实例查看规则与命中')
+    w.unmount()
+  })
+
+  it('规则页签:选中实例拉取并渲染规则行(排序钮/method+path/条件数/状态码/开关/延迟/超时),换选实例重拉', async () => {
+    const w = mountPane()
+    await flushPromises()
+    expect(api.listMockRules).not.toHaveBeenCalled() // 未选中实例不拉规则
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
+    await flushPromises()
+    expect(api.listMockRules).toHaveBeenCalledWith(1)
+    const routes = () => w.findAll('[data-test="rule-route"]').map((r) => r.text())
+    expect(routes()).toEqual(['GET /users/{id}', 'POST /orders', 'DELETE /items/{id}'])
+    // R1 一条条件 → 条件数列出现 1;R2 延迟 300ms;R3 超时标记 warning tag
+    expect(w.findAll('.rules-tab .el-table__row')[0].text()).toContain('1')
+    expect(w.text()).toContain('300ms')
+    expect(w.html()).toContain('el-tag--warning')
+    // 启用开关一列一行一个
+    expect(w.findAll('.rules-tab .el-switch').length).toBe(3)
+    // 排序钮:首行禁↑尾行禁↓
+    const rows = () => w.findAll('.rules-tab .el-table__row')
+    expect(rows()[0].find('[data-test="rule-up"]').attributes('disabled')).toBeDefined()
+    expect(rows()[0].find('[data-test="rule-down"]').attributes('disabled')).toBeUndefined()
+    expect(rows()[2].find('[data-test="rule-down"]').attributes('disabled')).toBeDefined()
+    expect(rows()[2].find('[data-test="rule-up"]').attributes('disabled')).toBeUndefined()
+    // 换选另一实例 → 以新 id 重拉
+    api.listMockRules.mockClear()
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', STOPPED)
+    await flushPromises()
+    expect(api.listMockRules).toHaveBeenCalledTimes(1)
+    expect(api.listMockRules).toHaveBeenCalledWith(2)
+    w.unmount()
+  })
+
+  it('排序:点击行内↓以新序全量调 reorderMockRules 并应用返回列表', async () => {
+    const w = mountPane()
+    await flushPromises()
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
+    await flushPromises()
+    api.reorderMockRules.mockClear()
+    await w.findAll('.rules-tab .el-table__row')[0].find('[data-test="rule-down"]').trigger('click')
+    await flushPromises()
+    // 载荷是交换后的完整新序(不是 delta),instanceId 来自选中实例
+    expect(api.reorderMockRules).toHaveBeenCalledTimes(1)
+    expect(api.reorderMockRules).toHaveBeenCalledWith(1, [12, 11, 13])
+    // 应用 reorder 返回的新列表
+    expect(w.findAll('[data-test="rule-route"]').map((r) => r.text()))
+      .toEqual(['POST /orders', 'GET /users/{id}', 'DELETE /items/{id}'])
+    w.unmount()
+  })
+
+  it('启用开关:点击直接 updateMockRule 只传 enabled,成功后按返回回贴', async () => {
+    const w = mountPane()
+    await flushPromises()
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
+    await flushPromises()
+    api.updateMockRule.mockResolvedValue({ ...R1, enabled: false })
+    await w.findAll('.rules-tab .el-table__row')[0].find('.el-switch').trigger('click')
+    await flushPromises()
+    expect(api.updateMockRule).toHaveBeenCalledTimes(1)
+    expect(api.updateMockRule).toHaveBeenCalledWith(11, { enabled: false })
+    w.unmount()
+  })
+
+  it('删除规则:confirm 文案含 method+path,确认后 deleteMockRule 并重拉规则', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({} as never)
+    const w = mountPane()
+    await flushPromises()
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
+    await flushPromises()
+    expect(api.listMockRules).toHaveBeenCalledTimes(1)
+    await w.findAll('.rules-tab .el-table__row')[0].findAll('button')
+      .find((b) => b.text().includes('删除'))!.trigger('click')
+    await flushPromises()
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(String(vi.mocked(ElMessageBox.confirm).mock.calls[0][0])).toContain('GET /users/{id}')
+    expect(api.deleteMockRule).toHaveBeenCalledWith(11)
+    expect(api.listMockRules).toHaveBeenCalledTimes(2) // 删除后重拉
+    w.unmount()
+  })
+
+  it('「新建规则」入口开 RuleDialog,取消后关闭', async () => {
+    const w = mountPane()
+    await flushPromises()
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
+    await flushPromises()
+    await w.find('[data-test="new-rule"]').trigger('click')
+    await flushPromises()
+    const openDlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.textContent?.includes('新建规则'))
+    expect(openDlg).toBeTruthy()
+    const cancel = [...openDlg!.querySelectorAll('button')].find((b) => b.textContent?.trim() === '取消')!
+    await new DOMWrapper(cancel).trigger('click')
+    await flushPromises()
+    expect([...document.querySelectorAll('.el-dialog')].find((d) => d.textContent?.includes('新建规则'))).toBeUndefined()
     w.unmount()
   })
 
