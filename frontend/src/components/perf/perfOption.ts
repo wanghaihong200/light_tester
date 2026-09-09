@@ -12,7 +12,7 @@ export type PerfSummary = { columns?: PerfSummaryColumn[]; error?: string } | nu
 export interface StatRow { index: string; sampleCount?: number; min?: number; max?: number; mean?: number; median?: number; p90?: number }
 export type PerfChartOption = Record<string, unknown>
 
-const isNum = (v: string) => v !== '' && Number.isFinite(Number(v))
+const isNum = (v: string) => v.trim() !== '' && Number.isFinite(Number(v))
 
 function numericColumns(s: AppPerfSeries): number[] {
   const out: number[] = []
@@ -26,8 +26,12 @@ function numericColumns(s: AppPerfSeries): number[] {
 
 function refLines(item: string, col: string, summary: PerfSummary): unknown[] {
   const cols = summary?.columns ?? []
-  const hit = cols.find((c) => c.index === item || c.index === `${item}::${col}`
-    || c.index.startsWith(`${item}::`) || c.index.startsWith(`${item}_`))
+  // 按特异性顺序命中,避免 find 短路让前缀规则遮蔽后面的逐列精确匹配(参考线张冠李戴):
+  // `item::col` 精确 → `item_col` 精确 → `item` 全项 → 前缀兜底。
+  const hit = cols.find((c) => c.index === `${item}::${col}`)
+    ?? cols.find((c) => c.index === `${item}_${col}`)
+    ?? cols.find((c) => c.index === item)
+    ?? cols.find((c) => c.index.startsWith(`${item}::`) || c.index.startsWith(`${item}_`))
   if (!hit || hit.mean == null) return []
   const lines: unknown[] = []
   lines.push({ yAxis: hit.mean, name: 'mean', lineStyle: { type: 'solid', color: '#909399' }, symbol: 'none', label: { formatter: 'mean {c}' } })

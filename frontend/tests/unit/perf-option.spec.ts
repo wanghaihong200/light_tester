@@ -33,6 +33,15 @@ describe('buildPerfOptions', () => {
     expect(lines[1].lineStyle.type).toBe('dashed')
   })
 
+  it('showRefs 逐列索引按特异性匹配:total/app 各取己列统计,前缀不遮蔽精确', () => {
+    const summary = { columns: [{ index: 'CPU_total', mean: 1, p90: 2 }, { index: 'CPU_app', mean: 10, p90: 20 }] }
+    const o = buildPerfOptions(series, { showRefs: true, summary })[0] as any
+    const total = o.series.find((x: any) => x.name === 'total')
+    const app = o.series.find((x: any) => x.name === 'app')
+    expect(total.markLine.data.map((l: any) => l.yAxis)).toEqual([1, 2])
+    expect(app.markLine.data.map((l: any) => l.yAxis)).toEqual([10, 20])
+  })
+
   it('无数值列的 item 产出空 option 数组跳过', () => {
     expect(buildPerfOptions([{ item: 'Memo', columns: ['label'], rows: [['x']] }])).toHaveLength(0)
   })
