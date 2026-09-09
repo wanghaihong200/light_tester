@@ -1,0 +1,220 @@
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
+import ElementPlus, { ElMessageBox } from 'element-plus'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// MockPane/InstanceDialog 均按 brief 无 projectId prop、从路由取参:覆写 useRoute(appauto-entry.spec 同款形态)
+vi.mock('vue-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('vue-router')>()),
+  useRoute: () => ({ params: { id: '3' }, name: 'project-mock-http', path: '/projects/3/mock/http' }),
+}))
+
+const api = vi.hoisted(() => ({
+  listMockInstances: vi.fn(),
+  createMockInstance: vi.fn(),
+  updateMockInstance: vi.fn(),
+  deleteMockInstance: vi.fn(),
+  startMockInstance: vi.fn(),
+  stopMockInstance: vi.fn(),
+  // 占位对齐 webauto-pane.spec 预防式写法:规则/命中 API 本 spec 不消费
+  listMockRules: vi.fn(), createMockRule: vi.fn(), updateMockRule: vi.fn(), deleteMockRule: vi.fn(),
+  reorderMockRules: vi.fn(), listMockHits: vi.fn(), getMockHit: vi.fn(), clearMockHits: vi.fn(),
+}))
+
+vi.mock('../../src/api/mock', () => api)
+
+import InstanceDialog from '../../src/components/mock/InstanceDialog.vue'
+import MockPane from '../../src/components/mock/MockPane.vue'
+import type { MockInstance, MockInstanceStatus } from '../../src/types'
+
+function mkInstance(over: Partial<MockInstance> = {}): MockInstance {
+  return {
+    id: 1, project_id: 3, name: '订单Mock', description: null, port: 18081,
+    cors_enabled: true, default_status: 200, default_body: null,
+    desired: 'stopped', status: 'stopped', error_message: null,
+    created_at: '2026-09-08T10:00:00', updated_at: '2026-09-08T10:00:00',
+    ...over,
+  }
+}
+const RUNNING = mkInstance({ id: 1, name: '订单Mock', port: 18081, desired: 'running', status: 'running' })
+const STOPPED = mkInstance({ id: 2, name: '支付Mock', port: 18082, desired: 'stopped', status: 'stopped' })
+const ERRORED = mkInstance({
+  id: 3, name: '库存Mock', port: 18083, desired: 'running', status: 'error' as MockInstanceStatus,
+  error_message: '端口 18083 被占用',
+})
+
+// el-table 作用域插槽形态对齐 appauto-pane.spec:装真 Element Plus,不桩 el-table/el-dialog
+const mountPane = () =>
+  mount(MockPane, { global: { plugins: [ElementPlus] }, attachTo: document.body })
+
+const btn = (w: ReturnType<typeof mountPane>, text: string) =>
+  w.findAll('button').find((b) => b.text().includes(text))!
+
+const rowBtn = (w: ReturnType<typeof mountPane>, rowIndex: number, text: string) => {
+  const cells = w.findAll('.el-table__row')[rowIndex].findAll('button')
+  return cells.find((b) => b.text().includes(text))!
+}
+
+describe('MockPane', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.listMockInstances.mockResolvedValue([RUNNING, STOPPED, ERRORED])
+    api.startMockInstance.mockResolvedValue({ ...STOPPED, desired: 'running', status: 'starting' })
+    api.stopMockInstance.mockResolvedValue({ ...RUNNING, desired: 'stopped', status: 'stopped' })
+    api.deleteMockInstance.mockResolvedValue(undefined)
+    api.createMockInstance.mockImplementation(async (_pid: number, body: { name: string }) => ({
+      ...mkInstance({ id: 9, name: body.name, port: 19000 }),
+    }))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    document.body.innerHTML = ''
+  })
+
+  it('列表渲染名称/端口/状态 tag/base_url 与复制按钮;error 行展示 error_message', async () => {
+    const w = mountPane()
+    await flushPromises()
+    expect(api.listMockInstances).toHaveBeenCalledWith(3)
+    expect(w.text()).toContain('订单Mock')
+    expect(w.text()).toContain('18081')
+    expect(w.text()).toContain('18082')
+    // base_url 用 location.hostname 拼装(jsdom=localhost),带复制按钮
+    expect(w.text()).toContain('http://localhost:18081')
+    expect(w.text()).toContain('http://localhost:18082')
+    expect(w.text()).toContain('复制')
+    // 状态 tag:running=success / stopped=info / error=danger
+    expect(w.html()).toContain('el-tag--success')
+    expect(w.html()).toContain('el-tag--info')
+    expect(w.html()).toContain('el-tag--danger')
+    // error 态行内展示 error_message
+    expect(w.text()).toContain('端口 18083 被占用')
+    w.unmount()
+  })
+
+  it('启动/停止按钮分别调用 start/stop API 并刷新列表', async () => {
+    const w = mountPane()
+    await flushPromises()
+    // 行序与 fixture 一致:0=running(显示停止) 1=stopped(显示启动) 2=error(显示启动)
+    await rowBtn(w, 1, '启动').trigger('click')
+    await flushPromises()
+    expect(api.startMockInstance).toHaveBeenCalledWith(2)
+    expect(api.listMockInstances).toHaveBeenCalledTimes(2)
+    await rowBtn(w, 0, '停止').trigger('click')
+    await flushPromises()
+    expect(api.stopMockInstance).toHaveBeenCalledWith(1)
+    expect(api.listMockInstances).toHaveBeenCalledTimes(3)
+    w.unmount()
+  })
+
+  it('删除走 elMessageBox.confirm,确认后调 deleteMockInstance 并刷新', async () => {
+    vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({} as never)
+    const w = mountPane()
+    await flushPromises()
+    await rowBtn(w, 0, '删除').trigger('click')
+    await flushPromises()
+    expect(ElMessageBox.confirm).toHaveBeenCalled()
+    expect(String(vi.mocked(ElMessageBox.confirm).mock.calls[0][0])).toContain('订单Mock')
+    expect(api.deleteMockInstance).toHaveBeenCalledWith(1)
+    expect(api.listMockInstances).toHaveBeenCalledTimes(2)
+    w.unmount()
+  })
+
+  it('新建实例对话框保存调用 createMockInstance(port 留空=null)并刷新列表', async () => {
+    const w = mountPane()
+    await flushPromises()
+    await btn(w, '新建实例').trigger('click')
+    await flushPromises()
+    const dlg = [...document.querySelectorAll('.el-dialog')].find((d) => d.textContent?.includes('新建实例'))!
+    const nameInput = dlg.querySelector<HTMLInputElement>('input[placeholder="实例名称"]')!
+    await new DOMWrapper(nameInput).setValue('库存Mock')
+    const saveBtn = [...dlg.querySelectorAll('button')].find((b) => b.textContent?.trim() === '保存')!
+    await new DOMWrapper(saveBtn).trigger('click')
+    await flushPromises()
+    expect(api.createMockInstance).toHaveBeenCalledWith(3, expect.objectContaining({
+      name: '库存Mock', port: null, cors_enabled: false, default_status: 200,
+    }))
+    expect(api.listMockInstances).toHaveBeenCalledTimes(2) // 保存成功后刷新
+    // saved 后对话框关闭
+    expect([...document.querySelectorAll('.el-dialog')].find((d) => d.textContent?.includes('新建实例'))).toBeUndefined()
+    w.unmount()
+  })
+
+  it('选中实例后右侧详情展示头部与「规则/命中记录」两个占位空 div', async () => {
+    const w = mountPane()
+    await flushPromises()
+    expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(false) // 未选中时不渲染详情
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
+    await flushPromises()
+    expect(w.text()).toContain('订单Mock')
+    expect(w.text()).toContain('http://localhost:18081')
+    expect(w.text()).toContain('规则')
+    expect(w.text()).toContain('命中记录')
+    // 占位必须是真实空 div(T10/T11 填充),不是 TODO 注释
+    const rules = w.find('[data-test="rules-placeholder"]')
+    const hits = w.find('[data-test="hits-placeholder"]')
+    expect(rules.exists()).toBe(true)
+    expect(hits.exists()).toBe(true)
+    expect(rules.text()).toBe('')
+    expect(hits.text()).toBe('')
+    w.unmount()
+  })
+
+  it('轮询:存在 running 实例时每 5s 刷新,卸载清理;全部 stopped 不启动定时器', async () => {
+    vi.useFakeTimers()
+    let w = mountPane()
+    await vi.advanceTimersByTimeAsync(0) // 让 onMounted 的异步 reload 落地
+    expect(api.listMockInstances).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(api.listMockInstances).toHaveBeenCalledTimes(2)
+    w.unmount()
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(api.listMockInstances).toHaveBeenCalledTimes(2) // 卸载后定时器已清理
+
+    api.listMockInstances.mockResolvedValue([STOPPED])
+    w = mountPane()
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(api.listMockInstances).toHaveBeenCalledTimes(3) // 无 starting/running 不轮询,仅挂载那 1 次
+    w.unmount()
+  })
+})
+
+describe('InstanceDialog', () => {
+  const mountDialog = (instance: MockInstance | null) =>
+    mount(InstanceDialog, {
+      props: { instance },
+      global: { plugins: [ElementPlus] },
+      attachTo: document.body,
+    })
+
+  const portInput = () =>
+    document.querySelector<HTMLInputElement>('.el-dialog input[placeholder="留空自动分配"]')!
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    api.updateMockInstance.mockResolvedValue({ ...RUNNING })
+    api.createMockInstance.mockResolvedValue({ ...STOPPED })
+  })
+
+  it('edit 模式:running/starting 实例 port 控件禁用,保存走 updateMockInstance', async () => {
+    const w = mountDialog(RUNNING)
+    await flushPromises()
+    expect(portInput().disabled).toBe(true)
+    expect(portInput().value).toBe('18081')
+    const saveBtn = [...document.querySelectorAll('.el-dialog button')]
+      .find((b) => b.textContent?.trim() === '保存')!
+    await new DOMWrapper(saveBtn).trigger('click')
+    await flushPromises()
+    expect(api.updateMockInstance).toHaveBeenCalledWith(1, expect.objectContaining({ name: '订单Mock', port: 18081 }))
+    expect(api.createMockInstance).not.toHaveBeenCalled()
+    expect(w.emitted('saved')).toBeTruthy()
+    w.unmount()
+  })
+
+  it('edit 模式:stopped 实例 port 控件可用', async () => {
+    const w = mountDialog(STOPPED)
+    await flushPromises()
+    expect(portInput().disabled).toBe(false)
+    w.unmount()
+  })
+})
