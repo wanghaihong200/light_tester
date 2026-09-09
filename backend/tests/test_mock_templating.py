@@ -45,3 +45,17 @@ def test_undefined_chained_access_renders_empty():
     assert _render("{{ nope.foo }}") == ""
     assert _render("{{ body.user.name }}", body_json=None) == ""
     assert _render("{{ body['a']['b'] }}", body_json={}) == ""
+
+
+def test_sandbox_blocks_attribute_escape():
+    """沙箱:下划线属性(__class__/__mro__/__subclasses__)被拦截 → 渲染空串。
+
+    修复前是裸 Environment,`{{ ''.__class__ }}` 会渲染出 `<class 'str'>`
+    泄漏类对象(可沿 __mro__.__subclasses__ 打穿子进程);沙箱下安全未定义渲染空串,
+    渲染不抛异常。四个辅助函数是传入 callable,沙箱内照常可用(见上方用例)。"""
+    out = _render("{{ ''.__class__ }}")
+    assert out == "" and "class" not in out
+    deep = _render("{{ ''.__class__.__mro__[1].__subclasses__ }}")
+    assert deep == "" and "subclasses" not in deep
+    tpl_escape = _render("{{ ().__class__.__bases__[0].__subclasses__ }}")
+    assert tpl_escape == ""

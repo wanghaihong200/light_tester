@@ -55,6 +55,29 @@ def test_create_conflicting_port_400(client, db_session, make_user):
     assert r.status_code == 400
 
 
+def test_port_out_of_range_rejected(client, db_session, make_user):
+    """端口边界 1-65535:越界 422(Pydantic),port=0 不再落库。
+    修复前 70000 会打穿 bind_ok(OverflowError 非 OSError)→ 500;0 会试绑成功直接 201/200。"""
+    admin = make_user(db_session, "adm11", is_admin=True)
+    p = _project_with_member(db_session, "p-inst-7", admin)
+    inst = MockInstance(project_id=p.id, name="a", port=9009, token="t" * 32)
+    db_session.add(inst)
+    db_session.commit()
+    h = _login(client, admin.username)
+    assert client.post(f"/api/projects/{p.id}/mock-instances",
+                       json={"name": "b", "port": 70000}, headers=h).status_code == 422
+    assert client.put(f"/api/mock-instances/{inst.id}",
+                      json={"port": 70000}, headers=h).status_code == 422
+    assert client.post(f"/api/projects/{p.id}/mock-instances",
+                       json={"name": "c", "port": 0}, headers=h).status_code == 422
+    assert client.put(f"/api/mock-instances/{inst.id}",
+                      json={"port": 0}, headers=h).status_code == 422
+    # 边界值 1 与 65535 合法(不实际启动,只落库 stopped)
+    lo = client.post(f"/api/projects/{p.id}/mock-instances",
+                     json={"name": "d", "port": 1}, headers=h)
+    assert lo.status_code == 201 and lo.json()["port"] == 1
+
+
 def test_port_edit_requires_stopped(client, db_session, make_user):
     admin = make_user(db_session, "adm3", is_admin=True)
     p = _project_with_member(db_session, "p-inst-3", admin)

@@ -36,7 +36,7 @@ def bind_ok(port: int) -> bool:
     try:
         s.bind(("0.0.0.0", port))
         return True
-    except OSError:
+    except (OSError, OverflowError):  # 越界端口(如 70000)bind 抛 OverflowError,一并视为不可绑
         return False
     finally:
         s.close()

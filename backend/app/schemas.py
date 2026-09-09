@@ -225,7 +225,7 @@ class MockCondition(BaseModel):
 class MockInstanceSave(BaseModel):
     name: str
     description: str | None = None
-    port: int | None = None          # None=自动分配
+    port: int | None = Field(None, ge=1, le=65535)   # None=自动分配;越界 422(bind(70000) 是 OverflowError 非 OSError)
     cors_enabled: bool = False
     default_status: int = Field(404, ge=100, le=599)
     default_body: str | None = None
@@ -234,7 +234,7 @@ class MockInstanceSave(BaseModel):
 class MockInstancePatch(BaseModel):
     name: str | None = None
     description: str | None = None
-    port: int | None = None          # None=不改
+    port: int | None = Field(None, ge=1, le=65535)   # None=不改;越界 422
     cors_enabled: bool | None = None
     default_status: int | None = Field(None, ge=100, le=599)
     default_body: str | None = None
@@ -278,6 +278,7 @@ class MockRulePatch(MockRuleSave):
     enabled: bool | None = None
     response_status: int | None = Field(None, ge=100, le=599)
     response_headers: dict[str, str] | None = None
+    enable_template: bool | None = None   # 部分PATCH语义:省略=不改(否则启停开关会静默重置模板渲染)
     delay_ms: int | None = Field(None, ge=0)
     timeout_enabled: bool | None = None
     timeout_seconds: int | None = Field(None, ge=1, le=3600)

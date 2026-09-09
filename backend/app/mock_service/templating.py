@@ -4,11 +4,15 @@ import random
 import time
 import uuid
 
-from jinja2 import Environment, ChainableUndefined
+from jinja2 import ChainableUndefined
+from jinja2.sandbox import SandboxedEnvironment
 
 from jsonpath_ng.ext import parse as _jsonpath_parse
 
-_env = Environment(undefined=ChainableUndefined)  # 平台自用工具,非对外沙箱;Undefined(含链式取值)渲染空串
+# 沙箱环境:模板由项目成员编写,防 SSTI 沿 __class__/__mro__ 逃逸打穿子进程;
+# 下划线属性访问按未定义处理 → 渲染空串。四个辅助函数(uuid4/now_ts/rand_int/jpath)
+# 是渲染时传入的 callable,沙箱内照常可调用。
+_env = SandboxedEnvironment(undefined=ChainableUndefined)
 
 
 def render_template(template: str, *, path_vars: dict[str, str],

@@ -44,6 +44,33 @@ def test_rule_crud_and_validation(client, db_session, make_user):
     assert all(rule["id"] != rid for rule in got.json())
 
 
+def test_partial_patch_enabled_keeps_enable_template(client, db_session, make_user):
+    """回归:MockRulePatch 漏覆写 enable_template 时,仅发 {"enabled"} 的部分 PATCH
+    会把模板开关静默重置为 False(规则列表启停开关的典型载荷)。"""
+    admin = make_user(db_session, "adm10", is_admin=True)
+    p = Project(name="p-rule-4")
+    db_session.add(p)
+    db_session.commit()
+    inst = MockInstance(project_id=p.id, name="s", port=19054, token="t" * 32)
+    db_session.add(inst)
+    db_session.commit()
+    h = _login(client, "adm10")
+    r = client.post(f"/api/mock-instances/{inst.id}/rules",
+                    json={"method": "GET", "path_template": "/t", "enable_template": True},
+                    headers=h)
+    assert r.status_code == 201 and r.json()["enable_template"] is True
+    rid = r.json()["id"]
+
+    off = client.put(f"/api/mock-rules/{rid}", json={"enabled": False}, headers=h)
+    assert off.status_code == 200
+    assert off.json()["enabled"] is False
+    assert off.json()["enable_template"] is True    # 仅改 enabled 不得重置模板开关
+    on = client.put(f"/api/mock-rules/{rid}", json={"enabled": True}, headers=h)
+    assert on.status_code == 200
+    assert on.json()["enabled"] is True
+    assert on.json()["enable_template"] is True
+
+
 def test_rule_reorder(client, db_session, make_user):
     admin = make_user(db_session, "adm8", is_admin=True)
     p = Project(name="p-rule-2")
