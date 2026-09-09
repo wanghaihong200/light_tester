@@ -12,6 +12,7 @@ from app.app_automation import case_schema, inspect_check, solopi_cli
 from app.config import settings
 from app.database import SessionLocal
 from app.models import AppRun
+from app.solopi_perf import register_run_perf_record
 
 TERMINAL = ("passed", "failed", "cancelled")
 _FORCE_FINISHED: set[int] = set()
@@ -147,7 +148,9 @@ def execute_app_run(run_id: int, case_json: dict, *, device_serial: str, perf_it
                  check_results=check_results if any(check_results.values()) else None,
                  error=err or None, finished_at=datetime.now())
         notify(run_id, {"type": "done", "status": status, "state": state})
+        register_run_perf_record(run_id)  # 终态且有效 perf CSV → 登记性能引用行(ADR-0010)
     except (solopi_cli.CliError, RuntimeError, OSError, subprocess.SubprocessError) as e:
         msg = getattr(e, "message", None) or str(e)
         _persist_env_failure(run_id, msg)
         notify(run_id, {"type": "error", "message": msg[:500]})
+    register_run_perf_record(run_id)  # env 失败若已有部分 perf 数据,同样登记(崩溃前曲线有分析价值)

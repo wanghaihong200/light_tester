@@ -474,3 +474,28 @@ class MockHit(Base):
     elapsed_ms: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="如 timeout-simulated")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class PerfRecord(Base):
+    __tablename__ = "perf_records"
+    __table_args__ = (
+        UniqueConstraint("source", "source_ref", name="uq_perf_source_ref"),
+        {"comment": "性能记录表:run=APP自动化执行引用行 / import=设备端历史导入(ADR-0010)"},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    source: Mapped[str] = mapped_column(String(20), comment="来源:run/import")
+    name: Mapped[str] = mapped_column(String(200), default="", comment="展示名(run=脚本名@设备,import=导入命名)")
+    app_run_id: Mapped[int | None] = mapped_column(ForeignKey("app_runs.id"), nullable=True, comment="run 来源的执行记录ID(import 为 NULL)")
+    script_id: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="脚本ID快照(run 来源,趋势分组用)")
+    script_name: Mapped[str] = mapped_column(String(200), default="", comment="脚本名快照")
+    device_serial: Mapped[str] = mapped_column(String(100), default="", comment="设备序列号")
+    perf_items: Mapped[list] = mapped_column(JSON, default=list, comment="采集项清单(import=metrics)")
+    source_ref: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="import=设备端历史id(唯一防重复导入);run 为 NULL")
+    data_complete: Mapped[bool] = mapped_column(Boolean, default=True, comment="数据完整性(import preview 截断=False)")
+    perf_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="描述性统计(columns[].index/min/max/mean/median/p90)")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="采集开始时间")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="采集结束时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
