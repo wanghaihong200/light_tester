@@ -42,6 +42,7 @@ vi.mock('../../src/api/perf', () => api)
 
 import PerfRecordPane from '../../src/components/perf/PerfRecordPane.vue'
 import PerfCharts from '../../src/components/perf/PerfCharts.vue'
+import PerfImportDialog from '../../src/components/perf/PerfImportDialog.vue'
 import StartupSummaryCard from '../../src/components/perf/StartupSummaryCard.vue'
 import type { AppPerfSeries, PerfRecord } from '../../src/types'
 
@@ -181,13 +182,33 @@ describe('PerfRecordPane', () => {
     w.unmount()
   })
 
-  it('趋势分析/导入按钮:点击均为占位提示(对话框 Task 10/11 接入)', async () => {
+  it('趋势按钮仍占位;导入按钮打开 PerfImportDialog,@imported 后刷新列表并提示成功', async () => {
+    const infoSpy = vi.spyOn(ElMessage, 'info').mockReturnValue({} as never)
+    const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({} as never)
     const w = mountPane()
     await flushPromises()
-    const infoSpy = vi.spyOn(ElMessage, 'info').mockReturnValue({} as never)
+    expect(api.listPerfRecords).toHaveBeenCalledTimes(1)
+    // 趋势:Task 11 前仍占位
     await btn(w, 'trend-btn').trigger('click')
+    expect(infoSpy).toHaveBeenCalledTimes(1)
+    // 导入:挂载向导,projectId 透传
+    expect(w.findComponent(PerfImportDialog).exists()).toBe(false)
     await btn(w, 'import-btn').trigger('click')
-    expect(infoSpy).toHaveBeenCalledTimes(2)
+    const dlg = w.findComponent(PerfImportDialog)
+    expect(dlg.exists()).toBe(true)
+    expect(dlg.props('projectId')).toBe(1)
+    // 导入成功回调:关窗 + 成功提示(完整数据)+ 刷新
+    dlg.vm.$emit('imported', RUN_REC)
+    await flushPromises()
+    expect(successSpy).toHaveBeenCalledWith('导入成功')
+    expect(api.listPerfRecords).toHaveBeenCalledTimes(2)
+    expect(w.findComponent(PerfImportDialog).exists()).toBe(false)
+    // 不完整记录:仅由向导 warning,面板不再叠加成功提示
+    await btn(w, 'import-btn').trigger('click')
+    w.findComponent(PerfImportDialog).vm.$emit('imported', mkRecord({ id: 3, data_complete: false }))
+    await flushPromises()
+    expect(successSpy).toHaveBeenCalledTimes(1)
+    expect(api.listPerfRecords).toHaveBeenCalledTimes(3)
     w.unmount()
   })
 
@@ -225,6 +246,50 @@ describe('PerfRecordPane', () => {
       const anchor = click.mock.instances[0] as HTMLAnchorElement
       expect(anchor.download).toBe('场景A@dev1.csv')
       expect(revokeObjectURL).toHaveBeenCalledWith('blob:csv-mock')
+      w.unmount()
+    } finally {
+      Object.defineProperty(URL, 'createObjectURL', { value: origCreate, configurable: true, writable: true })
+      Object.defineProperty(URL, 'revokeObjectURL', { value: origRevoke, configurable: true, writable: true })
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('CSV 硬化(Task10):内容带 UTF-8 BOM,文件名非法字符替换为 _', async () => {
+    const createObjectURL = vi.fn(() => 'blob:csv-mock')
+    const revokeObjectURL = vi.fn()
+    const origCreate = URL.createObjectURL
+    const origRevoke = URL.revokeObjectURL
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectURL, configurable: true, writable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectURL, configurable: true, writable: true })
+    const click = vi.fn()
+    const origCreateEl = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreateEl(tag) as HTMLAnchorElement
+      if (tag === 'a') el.click = click
+      return el
+    })
+    // 记录名含 Windows 非法字符 / : *(文件名取自行数据,故改列表)
+    api.listPerfRecords.mockResolvedValue([mkRecord({ id: 9, name: 'CPU/采集:压力*1' })])
+    api.getPerfRecordSeries.mockResolvedValue({
+      record: mkRecord({ id: 9, name: 'CPU/采集:压力*1' }),
+      series: SERIES,
+    })
+    try {
+      const w = mountPane()
+      await flushPromises()
+      await rows(w)[0].trigger('click')
+      await flushPromises()
+      await btn(w, 'download-csv').trigger('click')
+      const anchor = click.mock.instances[0] as HTMLAnchorElement
+      expect(anchor.download).toBe('CPU_采集_压力_1.csv')
+      // BOM:读原始字节,UTF-8 BOM = EF BB BF
+      const blob = createObjectURL.mock.calls[0][0] as Blob
+      const bytes = await new Promise<Uint8Array>((resolve) => {
+        const fr = new FileReader()
+        fr.onload = () => resolve(new Uint8Array(fr.result as ArrayBuffer))
+        fr.readAsArrayBuffer(blob)
+      })
+      expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf])
       w.unmount()
     } finally {
       Object.defineProperty(URL, 'createObjectURL', { value: origCreate, configurable: true, writable: true })

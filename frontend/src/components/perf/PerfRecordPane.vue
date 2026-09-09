@@ -1,11 +1,13 @@
 <script setup lang="ts">
 // 计划14 Task9:APP 性能测试页——性能记录列表(来源筛选/多选/删除)+ 详情抽屉(曲线/汇总/CSV 下载)
-// projectId 经 ProjectView 的 :project-id 下发(同 WebAutoPane);对比/趋势/导入入口为占位,Task 10/11 落地后接对话框
+// 计划14 Task10:接入手动导入向导 PerfImportDialog(导入成功后刷新);趋势/对比仍为占位(Task 11)
+// projectId 经 ProjectView 的 :project-id 下发(同 WebAutoPane)
 import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deletePerfRecord, getPerfRecordSeries, listPerfRecords } from '../../api/perf'
 import type { AppPerfSeries, PerfRecord, PerfSource } from '../../types'
 import PerfCharts from './PerfCharts.vue'
+import PerfImportDialog from './PerfImportDialog.vue'
 import PerfSummaryTable from './PerfSummaryTable.vue'
 
 const props = defineProps<{ projectId: number }>()
@@ -15,15 +17,21 @@ const props = defineProps<{ projectId: number }>()
 const source = ref<'' | PerfSource>('')
 const records = ref<PerfRecord[]>([])
 const loading = ref(false)
+// 请求序号守卫:快速切筛选时慢响应不覆盖新结果、不弹过期报错
+let reloadSeq = 0
 
 async function reload() {
+  const seq = ++reloadSeq
   loading.value = true
   try {
-    records.value = await listPerfRecords(props.projectId, source.value ? { source: source.value } : {})
+    const data = await listPerfRecords(props.projectId, source.value ? { source: source.value } : {})
+    if (seq !== reloadSeq) return
+    records.value = data
   } catch (e) {
+    if (seq !== reloadSeq) return
     ElMessage.error(`加载性能记录失败:${(e as Error).message}`)
   } finally {
-    loading.value = false
+    if (seq === reloadSeq) loading.value = false
   }
 }
 onMounted(reload)
@@ -35,9 +43,18 @@ function onSelectionChange(rows: PerfRecord[]) {
   selected.value = rows
 }
 
-// Task 10/11 入口占位:趋势/导入/对比对话框组件落地后替换为真实挂载
+// 趋势/对比占位(Task 11 对话框落地后替换);导入已由 PerfImportDialog 接管
 function todoEntry() {
   ElMessage.info('功能将在后续任务接入')
+}
+
+// ── 导入向导 ─────────────────────────────────────────
+const importVisible = ref(false)
+
+function onImported(record: PerfRecord) {
+  importVisible.value = false // 向导 emit close 也会置 false,此处兜底
+  if (record.data_complete) ElMessage.success('导入成功') // 截断历史由向导 warning,不叠加成功提示
+  reload()
 }
 
 // ── 详情抽屉 ─────────────────────────────────────────
@@ -50,9 +67,13 @@ async function openDetail(row: PerfRecord) {
   detailSeries.value = [] // 先清空防上一条的曲线残留
   drawerVisible.value = true
   try {
-    detailSeries.value = (await getPerfRecordSeries(row.id)).series
+    const res = await getPerfRecordSeries(row.id)
+    if (detailRecord.value?.id !== row.id) return // 响应到达前已切换记录,丢弃过期响应
+    detailSeries.value = res.series
   } catch {
+    if (detailRecord.value?.id !== row.id) return
     detailSeries.value = [] // 拉取失败按无数据展示,不打断抽屉
+    ElMessage.warning('性能序列加载失败')
   }
 }
 
@@ -93,13 +114,21 @@ function buildCsv(series: AppPerfSeries[]): string {
     .join('\n\n')
 }
 
+// Windows Excel 靠 UTF-8 BOM 识别无 meta 的 CSV 编码,否则中文乱码
+const UTF8_BOM = '\uFEFF'
+
+// 文件名 sanitize:Windows 保留的 9 个非法字符替换为 _
+function sanitizeFileName(name: string): string {
+  return name.replace(/[/\\:*?"<>|]/g, '_')
+}
+
 function downloadCsv() {
   if (!detailRecord.value) return
-  const blob = new Blob([buildCsv(detailSeries.value)], { type: 'text/csv;charset=utf-8' })
+  const blob = new Blob([`${UTF8_BOM}${buildCsv(detailSeries.value)}`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `${detailRecord.value.name}.csv`
+  a.download = `${sanitizeFileName(detailRecord.value.name)}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -121,7 +150,7 @@ function fmtTime(iso: string | null): string {
       </el-select>
       <div class="toolbar-actions">
         <el-button size="small" data-test="trend-btn" @click="todoEntry">趋势分析</el-button>
-        <el-button size="small" data-test="import-btn" @click="todoEntry">导入</el-button>
+        <el-button size="small" data-test="import-btn" @click="importVisible = true">导入</el-button>
         <el-button size="small" type="primary" data-test="compare-btn" :disabled="selected.length < 2" @click="todoEntry">对比</el-button>
       </div>
     </div>
@@ -185,6 +214,12 @@ function fmtTime(iso: string | null): string {
         <PerfSummaryTable :summary="detailRecord.perf_summary" />
       </template>
     </el-drawer>
+
+    <!-- 手动导入向导(计划14 Task10):成功后由 onImported 刷新列表 -->
+    <PerfImportDialog
+      v-if="importVisible" :project-id="projectId"
+      @close="importVisible = false" @imported="onImported"
+    />
   </div>
 </template>
 
