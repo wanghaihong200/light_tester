@@ -97,6 +97,15 @@ const PROJECT_MENU: (MenuLeaf | MenuGroup)[] = [
       { key: 'mock-http', label: 'HTTP Mock', path: 'mock/http' },
     ],
   },
+  // 性能测试(计划 14):性能采集数据分析,分组轴=测试类型(ADR-0010)
+  {
+    key: 'perf',
+    label: '性能测试',
+    icon: '📊',
+    children: [
+      { key: 'perf-app', label: 'APP性能测试', path: 'perf/app' },
+    ],
+  },
 ]
 
 const props = defineProps<{ activeKey: string; collapsed: boolean; projectId: number | null }>()

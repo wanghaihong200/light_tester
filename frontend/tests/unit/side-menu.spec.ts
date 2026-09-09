@@ -17,7 +17,7 @@ describe('SideMenu', () => {
 
   it('项目态:渲染功能菜单树(叶子两项+两组各子项),无项目名列表', () => {
     const w = mount(SideMenu, { props: { activeKey: 'project-3:cases', collapsed: false, projectId: 3 } })
-    for (const label of ['功能用例管理', '知识库', 'AI测试', '生成任务', '自动化工程', '多端 UI 自动化', 'UI自动化', 'Web自动化', '接口Mock', 'HTTP Mock']) {
+    for (const label of ['功能用例管理', '知识库', 'AI测试', '生成任务', '自动化工程', '多端 UI 自动化', 'UI自动化', 'Web自动化', '接口Mock', 'HTTP Mock', '性能测试', 'APP性能测试']) {
       expect(w.text()).toContain(label)
     }
     expect(w.text()).not.toContain('商城系统')
@@ -29,6 +29,15 @@ describe('SideMenu', () => {
     const item = w.findAll('.menu-item').find((i) => i.find('.menu-name').text() === 'HTTP Mock')!
     await item.trigger('click')
     expect(w.emitted('navigate')![0]).toEqual(['/projects/3/mock/http'])
+    expect(item.classes()).toContain('active')
+    w.unmount()
+  })
+
+  it('性能测试 组:子项 APP性能测试 导航到 perf/app(计划14)', async () => {
+    const w = mount(SideMenu, { props: { activeKey: 'project-3:perf-app', collapsed: false, projectId: 3 } })
+    const item = w.findAll('.menu-item').find((i) => i.find('.menu-name').text() === 'APP性能测试')!
+    await item.trigger('click')
+    expect(w.emitted('navigate')![0]).toEqual(['/projects/3/perf/app'])
     expect(item.classes()).toContain('active')
     w.unmount()
   })

@@ -56,4 +56,11 @@ describe('路由守卫', () => {
     expect(r.name).toBe('project-mock-http')
     expect(r.path).toBe('/projects/1/mock/http')
   })
+
+  it('性能测试段:project-perf-app 解析 /projects/1/perf/app(计划14)', () => {
+    // 同上:resolve 只匹配路由记录,不触发 PerfRecordPane 懒加载
+    const r = router.resolve('/projects/1/perf/app')
+    expect(r.name).toBe('project-perf-app')
+    expect(r.path).toBe('/projects/1/perf/app')
+  })
 })

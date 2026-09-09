@@ -33,6 +33,7 @@ const router = createRouter({
             { path: 'ui/web', name: 'project-ui-web', component: () => import('../components/webauto/WebAutoPane.vue') },
             { path: 'ui/app', name: 'project-ui-app', component: () => import('../components/appauto/AppAutoPane.vue') },
             { path: 'mock/http', name: 'project-mock-http', component: () => import('../components/mock/MockPane.vue') },
+            { path: 'perf/app', name: 'project-perf-app', component: () => import('../components/perf/PerfRecordPane.vue') },
           ],
         },
         {
