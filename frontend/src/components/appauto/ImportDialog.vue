@@ -18,6 +18,7 @@ const cases = ref<DeviceCase[]>([])
 const sel = ref<DeviceCase | null>(null)
 const allowHighRisk = ref(false)
 const busy = ref(false)
+const syncing = ref(false)
 
 const caseLabel = (c: DeviceCase) => `${c.file_name}(${c.source === 'export' ? 'App导出' : '推送'})`
 
@@ -26,17 +27,30 @@ watch(() => props.visible, async (v) => {
   try {
     devices.value = (await listAppDevices()).filter((d) => d.state === 'device')
   } catch { devices.value = [] }
-  if (devices.value.length && !serial.value) serial.value = devices.value[0].serial
+  if (!serial.value) {
+    if (devices.value.length) serial.value = devices.value[0].serial // watch(serial) 触发首次同步
+  } else {
+    await refreshCases() // 重开弹窗:serial 未变不触发 watch,这里显式自动同步
+  }
 })
 
-watch(serial, async (s) => {
+// 设备用例同步:重新扫描设备两来源目录,整体替换列表并清空选中(防悬空选中旧文件名)。
+// manual=true(手动按钮,Task 2 接入)失败弹错;自动(开窗/切设备)静默——"列表已清空"即错误表达。
+async function refreshCases(manual = false) {
+  if (!serial.value || syncing.value) return
   cases.value = []
   sel.value = null
-  if (!s) return
+  syncing.value = true
   try {
-    cases.value = await listDeviceCases(props.projectId, s)
-  } catch { /* 设备离线等,列表留空 */ }
-})
+    cases.value = await listDeviceCases(props.projectId, serial.value)
+  } catch {
+    if (manual) ElMessage.error('同步失败') // 手动分支的具体文案 Task 2 完善;本任务先立骨架
+  } finally {
+    syncing.value = false
+  }
+}
+
+watch(serial, () => { refreshCases() })
 
 async function onImportDevice() {
   if (!serial.value || !sel.value) return
