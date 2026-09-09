@@ -11,8 +11,11 @@
 - 清理 fixture 命名 _clean_app_tables(同名 _clean_tables 会遮蔽 conftest 的,projects/users
   将不再被清理,同 test_perf_models.py 注),顺带清 runs/*/perf 与 perf_records/* 残留 CSV
   (TRUNCATE 复位自增后 id 复用,残留文件会污染 series 断言)。
+- 趋势用例 Task4 brief 直插 AppRun(script_id=9, …)——app_runs.script_id 是真 FK,须先建
+  AppScript 用真实 id(brief 稿的裸 9 入库即 FK 违例),查询串同步用该 id。
 """
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -145,3 +148,52 @@ def test_non_member_gets_404(client, db_session, make_user):
     rec = _mk_record(db_session, project_id=pid)
     oh = _auth(client, db_session, make_user, "perfoutsider")  # 不加入任何项目
     assert client.get(f"/api/perf-records/{rec.id}", headers=oh).status_code == 404
+
+
+# ---- 计划 14 Task 4:跨记录对比 + 趋势聚合 ----
+
+def test_compare_returns_records_and_series(client, db_session):
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h)
+    r1 = _mk_record(db_session, project_id=pid, name="A", source_ref="performance-a")
+    r2 = _mk_record(db_session, project_id=pid, name="B", source_ref="performance-b")
+    for rec in (r1, r2):
+        d = solopi_perf.record_perf_dir(rec.id); d.mkdir(parents=True, exist_ok=True)
+        (d / "CPU.csv").write_text("ts,v\n0,1\n1,2\n", encoding="utf-8")
+    body = client.post(f"/api/projects/{pid}/perf-records/compare",
+                       json={"record_ids": [r1.id, r2.id]}, headers=h).json()
+    assert {r["id"] for r in body["records"]} == {r1.id, r2.id}
+    assert body["series"][str(r1.id)][0]["item"] == "CPU"
+
+
+def test_compare_rejects_single(client, db_session):
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h)
+    r = _mk_record(db_session, project_id=pid)
+    resp = client.post(f"/api/projects/{pid}/perf-records/compare",
+                       json={"record_ids": [r.id]}, headers=h)
+    assert resp.status_code == 400
+
+
+def test_trend_groups_by_script_and_device(client, db_session):
+    pid_h = _admin_headers(client, db_session)
+    pid = _mk_project(client, pid_h)
+    s = AppScript(project_id=pid, name="场景A", case_json=_SCRIPT_CASE)
+    db_session.add(s); db_session.commit(); db_session.refresh(s)  # script_id 真 FK,先建脚本
+    summary = {"columns": [{"index": "CPU", "mean": 12.5, "p90": 20.0}]}
+    for i, dev in enumerate(["dev1", "dev1", "dev2"]):
+        run = AppRun(project_id=pid, script_id=s.id, script_name="场景A", device_serial=dev,
+                     status="passed", perf_summary=summary,
+                     started_at=datetime(2026, 9, 1, 10, i),
+                     finished_at=datetime(2026, 9, 1, 10, 10 + i))
+        db_session.add(run); db_session.commit(); db_session.refresh(run)
+        _mk_record(db_session, project_id=pid, source="run", app_run_id=run.id, source_ref=None,
+                   script_id=s.id, script_name="场景A", device_serial=dev, perf_summary=summary,
+                   finished_at=run.finished_at)
+    _mk_record(db_session, project_id=pid, source="import", source_ref="performance-x")  # import 不参与
+    body = client.get(f"/api/projects/{pid}/perf-trend?script_id={s.id}",
+                      headers=pid_h).json()
+    assert len(body["groups"]) == 2  # dev1 一组、dev2 一组
+    g = next(g for g in body["groups"] if g["device_serial"] == "dev1")
+    assert len(g["points"]) == 2 and g["points"][0]["finished_at"] <= g["points"][1]["finished_at"]
+    assert g["points"][0]["series"]["CPU"]["mean"] == 12.5

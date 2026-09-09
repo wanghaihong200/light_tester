@@ -4,6 +4,7 @@
 import shutil
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app import solopi_perf  # 顶层模块(brief 稿误写 app.app_automation.solopi_perf)
@@ -60,3 +61,50 @@ def record_series(record_id: int, db: Session = Depends(get_db), current: User =
     rec = _get_record(db, record_id, current, "viewer")
     return {"record": PerfRecordOut.model_validate(rec).model_dump(mode="json"),
             "series": perf_csv.read_perf_csvs(solopi_perf.record_data_dir(rec))}
+
+
+class CompareBody(BaseModel):
+    record_ids: list[int]
+
+
+@router.post("/projects/{project_id}/perf-records/compare")
+def compare_records(project_id: int, body: CompareBody, db: Session = Depends(get_db),
+                    current: User = Depends(get_current_user)):
+    ensure_project_access(db, current, project_id, "viewer")
+    if not (2 <= len(body.record_ids) <= 10):
+        raise HTTPException(400, "对比需勾选 2~10 条记录")
+    recs = (db.query(PerfRecord)
+            .filter(PerfRecord.project_id == project_id, PerfRecord.id.in_(body.record_ids))
+            .order_by(PerfRecord.id.desc()).all())
+    if len(recs) != len(body.record_ids):
+        raise HTTPException(404, "存在不属于本项目或已删除的记录")
+    series = {str(r.id): perf_csv.read_perf_csvs(solopi_perf.record_data_dir(r)) for r in recs}
+    return {"records": [PerfRecordOut.model_validate(r).model_dump(mode="json") for r in recs],
+            "series": series}
+
+
+@router.get("/projects/{project_id}/perf-trend")
+def perf_trend(project_id: int, script_id: int | None = None, device_serial: str | None = None,
+               db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    """趋势:仅 run 来源(脚本口径);分组键=script_id+device_serial;数据取 perf_summary(不碰 CSV)。"""
+    ensure_project_access(db, current, project_id, "viewer")
+    q = (db.query(PerfRecord)
+         .filter(PerfRecord.project_id == project_id, PerfRecord.source == "run",
+                 PerfRecord.script_id.isnot(None), PerfRecord.finished_at.isnot(None)))
+    if script_id is not None:
+        q = q.filter(PerfRecord.script_id == script_id)
+    if device_serial:
+        q = q.filter(PerfRecord.device_serial == device_serial)
+    recs = q.order_by(PerfRecord.finished_at.asc()).all()
+    groups: dict[tuple, dict] = {}
+    for r in recs:
+        key = (r.script_id, r.device_serial)
+        g = groups.setdefault(key, {"script_id": r.script_id, "script_name": r.script_name,
+                                    "device_serial": r.device_serial, "points": []})
+        cols = ((r.perf_summary or {}).get("columns")) or []
+        g["points"].append({
+            "record_id": r.id, "finished_at": r.finished_at.isoformat(),
+            "series": {str(c.get("index")): {"mean": c.get("mean"), "p90": c.get("p90")}
+                       for c in cols if c.get("index") is not None},
+        })
+    return {"groups": list(groups.values())}
