@@ -3,7 +3,9 @@ import { onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAppRun, getAppRunPerfSeries, subscribeAppRunEvents, forceFinishAppRun } from '../../api/appAutomation'
 import type { AppPerfSeries, AppRun } from '../../types'
-import PerfChart from './PerfChart.vue'
+import PerfCharts from '../perf/PerfCharts.vue'
+import PerfSummaryTable from '../perf/PerfSummaryTable.vue'
+import StartupSummaryCard from '../perf/StartupSummaryCard.vue'
 
 const props = defineProps<{ visible: boolean; run: AppRun | null }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'changed'): void }>()
@@ -70,11 +72,10 @@ async function forceFinish() {
         </div>
       </template>
       <h4>性能曲线</h4>
-      <PerfChart v-if="series.length" :series="series" />
-      <p v-else style="color: var(--el-text-color-secondary)">本次未采集性能或数据未落盘</p>
+      <PerfCharts :series="series" :summary="current.perf_summary" />
       <h4>性能汇总 / 启动耗时</h4>
-      <pre v-if="current.perf_summary">{{ JSON.stringify(current.perf_summary, null, 2) }}</pre>
-      <pre v-if="current.startup_summary">{{ JSON.stringify(current.startup_summary, null, 2) }}</pre>
+      <PerfSummaryTable :summary="current.perf_summary" />
+      <StartupSummaryCard :summary="current.startup_summary" />
       <h4>端上步骤结果</h4>
       <pre v-if="current.results">{{ JSON.stringify(current.results, null, 2) }}</pre>
       <el-button v-if="!TERMINAL.includes(current.status)" type="danger" @click="forceFinish">强制结束</el-button>
