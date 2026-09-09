@@ -215,6 +215,26 @@ class AppRunOut(BaseModel):
     finished_at: datetime | None
 
 
+# 性能记录:run=APP自动化执行引用行 / import=设备端历史导入(计划 14 / ADR-0010)
+class PerfRecordOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    source: str
+    name: str
+    app_run_id: int | None = None
+    script_id: int | None = None
+    script_name: str
+    device_serial: str
+    perf_items: list[str] = Field(default_factory=list)
+    data_complete: bool = True
+    perf_summary: dict | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+
 class MockCondition(BaseModel):
     scope: Literal["query", "header", "body"]
     key: str
