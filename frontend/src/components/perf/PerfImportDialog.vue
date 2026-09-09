@@ -37,19 +37,26 @@ async function loadDevices() {
 }
 
 // 点设备进历史步并拉取;重选设备时清选中防悬空引用
+// 请求序号守卫(仿 PerfRecordPane reloadSeq):快速连点设备时,慢的旧响应不覆盖新设备历史
+let pickSeq = 0
+
 async function pickDevice(d: DeviceInfo) {
+  const seq = ++pickSeq
   serial.value = d.serial
   step.value = 1
   selected.value = null
   history.value = []
   historyLoading.value = true
   try {
-    history.value = (await listDevicePerfHistory(d.serial, 50)).items
+    const items = (await listDevicePerfHistory(d.serial, 200)).items // limit 200:防长采集历史漏单
+    if (seq !== pickSeq) return // 等待期间已切设备:丢弃过期响应
+    history.value = items
   } catch (e) {
+    if (seq !== pickSeq) return
     history.value = []
     ElMessage.error(`加载设备历史失败:${(e as Error).message}`)
   } finally {
-    historyLoading.value = false
+    if (seq === pickSeq) historyLoading.value = false
   }
 }
 
@@ -64,7 +71,7 @@ function onSelectionChange(rows: DevicePerfHistoryItem[]) {
     return
   }
   selected.value = rows[rows.length - 1]
-  name.value = `设备导入 ${selected.value.id.slice(0, 12)}`
+  name.value = `设备导入 ${selected.value.id.slice(0, 20)}` // 截断 20 位对齐后端(backend routers/perf.py)
   step.value = 2
 }
 
@@ -132,9 +139,9 @@ function fmtSize(n: number | null): string {
       </div>
     </div>
 
-    <!-- 步2:该设备的历史表,已导入行置灰;勾选即进确认步 -->
-    <div v-else-if="step === 1" class="step-body">
-      <div class="step-hint">设备 <b>{{ serial }}</b> 的性能采集历史(勾选一条继续)</div>
+    <!-- 步2/步3:该设备的历史表在确认步保持挂载(勾选可随时改),已导入行置灰;勾选即进确认步 -->
+    <div v-else class="step-body">
+      <div v-if="step === 1" class="step-hint">设备 <b>{{ serial }}</b> 的性能采集历史(勾选一条继续)</div>
       <el-table
         v-loading="historyLoading" :data="history" row-key="id" border max-height="360"
         @selection-change="onSelectionChange"
@@ -159,33 +166,34 @@ function fmtSize(n: number | null): string {
           </template>
         </el-table-column>
       </el-table>
-    </div>
 
-    <!-- 步3:可编辑名称 + 摘要,确认导入 -->
-    <div v-else class="step-body">
-      <el-form label-width="90px">
-        <el-form-item label="记录名称">
-          <div data-test="import-name" class="name-wrap">
-            <el-input v-model="name" maxlength="100" />
-          </div>
-        </el-form-item>
-      </el-form>
-      <el-descriptions :column="1" border size="small" class="summary">
-        <el-descriptions-item label="设备">{{ serial }}</el-descriptions-item>
-        <el-descriptions-item label="历史 ID">{{ selected?.id }}</el-descriptions-item>
-        <el-descriptions-item label="起止时间">{{ selected ? `${fmtTs(selected.start_time)} ~ ${fmtTs(selected.end_time)}` : '—' }}</el-descriptions-item>
-        <el-descriptions-item label="文件数">{{ selected?.file_count ?? '—' }}</el-descriptions-item>
-        <el-descriptions-item label="大小">{{ fmtSize(selected?.size_bytes ?? null) }}</el-descriptions-item>
-        <el-descriptions-item label="采集项">{{ selected?.metrics.length ? selected.metrics.join(',') : '—' }}</el-descriptions-item>
-      </el-descriptions>
-      <div class="step-hint">同一历史重复导入会被后端拒绝(409);已导入的历史在列表中已置灰。</div>
+      <!-- 步3:可编辑名称 + 摘要,确认导入;勾选被清空只禁用按钮+提示,不必退步 -->
+      <div v-if="step === 2" class="confirm-block">
+        <el-form label-width="90px">
+          <el-form-item label="记录名称">
+            <div data-test="import-name" class="name-wrap">
+              <el-input v-model="name" maxlength="100" />
+            </div>
+          </el-form-item>
+        </el-form>
+        <el-descriptions :column="1" border size="small" class="summary">
+          <el-descriptions-item label="设备">{{ serial }}</el-descriptions-item>
+          <el-descriptions-item label="历史 ID">{{ selected?.id }}</el-descriptions-item>
+          <el-descriptions-item label="起止时间">{{ selected ? `${fmtTs(selected.start_time)} ~ ${fmtTs(selected.end_time)}` : '—' }}</el-descriptions-item>
+          <el-descriptions-item label="文件数">{{ selected?.file_count ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item label="大小">{{ fmtSize(selected?.size_bytes ?? null) }}</el-descriptions-item>
+          <el-descriptions-item label="采集项">{{ selected?.metrics.length ? selected.metrics.join(',') : '—' }}</el-descriptions-item>
+        </el-descriptions>
+        <div v-if="!selected" class="step-hint" data-test="confirm-hint">勾选已被清空,请在上方重新勾选历史后再导入</div>
+        <div class="step-hint">同一历史重复导入会被后端拒绝(409);已导入的历史在列表中已置灰。</div>
+      </div>
     </div>
 
     <template #footer>
       <el-button v-if="step > 0" :disabled="busy" @click="back">上一步</el-button>
       <el-button @click="emit('close')">取消</el-button>
       <el-button
-        v-if="step === 2" type="primary" :loading="busy"
+        v-if="step === 2" type="primary" :loading="busy" :disabled="!selected || busy"
         data-test="confirm-import" @click="confirmImport"
       >确认导入</el-button>
     </template>
@@ -223,5 +231,8 @@ function fmtSize(n: number | null): string {
 }
 .summary {
   margin-top: 4px;
+}
+.confirm-block {
+  margin-top: 12px;
 }
 </style>

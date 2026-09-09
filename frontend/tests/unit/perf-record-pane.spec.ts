@@ -32,16 +32,20 @@ vi.mock('echarts/components', () => ({
 }))
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }))
 
-// 本页只消费三件套(对比/趋势/导入的 API 由 Task 10/11 的对话框接入)
+// 本页消费 perf API 全套(对比/趋势对话框 Task 11 接入后,其依赖也须在 mock 内兜底)
 const api = vi.hoisted(() => ({
   listPerfRecords: vi.fn(),
   deletePerfRecord: vi.fn(),
   getPerfRecordSeries: vi.fn(),
+  comparePerfRecords: vi.fn(),
+  getPerfTrend: vi.fn(),
 }))
 vi.mock('../../src/api/perf', () => api)
 
 import PerfRecordPane from '../../src/components/perf/PerfRecordPane.vue'
 import PerfCharts from '../../src/components/perf/PerfCharts.vue'
+import PerfCompareDialog from '../../src/components/perf/PerfCompareDialog.vue'
+import PerfTrendDialog from '../../src/components/perf/PerfTrendDialog.vue'
 import PerfImportDialog from '../../src/components/perf/PerfImportDialog.vue'
 import StartupSummaryCard from '../../src/components/perf/StartupSummaryCard.vue'
 import type { AppPerfSeries, PerfRecord } from '../../src/types'
@@ -85,6 +89,9 @@ describe('PerfRecordPane', () => {
     api.listPerfRecords.mockResolvedValue([RUN_REC, IMPORT_REC])
     api.deletePerfRecord.mockResolvedValue(undefined)
     api.getPerfRecordSeries.mockResolvedValue({ record: RUN_REC, series: SERIES })
+    // Task 11 对话框兜底:对话框挂载即拉数据,不给默认值会走 error 分支污染断言
+    api.comparePerfRecords.mockResolvedValue({ records: [RUN_REC, IMPORT_REC], series: { '1': SERIES, '2': SERIES } })
+    api.getPerfTrend.mockResolvedValue({ groups: [] })
   })
 
   afterEach(() => {
@@ -168,7 +175,7 @@ describe('PerfRecordPane', () => {
     w.unmount()
   })
 
-  it('对比按钮:多选 <2 禁用,勾选两条后可用,点击提示后续任务接入', async () => {
+  it('对比按钮:多选 <2 禁用,勾选两条后可用,点击打开 PerfCompareDialog 并传选中 ids,@close 关窗', async () => {
     const w = mountPane()
     await flushPromises()
     expect(btn(w, 'compare-btn').exists()).toBe(true)
@@ -176,21 +183,23 @@ describe('PerfRecordPane', () => {
     w.findComponent({ name: 'ElTable' }).vm.$emit('selection-change', [RUN_REC, IMPORT_REC])
     await flushPromises()
     expect((btn(w, 'compare-btn').element as HTMLButtonElement).disabled).toBe(false)
-    const infoSpy = vi.spyOn(ElMessage, 'info').mockReturnValue({} as never)
+    expect(w.findComponent(PerfCompareDialog).exists()).toBe(false)
     await btn(w, 'compare-btn').trigger('click')
-    expect(infoSpy).toHaveBeenCalledTimes(1) // Task 11 对话框接管前的占位
+    const dlg = w.findComponent(PerfCompareDialog)
+    expect(dlg.exists()).toBe(true)
+    expect(dlg.props('projectId')).toBe(1)
+    expect(dlg.props('recordIds')).toEqual([1, 2])
+    dlg.vm.$emit('close')
+    await flushPromises()
+    expect(w.findComponent(PerfCompareDialog).exists()).toBe(false)
     w.unmount()
   })
 
-  it('趋势按钮仍占位;导入按钮打开 PerfImportDialog,@imported 后刷新列表并提示成功', async () => {
-    const infoSpy = vi.spyOn(ElMessage, 'info').mockReturnValue({} as never)
+  it('趋势按钮打开 PerfTrendDialog;导入按钮打开 PerfImportDialog,@imported 后刷新列表并提示成功', async () => {
     const successSpy = vi.spyOn(ElMessage, 'success').mockReturnValue({} as never)
     const w = mountPane()
     await flushPromises()
     expect(api.listPerfRecords).toHaveBeenCalledTimes(1)
-    // 趋势:Task 11 前仍占位
-    await btn(w, 'trend-btn').trigger('click')
-    expect(infoSpy).toHaveBeenCalledTimes(1)
     // 导入:挂载向导,projectId 透传
     expect(w.findComponent(PerfImportDialog).exists()).toBe(false)
     await btn(w, 'import-btn').trigger('click')
@@ -209,6 +218,15 @@ describe('PerfRecordPane', () => {
     await flushPromises()
     expect(successSpy).toHaveBeenCalledTimes(1)
     expect(api.listPerfRecords).toHaveBeenCalledTimes(3)
+    // 趋势:打开 PerfTrendDialog 并透传 projectId,@close 关窗
+    expect(w.findComponent(PerfTrendDialog).exists()).toBe(false)
+    await btn(w, 'trend-btn').trigger('click')
+    const trend = w.findComponent(PerfTrendDialog)
+    expect(trend.exists()).toBe(true)
+    expect(trend.props('projectId')).toBe(1)
+    trend.vm.$emit('close')
+    await flushPromises()
+    expect(w.findComponent(PerfTrendDialog).exists()).toBe(false)
     w.unmount()
   })
 

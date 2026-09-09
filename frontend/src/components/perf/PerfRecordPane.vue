@@ -1,14 +1,16 @@
 <script setup lang="ts">
 // 计划14 Task9:APP 性能测试页——性能记录列表(来源筛选/多选/删除)+ 详情抽屉(曲线/汇总/CSV 下载)
-// 计划14 Task10:接入手动导入向导 PerfImportDialog(导入成功后刷新);趋势/对比仍为占位(Task 11)
+// 计划14 Task10/11:接入手动导入向导 PerfImportDialog + 跨记录对比/趋势对话框(导入成功后刷新)
 // projectId 经 ProjectView 的 :project-id 下发(同 WebAutoPane)
 import { onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deletePerfRecord, getPerfRecordSeries, listPerfRecords } from '../../api/perf'
 import type { AppPerfSeries, PerfRecord, PerfSource } from '../../types'
 import PerfCharts from './PerfCharts.vue'
+import PerfCompareDialog from './PerfCompareDialog.vue'
 import PerfImportDialog from './PerfImportDialog.vue'
 import PerfSummaryTable from './PerfSummaryTable.vue'
+import PerfTrendDialog from './PerfTrendDialog.vue'
 
 const props = defineProps<{ projectId: number }>()
 
@@ -37,18 +39,15 @@ async function reload() {
 onMounted(reload)
 watch(source, () => { reload() })
 
-// 多选(对比入口):≥2 才可用;对比对话框由 Task 11 挂载到本页
+// 多选(对比入口):≥2 才可用;对比/趋势对话框由 Task 11 挂载到本页
 const selected = ref<PerfRecord[]>([])
 function onSelectionChange(rows: PerfRecord[]) {
   selected.value = rows
 }
 
-// 趋势/对比占位(Task 11 对话框落地后替换);导入已由 PerfImportDialog 接管
-function todoEntry() {
-  ElMessage.info('功能将在后续任务接入')
-}
-
-// ── 导入向导 ─────────────────────────────────────────
+// ── 对比/趋势/导入对话框(Task 11 接入,均由 @close 关窗)──
+const compareVisible = ref(false)
+const trendVisible = ref(false)
 const importVisible = ref(false)
 
 function onImported(record: PerfRecord) {
@@ -149,9 +148,9 @@ function fmtTime(iso: string | null): string {
         <el-option label="导入(import)" value="import" />
       </el-select>
       <div class="toolbar-actions">
-        <el-button size="small" data-test="trend-btn" @click="todoEntry">趋势分析</el-button>
+        <el-button size="small" data-test="trend-btn" @click="trendVisible = true">趋势分析</el-button>
         <el-button size="small" data-test="import-btn" @click="importVisible = true">导入</el-button>
-        <el-button size="small" type="primary" data-test="compare-btn" :disabled="selected.length < 2" @click="todoEntry">对比</el-button>
+        <el-button size="small" type="primary" data-test="compare-btn" :disabled="selected.length < 2" @click="compareVisible = true">对比</el-button>
       </div>
     </div>
 
@@ -214,6 +213,15 @@ function fmtTime(iso: string | null): string {
         <PerfSummaryTable :summary="detailRecord.perf_summary" />
       </template>
     </el-drawer>
+
+    <!-- 跨记录对比(Task 11):勾选 ≥2 条记录后进入,传入选中 ids -->
+    <PerfCompareDialog
+      v-if="compareVisible" :project-id="projectId"
+      :record-ids="selected.map((r) => r.id)" @close="compareVisible = false"
+    />
+
+    <!-- 性能趋势(Task 11):仅 run 来源按脚本@设备分组,内部自拉筛选数据 -->
+    <PerfTrendDialog v-if="trendVisible" :project-id="projectId" @close="trendVisible = false" />
 
     <!-- 手动导入向导(计划14 Task10):成功后由 onImported 刷新列表 -->
     <PerfImportDialog
