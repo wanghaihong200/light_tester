@@ -17,10 +17,19 @@ describe('SideMenu', () => {
 
   it('项目态:渲染功能菜单树(叶子两项+两组各子项),无项目名列表', () => {
     const w = mount(SideMenu, { props: { activeKey: 'project-3:cases', collapsed: false, projectId: 3 } })
-    for (const label of ['功能用例管理', '知识库', 'AI测试', '生成任务', '自动化工程', '多端 UI 自动化', 'UI自动化', 'Web自动化']) {
+    for (const label of ['功能用例管理', '知识库', 'AI测试', '生成任务', '自动化工程', '多端 UI 自动化', 'UI自动化', 'Web自动化', '接口Mock', 'HTTP Mock']) {
       expect(w.text()).toContain(label)
     }
     expect(w.text()).not.toContain('商城系统')
+    w.unmount()
+  })
+
+  it('接口Mock 组:子项 HTTP Mock 导航到 mock/http', async () => {
+    const w = mount(SideMenu, { props: { activeKey: 'project-3:mock-http', collapsed: false, projectId: 3 } })
+    const item = w.findAll('.menu-item').find((i) => i.find('.menu-name').text() === 'HTTP Mock')!
+    await item.trigger('click')
+    expect(w.emitted('navigate')![0]).toEqual(['/projects/3/mock/http'])
+    expect(item.classes()).toContain('active')
     w.unmount()
   })
 

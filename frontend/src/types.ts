@@ -283,3 +283,33 @@ export interface AppPerfSeries {
   columns: string[]
   rows: string[][]
 }
+
+// ── 接口Mock(计划13)──
+export type MockConditionScope = 'query' | 'header' | 'body'
+export type MockMatchMode = 'eq' | 'regex'
+export type MockInstanceStatus = 'stopped' | 'starting' | 'running' | 'error'
+export interface MockCondition { scope: MockConditionScope; key: string; match: MockMatchMode; value: string }
+export interface MockInstance {
+  id: number; project_id: number; name: string; description: string | null; port: number
+  cors_enabled: boolean; default_status: number; default_body: string | null
+  desired: 'running' | 'stopped'; status: MockInstanceStatus; error_message: string | null
+  created_at: string; updated_at: string
+}
+export interface MockRule {
+  id: number; instance_id: number; method: string; path_template: string; conditions: MockCondition[]
+  enabled: boolean; response_status: number; response_headers: Record<string, string>
+  response_body: string | null; enable_template: boolean; delay_ms: number
+  timeout_enabled: boolean; timeout_seconds: number; sort_order: number; updated_at: string
+}
+export interface MockRuleBody {
+  method: string; path_template: string; conditions: MockCondition[]; enabled: boolean
+  response_status: number; response_headers: Record<string, string>
+  response_body: string | null; enable_template: boolean; delay_ms: number
+  timeout_enabled: boolean; timeout_seconds: number
+}
+export interface MockHit {
+  id: number; instance_id: number; rule_id: number | null; method: string; path: string
+  query: string | null; matched: boolean; response_status: number | null
+  delay_ms: number; elapsed_ms: number; error: string | null; created_at: string
+}
+export interface MockHitDetail extends MockHit { request_headers: Record<string, string> | null; request_body: string | null }

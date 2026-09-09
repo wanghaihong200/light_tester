@@ -49,4 +49,11 @@ describe('路由守卫', () => {
     }
     localStorage.removeItem('tt_token')
   })
+
+  it('接口Mock段:project-mock-http 解析 /projects/1/mock/http', () => {
+    // 组件为懒加载且 MockPane 属 Task 9:resolve 只匹配路由记录、不触发组件加载,验路由契约即可
+    const r = router.resolve('/projects/1/mock/http')
+    expect(r.name).toBe('project-mock-http')
+    expect(r.path).toBe('/projects/1/mock/http')
+  })
 })

@@ -88,6 +88,15 @@ const PROJECT_MENU: (MenuLeaf | MenuGroup)[] = [
       { key: 'ui-app', label: 'APP自动化', path: 'ui/app' },
     ],
   },
+  // 接口Mock(计划 13):协议层 mock 服务,不依赖 AI 与 UI 驱动,单独成组
+  {
+    key: 'mock',
+    label: '接口Mock',
+    icon: '🧩',
+    children: [
+      { key: 'mock-http', label: 'HTTP Mock', path: 'mock/http' },
+    ],
+  },
 ]
 
 const props = defineProps<{ activeKey: string; collapsed: boolean; projectId: number | null }>()
