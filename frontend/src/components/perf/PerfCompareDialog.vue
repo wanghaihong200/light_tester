@@ -32,6 +32,7 @@ function mergedOptions(recordList: PerfRecord[], seriesMap: Record<string, AppPe
   for (const r of recordList) {
     for (const opt of buildPerfOptions(seriesMap[String(r.id)] ?? [], { seriesNamePrefix: r.name })) {
       const item = String((opt.title as { text?: string } | undefined)?.text ?? '')
+      if (!item) continue // item 名来自设备动态 CSV 数据,正常非空;空串(异常数据)不并入无标题子图
       const e = byItem.get(item) ?? { base: opt, series: [], maxLen: 0 }
       e.series.push(...((opt.series as unknown[] | undefined) ?? []))
       const n = (opt.series as { data?: unknown[] }[] | undefined)?.[0]?.data?.length ?? 0

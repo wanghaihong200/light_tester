@@ -122,6 +122,9 @@ async function renderCharts() {
   hosts.forEach((h) => {
     const g = groups.value[Number(h.dataset.group)]
     if (!g) return
+    // 先清旧子节点:dispose 只清 echarts 实例,追加的容器 div 本体会残留;
+    // 组块 v-for 用索引键、筛选变化时 host 被原位复用,不清会越积越多(PerfCharts 同款防护)
+    h.innerHTML = ''
     for (const key of groupKeys(g)) {
       const el = h.appendChild(document.createElement('div'))
       // 动态建出的节点不带 scoped data-v,尺寸写内联(依赖 scoped 样式会拿不到高度)

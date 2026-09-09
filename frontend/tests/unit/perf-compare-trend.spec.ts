@@ -226,9 +226,11 @@ describe('PerfTrendDialog', () => {
     expect(mockChart.dispose).toHaveBeenCalled()
   })
 
-  it('筛选联动:选脚本/设备后按条件重拉趋势', async () => {
+  it('筛选联动:选脚本/设备后按条件重拉趋势;重渲染清空 host,子图容器不累积', async () => {
     const w = mountTrend()
     await flushPromises()
+    // 首次渲染:host 内子图容器数 = series 键数(1)
+    expect(w.find('[data-test="trend-charts"]').element.children).toHaveLength(1)
     const selects = w.findAllComponents({ name: 'ElSelect' })
     await selects[0].vm.$emit('update:modelValue', 9)
     await flushPromises()
@@ -236,6 +238,8 @@ describe('PerfTrendDialog', () => {
     await selects[1].vm.$emit('update:modelValue', 'dev1')
     await flushPromises()
     expect(api.getPerfTrend).toHaveBeenLastCalledWith(1, { script_id: 9, device_serial: 'dev1' })
+    // 两次重渲染后仍 = 1:重渲染必须先清 host 旧子节点(索引键复用下不清会越积越多)
+    expect(w.find('[data-test="trend-charts"]').element.children).toHaveLength(1)
     w.unmount()
   })
 
