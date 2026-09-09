@@ -1,13 +1,15 @@
+import shutil
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app import solopi_perf
 from app.auth import get_current_user
 from app.automation_repo import resolve_repo, upsert_repo
 from app.database import get_db
-from app.models import AutomationRepo, Project, ProjectMember, User
+from app.models import AutomationRepo, PerfRecord, Project, ProjectMember, User
 from app.permissions import ensure_project_access, visible_project_ids
 from app.schemas import ProjectCreate, ProjectOut, ProjectUpdate
 from app.excel_export import build_excel_bytes
@@ -109,6 +111,13 @@ def delete_project(project_id: int, db: Session = Depends(get_db), current: User
     db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete()
     # plan11 写透:automation_repos.project_id 同样外键指向项目,先清仓行再删(1451)
     db.query(AutomationRepo).filter(AutomationRepo.project_id == project_id).delete()
+    # 计划14:perf_records.project_id 亦 FK 指向项目,不清行删项目即 500。
+    # import 来源连落盘目录(perf_records/<id>),run 来源只删引用行(数据在 runs/<id>,
+    # 语义对齐 perf.delete_record);app_scripts/app_runs 的清理缺口已登记 DEFER,不在此越界。
+    for rec in db.query(PerfRecord).filter(PerfRecord.project_id == project_id).all():
+        if rec.source == "import":
+            shutil.rmtree(solopi_perf.record_perf_dir(rec.id), ignore_errors=True)
+        db.delete(rec)
     db.delete(project)
     db.commit()
 

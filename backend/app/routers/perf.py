@@ -2,7 +2,7 @@
 """性能测试域 API(计划 14 / ADR-0010):性能记录 CRUD + 统一 series。
 数据消费统一走 record_data_dir → read_perf_csvs;run 来源不复制数据(读执行目录)。"""
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -121,8 +121,10 @@ class ImportBody(BaseModel):
 
 
 def _ms_to_dt(ms) -> datetime | None:
+    # naive 本地时间,对齐 executor 的 datetime.now() 惯例( DateTime 列不存时区;
+    # 带 UTC 落库会与平台其余时间整体错 8 小时,前端直显即错位——计划14 终审修复)
     try:
-        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc) if ms else None
+        return datetime.fromtimestamp(int(ms) / 1000) if ms else None
     except (TypeError, ValueError):
         return None
 
@@ -174,14 +176,24 @@ def import_history(project_id: int, body: ImportBody, db: Session = Depends(get_
     db.add(rec)
     db.commit()
     db.refresh(rec)
-    saved = solopi_perf.save_imported_csvs(rec.id, files)
-    if saved == 0:  # 无可落盘内容:回滚删除刚建的行,不留空壳记录
+    try:
+        saved = solopi_perf.save_imported_csvs(rec.id, files)
+        if saved == 0:  # 无可落盘内容:回滚删除刚建的行,不留空壳记录
+            db.delete(rec)
+            db.commit()
+            raise HTTPException(400, "历史详情未含可落盘的 CSV 内容(preview 为空)")
+        try:
+            rec.perf_summary = solopi_cli.perf_analyze(str(solopi_perf.record_perf_dir(rec.id)))
+        except CliError as e:
+            rec.perf_summary = {"error": f"统计分析失败: {e.message}"}
+        db.commit()
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        # 计划14 终审:落盘段任何异常同样回滚(删行+清半落盘目录),不留空壳记录
+        db.rollback()  # 先复位会话(异常可能来自 commit/脏赋值),rec 此前已提交仍是持久态
+        shutil.rmtree(solopi_perf.record_perf_dir(rec.id), ignore_errors=True)
         db.delete(rec)
         db.commit()
-        raise HTTPException(400, "历史详情未含可落盘的 CSV 内容(preview 为空)")
-    try:
-        rec.perf_summary = solopi_cli.perf_analyze(str(solopi_perf.record_perf_dir(rec.id)))
-    except CliError as e:
-        rec.perf_summary = {"error": f"统计分析失败: {e.message}"}
-    db.commit()
+        raise HTTPException(400, f"导入落盘失败: {e}") from e
     return rec

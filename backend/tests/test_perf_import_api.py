@@ -13,6 +13,7 @@
 - PerfRecordOut 既有 schema 无 source_ref 字段,按 brief 断言在 schemas.py 补可选字段。
 """
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from app import solopi_perf
 from app.app_automation import solopi_cli
 from app.config import settings
 from app.database import SessionLocal
+from app.models import PerfRecord
 
 from tests.test_app_scripts_api import _admin_headers, _mk_project
 
@@ -96,6 +98,10 @@ def test_import_creates_record_and_files(client, db_session, stub_history, tmp_p
     assert row["source"] == "import" and row["source_ref"] == "performance-abc"
     assert row["data_complete"] is True and row["perf_items"] == ["CPU", "FPS"]
     assert row["perf_summary"]["columns"][0]["mean"] == 1.5
+    # 采集起止=naive 本地时间(对齐 executor datetime.now() 惯例;带 UTC 序列化含 +00:00
+    # 且语义偏 8 小时,前端直显即错位——计划14 终审修复锁定)
+    assert row["started_at"] == datetime.fromtimestamp(1725868800).isoformat()
+    assert row["finished_at"] == datetime.fromtimestamp(1725868860).isoformat()
     # preview 逐文件落盘到 record_perf_dir(stub → tmp_path),series 端点读同一目录
     saved = tmp_path / "perf_records" / str(row["id"]) / "CPU_x_abc_0_0.csv"
     assert saved.read_text(encoding="utf-8").startswith("ts,v")
@@ -120,3 +126,21 @@ def test_import_truncated_marks_incomplete(client, db_session, stub_history, mon
                     json={"serial": "dev1", "history_id": "performance-abc"}, headers=h)
     assert r.status_code == 201, r.text
     assert r.json()["data_complete"] is False
+
+
+def test_import_save_failure_rolls_back(client, db_session, stub_history, monkeypatch, tmp_path):
+    """落盘段异常回滚(计划14 终审):删行+清目录,不留空壳记录,响应 400 带原因。"""
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h)
+
+    def _boom(record_id, files):
+        solopi_perf.record_perf_dir(record_id).mkdir(parents=True, exist_ok=True)  # 模拟半落盘
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(solopi_perf, "save_imported_csvs", _boom)
+    r = client.post(f"/api/projects/{pid}/perf-records/import",
+                    json={"serial": "dev1", "history_id": "performance-abc"}, headers=h)
+    assert r.status_code == 400
+    assert "导入落盘失败" in r.json()["detail"]
+    assert db_session.query(PerfRecord).count() == 0  # 无空壳行
+    assert list((tmp_path / "perf_records").glob("*")) == []  # 半落盘目录已清
