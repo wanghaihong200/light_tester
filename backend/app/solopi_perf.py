@@ -49,3 +49,19 @@ def register_run_perf_record(run_id: int) -> None:
             started_at=run.started_at, finished_at=run.finished_at,
         ))
         db.commit()
+
+
+def save_imported_csvs(record_id: int, files: list[dict]) -> int:
+    """把 perf-history-get 的 files[].preview 逐文件写进 import 落盘目录(utf-8;
+    read_perf_csvs 读侧 utf-8-sig→gbk 兼容)。preview 为空/缺省的文件跳过,返回落盘数。"""
+    out_dir = record_perf_dir(record_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for f in files or []:
+        preview = f.get("preview") or ""
+        name = str(f.get("fileName") or "").replace("/", "_").replace("\\", "_")
+        if not preview or not name:
+            continue
+        (out_dir / name).write_text(preview, encoding="utf-8")
+        n += 1
+    return n

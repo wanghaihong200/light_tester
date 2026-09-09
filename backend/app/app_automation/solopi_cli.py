@@ -161,3 +161,15 @@ def perf_analyze(input_dir: str) -> dict:
 def startup_time(serial: str, package: str, mode: str = "cold", iterations: int = 3) -> dict:
     return _call(["startup-time", "--target-package", package, "--mode", mode,
                   "--iterations", str(iterations)], serial=serial, timeout=600)
+
+
+def perf_history_list(serial: str, limit: int = 50) -> dict:
+    """设备端性能历史摘要(id/startTime/endTime/fileCount/sizeBytes/metrics)。
+    limit 合法域 1..500(CLI 侧再校验);载荷字段见研究文档第 3 节。"""
+    return _call(["perf-history-list", "--limit", str(limit)], serial=serial)
+
+
+def perf_history_get(serial: str, history_id: str) -> dict:
+    """单条历史详情:summary + files[](fileName/relativePath/preview…)。
+    preview 单文件 64KB/单次合计 512KB 封顶,filesTruncated=True 即截断(ADR-0010)。"""
+    return _call(["perf-history-get", "--id", history_id], serial=serial)

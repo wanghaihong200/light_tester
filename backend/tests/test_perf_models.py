@@ -98,3 +98,16 @@ def test_executor_source_has_hooks():
     from app.app_automation import executor
     src = inspect.getsource(executor)
     assert src.count("register_run_perf_record(") >= 2  # 成功终态 + env 失败两处
+
+
+def test_save_imported_csvs_writes_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(solopi_perf, "record_perf_dir", lambda rid: tmp_path / str(rid))
+    files = [
+        {"fileName": "CPU_x_abc_0_0.csv", "preview": "ts,value\n0,1\n1,2\n"},
+        {"fileName": "FPS.csv", "preview": ""},  # 空 preview 跳过
+    ]
+    n = solopi_perf.save_imported_csvs(7, files)
+    assert n == 1
+    saved = tmp_path / "7" / "CPU_x_abc_0_0.csv"
+    assert saved.read_text(encoding="utf-8").startswith("ts,value")
+    assert solopi_perf.has_valid_perf_csv(tmp_path / "7") is True

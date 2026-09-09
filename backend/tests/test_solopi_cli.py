@@ -223,3 +223,34 @@ def test_rc2_non_json_stdout_falls_back_to_tail(cli_ok, monkeypatch):
     with pytest.raises(solopi_cli.CliError) as ei:
         solopi_cli.list_cases("s1")
     assert "device not ready" in ei.value.message  # 无 error 字段 → 保留尾部截取
+
+
+# ── 计划 14 Task 2:性能历史 CLI 薄封装(brief 稿的 _completed 为占位名,
+#    以本文件既有 _FakeCompleted + cli_ok fixture 模式对齐)──
+
+def test_perf_history_list_builds_argv(cli_ok, monkeypatch):
+    captured = {}
+
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
+        captured["argv"] = argv
+        return _FakeCompleted(stdout=json.dumps({"items": []}).encode("utf-8"))
+
+    monkeypatch.setattr(solopi_cli.subprocess, "run", fake_run)
+    solopi_cli.perf_history_list("dev1", limit=50)
+    argv = captured["argv"]
+    assert "perf-history-list" in argv and "--limit" in argv
+    assert argv[argv.index("--limit") + 1] == "50"
+    assert "dev1" in argv  # --serial 全局项
+
+
+def test_perf_history_get_requires_id(cli_ok, monkeypatch):
+    captured = {}
+
+    def fake_run(argv, capture_output=None, timeout=None, **kw):
+        captured["argv"] = argv
+        return _FakeCompleted(stdout=json.dumps({"success": True}).encode("utf-8"))
+
+    monkeypatch.setattr(solopi_cli.subprocess, "run", fake_run)
+    solopi_cli.perf_history_get("dev1", "performance-abc123")
+    argv = captured["argv"]
+    assert "perf-history-get" in argv and argv[argv.index("--id") + 1] == "performance-abc123"
