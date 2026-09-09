@@ -46,6 +46,7 @@ async function reload() {
   loading.value = true
   try {
     instances.value = await listMockInstances(projectId.value)
+    if (disposed) return // 卸载后在途 resolve:不回贴选中、不触发轮询求值
     // 轮询刷新后按 id 回贴选中行,详情区跟随最新状态
     if (selected.value) {
       selected.value = instances.value.find((i) => i.id === selected.value!.id) ?? null
@@ -59,11 +60,14 @@ async function reload() {
 }
 onMounted(reload)
 
-// 5s 轮询:仅当存在 starting/running 实例时开启;全静止或卸载即清定时器
+// 5s 轮询:仅当存在 starting/running 实例时开启;全静止或卸载即清定时器。
+// disposed 守卫:卸载时刻在途的 reload resolve 后不得再 setInterval(否则定时器永久泄漏)
 const POLL_MS = 5000
 let timer: ReturnType<typeof setInterval> | null = null
+let disposed = false
 
 function syncPolling() {
+  if (disposed) return
   const active = instances.value.some((i) => i.status === 'starting' || i.status === 'running')
   if (active && timer === null) timer = setInterval(reload, POLL_MS)
   else if (!active && timer !== null) {
@@ -72,6 +76,7 @@ function syncPolling() {
   }
 }
 onBeforeUnmount(() => {
+  disposed = true
   if (timer !== null) clearInterval(timer)
   timer = null
 })
@@ -130,8 +135,10 @@ function statusTextOf(s: MockInstanceStatus): string { return STATUS_TEXT[s] ?? 
           <span class="pane-title">Mock 实例</span>
           <el-button type="primary" size="small" @click="openCreate">新建实例</el-button>
         </div>
+        <!-- row-key 必须:无 key 时 EP 的 setData 按对象引用判 currentRow 存活,reload 换新引用
+             会把 currentRow 置 null 并 emit current-change(null),选中详情随 5s 轮询自毁 -->
         <el-table
-          v-loading="loading" :data="instances" border highlight-current-row
+          v-loading="loading" :data="instances" row-key="id" border highlight-current-row
           @current-change="onSelect"
         >
           <el-table-column prop="name" label="名称" min-width="110" />

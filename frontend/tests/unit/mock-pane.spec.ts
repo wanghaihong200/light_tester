@@ -159,6 +159,26 @@ describe('MockPane', () => {
     w.unmount()
   })
 
+  it('选中行在 reload(同 id 全新对象引用)后详情区保持,row-key 按 id 恢复 currentRow', async () => {
+    const w = mountPane()
+    await flushPromises()
+    w.findComponent({ name: 'ElTable' }).vm.$emit('current-change', RUNNING)
+    await flushPromises()
+    expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(true)
+    // 模拟轮询/操作刷新:同 id 全新对象引用整体替换数组(评审指出的引用失效场景)
+    api.listMockInstances.mockResolvedValue([
+      mkInstance({ id: 1, name: '订单Mock', port: 18081, desired: 'running', status: 'running' }),
+      mkInstance({ id: 2, name: '支付Mock', port: 18082 }),
+    ])
+    await rowBtn(w, 0, '停止').trigger('click')
+    await flushPromises()
+    // 修复前:旧引用不在新数组 → EP 将 currentRow 置 null 并 emit current-change(null) → 详情坍缩
+    expect(w.find('[data-test="rules-placeholder"]').exists()).toBe(true)
+    expect(w.text()).toContain('订单Mock')
+    expect(w.text()).not.toContain('选择左侧实例查看规则与命中')
+    w.unmount()
+  })
+
   it('轮询:存在 running 实例时每 5s 刷新,卸载清理;全部 stopped 不启动定时器', async () => {
     vi.useFakeTimers()
     let w = mountPane()
@@ -176,6 +196,23 @@ describe('MockPane', () => {
     await vi.advanceTimersByTimeAsync(15000)
     expect(api.listMockInstances).toHaveBeenCalledTimes(3) // 无 starting/running 不轮询,仅挂载那 1 次
     w.unmount()
+  })
+
+  it('卸载时在途 reload resolve 后不复活轮询定时器(disposed 守卫)', async () => {
+    vi.useFakeTimers()
+    let resolveList: (v: MockInstance[]) => void = () => {}
+    api.listMockInstances.mockImplementation(
+      () => new Promise((res) => { resolveList = res as (v: MockInstance[]) => void }),
+    )
+    const w = mountPane()
+    await vi.advanceTimersByTimeAsync(0) // onMounted 的 reload 已发出但仍挂起
+    expect(api.listMockInstances).toHaveBeenCalledTimes(1)
+    w.unmount() // 此刻卸载:timer 尚未建立,disposed 置位
+    resolveList([RUNNING]) // 在途请求卸载后才 resolve
+    await vi.advanceTimersByTimeAsync(0) // 让 resolve 后的续段(syncPolling)执行
+    await vi.advanceTimersByTimeAsync(15000)
+    // 修复前:syncPolling 见 running → 重新 setInterval → 这里会被再调,永久泄漏
+    expect(api.listMockInstances).toHaveBeenCalledTimes(1)
   })
 })
 
