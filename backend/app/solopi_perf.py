@@ -58,9 +58,13 @@ def save_imported_csvs(record_id: int, files: list[dict]) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     n = 0
     for f in files or []:
+        if not isinstance(f, dict):  # Task5 顺手硬化:CLI 载荷异常项直接跳过(防 AttributeError)
+            continue
         preview = f.get("preview") or ""
         name = str(f.get("fileName") or "").replace("/", "_").replace("\\", "_")
         if not preview or not name:
+            continue
+        if name in ("", ".", ".."):  # Task5 顺手硬化:归一后仍可能剩路径穿越名,拒落盘
             continue
         (out_dir / name).write_text(preview, encoding="utf-8")
         n += 1

@@ -111,3 +111,14 @@ def test_save_imported_csvs_writes_files(tmp_path, monkeypatch):
     saved = tmp_path / "7" / "CPU_x_abc_0_0.csv"
     assert saved.read_text(encoding="utf-8").startswith("ts,value")
     assert solopi_perf.has_valid_perf_csv(tmp_path / "7") is True
+
+
+def test_save_imported_csvs_skips_non_dict_and_sanitizes_name(tmp_path, monkeypatch):
+    """计划 14 Task 5 顺手硬化(Task2 deferred minor):非 dict 项跳过(不抛
+    AttributeError);文件名路径分隔符归一,a/b.csv 落盘为 a_b.csv 而非建子目录。"""
+    monkeypatch.setattr(solopi_perf, "record_perf_dir", lambda rid: tmp_path / str(rid))
+    files = [{"fileName": "a/b.csv", "preview": "x\n"}, "not-a-dict", None]
+    n = solopi_perf.save_imported_csvs(8, files)
+    assert n == 1
+    assert (tmp_path / "8" / "a_b.csv").read_text(encoding="utf-8") == "x\n"
+    assert not (tmp_path / "8" / "a").exists() and not (tmp_path / "8" / "b.csv").exists()

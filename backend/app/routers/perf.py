@@ -2,13 +2,15 @@
 """性能测试域 API(计划 14 / ADR-0010):性能记录 CRUD + 统一 series。
 数据消费统一走 record_data_dir → read_perf_csvs;run 来源不复制数据(读执行目录)。"""
 import shutil
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app import solopi_perf  # 顶层模块(brief 稿误写 app.app_automation.solopi_perf)
-from app.app_automation import perf_csv
+from app.app_automation import perf_csv, solopi_cli
+from app.app_automation.solopi_cli import CliError
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import PerfRecord, User
@@ -108,3 +110,78 @@ def perf_trend(project_id: int, script_id: int | None = None, device_serial: str
                        for c in cols if c.get("index") is not None},
         })
     return {"groups": list(groups.values())}
+
+
+# ---- 计划 14 Task 5:设备历史发现 + 手动导入 ----
+
+class ImportBody(BaseModel):
+    serial: str
+    history_id: str
+    name: str | None = None
+
+
+def _ms_to_dt(ms) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc) if ms else None
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/app-devices/{serial}/perf-history")
+def device_perf_history(serial: str, limit: int = Query(50, ge=1, le=500),
+                        db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    """设备端 SoloPi 性能历史列表;已导入的条目回填平台记录 id(前端防重复导入)。
+    授权:登录即可读——对齐 app_scripts.py 的 GET /app-devices/{serial}/perf-items
+    (app_device_perf_items)既有口径(设备无项目归属,不挂项目闸;brief 稿假设
+    editor,与仓库 /app-devices 系惯例不符,以仓库惯例为准)。"""
+    try:
+        payload = solopi_cli.perf_history_list(serial, limit=limit)
+    except CliError as e:
+        raise HTTPException(400, f"拉取设备历史失败: {e.message}")
+    imported = {r.source_ref: r.id for r in db.query(PerfRecord).filter(
+        PerfRecord.source == "import", PerfRecord.source_ref.isnot(None)).all()}
+    items = []
+    for it in payload.get("items") or []:
+        items.append({"id": it.get("id"), "start_time": it.get("startTime"),
+                      "end_time": it.get("endTime"), "file_count": it.get("fileCount"),
+                      "size_bytes": it.get("sizeBytes"), "metrics": it.get("metrics") or [],
+                      "imported_record_id": imported.get(str(it.get("id")))})
+    return {"items": items}
+
+
+@router.post("/projects/{project_id}/perf-records/import", response_model=PerfRecordOut, status_code=201)
+def import_history(project_id: int, body: ImportBody, db: Session = Depends(get_db),
+                   current: User = Depends(get_current_user)):
+    """把设备端一条历史导入为 import 来源记录:CLI 详情→preview 落盘→perf-analyze 统计。
+    重复导入(同 source_ref)→409;CLI 失败→400;截断(filesTruncated)→data_complete=False。"""
+    ensure_project_access(db, current, project_id, "editor")
+    dup = db.query(PerfRecord).filter(PerfRecord.source == "import",
+                                      PerfRecord.source_ref == body.history_id).first()
+    if dup:
+        raise HTTPException(409, f"该设备历史已导入(perf 记录 #{dup.id})")
+    try:
+        detail = solopi_cli.perf_history_get(body.serial, body.history_id)
+    except CliError as e:
+        raise HTTPException(400, f"拉取历史详情失败: {e.message}")
+    files = detail.get("files") or []
+    rec = PerfRecord(project_id=project_id, source="import",
+                     name=body.name or f"设备导入 {body.history_id[:20]}",
+                     device_serial=body.serial, perf_items=detail.get("metrics") or [],
+                     source_ref=body.history_id,
+                     data_complete=not bool(detail.get("filesTruncated")),
+                     started_at=_ms_to_dt(detail.get("startTime")),
+                     finished_at=_ms_to_dt(detail.get("endTime")))
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    saved = solopi_perf.save_imported_csvs(rec.id, files)
+    if saved == 0:  # 无可落盘内容:回滚删除刚建的行,不留空壳记录
+        db.delete(rec)
+        db.commit()
+        raise HTTPException(400, "历史详情未含可落盘的 CSV 内容(preview 为空)")
+    try:
+        rec.perf_summary = solopi_cli.perf_analyze(str(solopi_perf.record_perf_dir(rec.id)))
+    except CliError as e:
+        rec.perf_summary = {"error": f"统计分析失败: {e.message}"}
+    db.commit()
+    return rec

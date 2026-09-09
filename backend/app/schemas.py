@@ -222,6 +222,7 @@ class PerfRecordOut(BaseModel):
     id: int
     project_id: int
     source: str
+    source_ref: str | None = None  # import=设备端历史id(计划14 Task5 导入契约)
     name: str
     app_run_id: int | None = None
     script_id: int | None = None
