@@ -43,8 +43,9 @@ async function refreshCases(manual = false) {
   syncing.value = true
   try {
     cases.value = await listDeviceCases(props.projectId, serial.value)
-  } catch {
-    if (manual) ElMessage.error('同步失败') // 手动分支的具体文案 Task 2 完善;本任务先立骨架
+    if (manual && !cases.value.length) ElMessage.info('未在设备上发现已导出的用例')
+  } catch (e: any) {
+    if (manual) ElMessage.error(e?.message ?? '同步失败') // 透出后端原因(设备离线等)
   } finally {
     syncing.value = false
   }
@@ -91,15 +92,19 @@ async function onFileChange(e: Event) {
              @update:model-value="emit('update:visible', $event)">
     <el-tabs v-model="tab">
       <el-tab-pane label="设备拉取" name="device">
-        <el-select v-model="serial" placeholder="选择设备" style="width: 100%">
-          <el-option v-for="d in devices" :key="d.serial" :value="d.serial"
-                     :label="`${d.serial}(${d.state})`" />
-        </el-select>
+        <div style="display: flex; gap: 8px">
+          <el-select v-model="serial" placeholder="选择设备" style="flex: 1">
+            <el-option v-for="d in devices" :key="d.serial" :value="d.serial"
+                       :label="`${d.serial}(${d.state})`" />
+          </el-select>
+          <el-button :loading="syncing" :disabled="!serial" @click="refreshCases(true)">同步</el-button>
+        </div>
         <el-select v-model="sel" value-key="source" placeholder="选择设备上的用例文件"
                    style="width: 100%; margin-top: 8px">
           <el-option v-for="c in cases" :key="`${c.source}:${c.file_name}`" :value="c"
                      :label="caseLabel(c)" />
         </el-select>
+        <div class="sync-hint">列表来自手机已导出的用例;SoloPi App 内录制需先在手机上点"导出用例",平台推送(harness-import)目录的用例同样可见。</div>
       </el-tab-pane>
       <el-tab-pane label="文件上传" name="upload">
         <input type="file" accept=".json,application/json" @change="onFileChange" />
@@ -114,3 +119,7 @@ async function onFileChange(e: Event) {
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.sync-hint { margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
+</style>
