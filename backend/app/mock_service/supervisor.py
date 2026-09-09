@@ -166,7 +166,7 @@ async def _probe_loop() -> None:
     while True:
         await asyncio.sleep(PROBE_INTERVAL_SECONDS)
         try:
-            _probe_once()
+            await asyncio.to_thread(_probe_once)  # 同步探测移出事件循环:N 实例串行 httpx+commit 不卡平台
         except Exception:
             continue  # 探活绝不炸平台
 
