@@ -1,0 +1,104 @@
+"""规则/命中 API:CRUD/校验/reorder/hits 过滤与清空/权限(计划 13 T7)。
+
+对 brief 样例的仓内现状对齐(非行为偏离):
+- 登录响应字段是 token 不是 access_token(同 tests/test_mock_instances_api.py 已对齐过的笔误);
+- mock_instances/mocks 相关表已在 conftest._TABLES,无需本文件再加 TRUNCATE 清理。
+"""
+from app.models import MockHit, MockInstance, MockRule, Project
+
+
+def _login(client, username):
+    r = client.post("/api/auth/login", json={"username": username, "password": "pw-" + username})
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def test_rule_crud_and_validation(client, db_session, make_user):
+    admin = make_user(db_session, "adm7", is_admin=True)
+    p = Project(name="p-rule-1")
+    db_session.add(p)
+    db_session.commit()
+    inst = MockInstance(project_id=p.id, name="s", port=19051, token="t" * 32)
+    db_session.add(inst)
+    db_session.commit()
+    h = _login(client, "adm7")
+
+    r = client.post(f"/api/mock-instances/{inst.id}/rules",
+                    json={"method": "get", "path_template": "/users/{id}",
+                          "conditions": [{"scope": "query", "key": "v", "match": "eq", "value": "2"}],
+                          "response_status": 200, "response_body": "ok"}, headers=h)
+    assert r.status_code == 201
+    assert r.json()["method"] == "GET"          # 入参小写归一为大写
+    rid = r.json()["id"]
+
+    bad = client.post(f"/api/mock-instances/{inst.id}/rules",
+                      json={"method": "PURGE", "path_template": "/x"}, headers=h)
+    assert bad.status_code == 400
+    bad2 = client.post(f"/api/mock-instances/{inst.id}/rules",
+                       json={"method": "GET", "path_template": "no-slash"}, headers=h)
+    assert bad2.status_code == 400
+
+    up = client.put(f"/api/mock-rules/{rid}", json={"response_status": 201}, headers=h)
+    assert up.status_code == 200 and up.json()["response_status"] == 201
+    assert client.delete(f"/api/mock-rules/{rid}", headers=h).status_code == 204
+    got = client.get(f"/api/mock-instances/{inst.id}/rules", headers=h)
+    assert all(rule["id"] != rid for rule in got.json())
+
+
+def test_rule_reorder(client, db_session, make_user):
+    admin = make_user(db_session, "adm8", is_admin=True)
+    p = Project(name="p-rule-2")
+    db_session.add(p)
+    db_session.commit()
+    inst = MockInstance(project_id=p.id, name="s", port=19052, token="t" * 32)
+    db_session.add(inst)
+    db_session.commit()
+    ids = []
+    for i in range(3):
+        rule = MockRule(instance_id=inst.id, method="GET", path_template=f"/r{i}", sort_order=i)
+        db_session.add(rule)
+        db_session.commit()
+        ids.append(rule.id)
+    h = _login(client, "adm8")
+    r = client.put(f"/api/mock-instances/{inst.id}/rules/reorder",
+                   json={"rule_ids": [ids[2], ids[0], ids[1]]}, headers=h)
+    assert r.status_code == 200
+    ordered = client.get(f"/api/mock-instances/{inst.id}/rules", headers=h).json()
+    assert [x["id"] for x in ordered] == [ids[2], ids[0], ids[1]]
+    partial = client.put(f"/api/mock-instances/{inst.id}/rules/reorder",
+                         json={"rule_ids": [ids[0]]}, headers=h)
+    assert partial.status_code == 400
+
+
+def test_hits_list_filter_detail_clear(client, db_session, make_user):
+    admin = make_user(db_session, "adm9", is_admin=True)
+    viewer = make_user(db_session, "vw9")
+    from app.models import ProjectMember
+    p = Project(name="p-rule-3")
+    db_session.add(p)
+    db_session.commit()
+    inst = MockInstance(project_id=p.id, name="s", port=19053, token="t" * 32)
+    db_session.add(inst)
+    db_session.commit()
+    rule = MockRule(instance_id=inst.id, method="GET", path_template="/x")
+    db_session.add(rule)
+    db_session.commit()
+    for matched, status in [(True, 200), (False, 404), (False, 404)]:
+        db_session.add(MockHit(instance_id=inst.id, rule_id=rule.id if matched else None,
+                               method="GET", path="/x", request_headers={"a": "b"},
+                               request_body="raw", matched=matched, response_status=status))
+    db_session.commit()
+    ah, vh = _login(client, "adm9"), _login(client, "vw9")
+    db_session.add(ProjectMember(project_id=p.id, user_id=viewer.id, role="viewer"))
+    db_session.commit()
+
+    assert len(client.get(f"/api/mock-instances/{inst.id}/hits", headers=vh).json()) == 3  # viewer 可读
+    misses = client.get(f"/api/mock-instances/{inst.id}/hits?filter=unmatched", headers=ah).json()
+    assert len(misses) == 2 and all(x["matched"] is False for x in misses)
+    detail = client.get(f"/api/mock-hits/{misses[0]['id']}", headers=vh)
+    assert detail.status_code == 200 and detail.json()["request_body"] == "raw"
+    assert client.delete(f"/api/mock-instances/{inst.id}/hits", headers=ah).status_code == 204
+    assert client.get(f"/api/mock-instances/{inst.id}/hits", headers=ah).json() == []
+    # editor 才能清
+    db_session.add(MockHit(instance_id=inst.id, method="GET", path="/x", matched=False))
+    db_session.commit()
+    assert client.delete(f"/api/mock-instances/{inst.id}/hits", headers=vh).status_code == 403
