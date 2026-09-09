@@ -1,6 +1,9 @@
 <script setup lang="ts">
 // 分发批量对比(计划12入口保留;计划14 Task12 换芯):
-// 性能汇总列 JSON 折叠 → PerfSummaryTable;表格下新增跨 run 曲线叠加(item 前缀设备号,单图对比)。
+// 性能汇总列 JSON 折叠 → PerfSummaryTable;表格下叠加各 run 的曲线:series 前缀设备号后
+// 交 PerfCharts 多子图渲染(每个 item 一张子图,同 item 跨设备各占一图)。
+// 与性能测试页 PerfRecordPane 的 PerfCompareDialog 语义不同:本弹窗对比同一 batch 的
+// 多设备 runs(执行历史口径),后者对比跨 run/import 的 perf 记录(性能记录口径)。
 import { onMounted, ref } from 'vue'
 import { getAppComparison, getAppRunPerfSeries } from '../../api/appAutomation'
 import type { AppPerfSeries, AppRun } from '../../types'

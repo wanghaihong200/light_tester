@@ -13,13 +13,14 @@ const mountTable = (props: Record<string, unknown>) =>
   mount(PerfSummaryTable, { props, global: { plugins: [ElementPlus] } })
 
 describe('PerfSummaryTable', () => {
-  it('columns 渲染统计行;缺失键显 —', async () => {
-    // 首行全键(验证 toFixed(2)),次行缺 min/median(验证 null → '—')
+  it('columns 渲染统计行;浮点列两位小数,样本数整数直显,缺失键显 —', async () => {
+    // CPU 行全键(浮点列 toFixed(2)、样本数整数直显);FPS 行缺 min/median;Mem 行缺 sampleCount
     const w = mountTable({
       summary: {
         columns: [
           { index: 'CPU', sampleCount: 60, min: 1, max: 9, mean: 4.5, median: 4, p90: 8 },
-          { index: 'FPS', sampleCount: 60, max: 60, mean: 59.5, p90: 60 },
+          { index: 'FPS', sampleCount: 120, max: 58, mean: 57.5, p90: 58 },
+          { index: 'Mem', min: 1, max: 2 },
         ],
       },
     })
@@ -28,10 +29,16 @@ describe('PerfSummaryTable', () => {
       expect(w.text()).toContain('CPU')
     })
     const text = w.text()
-    expect(text).toContain('4.5') // toFixed(2) → "4.50",包含 4.5
+    expect(text).toContain('4.50') // toFixed(2) → "4.50"
+    expect(text).toContain('60') // 样本数整数直显,不掺两位小数(计划14 终审)
+    expect(text).not.toContain('60.00')
+    expect(text).toContain('120')
+    expect(text).not.toContain('120.00')
     expect(text).toContain('均值')
     expect(text).toContain('FPS')
     expect(text).toContain('—') // 缺失键 null 防御
+    const memRow = w.findAll('.el-table__row').find((r) => r.text().includes('Mem'))
+    expect(memRow?.text()).toContain('—') // Mem 行 sampleCount 缺失 → '—'
     w.unmount()
   })
 

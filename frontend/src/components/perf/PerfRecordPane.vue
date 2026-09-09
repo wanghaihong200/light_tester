@@ -98,9 +98,11 @@ async function onDelete(row: PerfRecord) {
 const SOURCE_TEXT: Record<PerfSource, string> = { run: '采集', import: '导入' }
 const sourceTextOf = (s: PerfSource): string => SOURCE_TEXT[s] ?? s
 
-// 极简转义:含逗号/引号/换行的单元格加引号,内部引号翻倍
+// 极简转义:含逗号/引号/换行的单元格加引号,内部引号翻倍;
+// 公式注入防御:以 = + - @ 开头的值前置 '(CSV 被 Excel 当公式执行的风险,计划14 终审)
 function csvCell(v: string): string {
-  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+  const s = /^[=+\-@]/.test(v) ? `'${v}` : v
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 function buildCsv(series: AppPerfSeries[]): string {

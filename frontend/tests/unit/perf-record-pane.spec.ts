@@ -286,11 +286,12 @@ describe('PerfRecordPane', () => {
       if (tag === 'a') el.click = click
       return el
     })
-    // 记录名含 Windows 非法字符 / : *(文件名取自行数据,故改列表)
+    // 记录名含 Windows 非法字符 / : *(文件名取自行数据,故改列表);
+    // 行值覆盖公式注入四类前缀 = + - @(计划14 终审)
     api.listPerfRecords.mockResolvedValue([mkRecord({ id: 9, name: 'CPU/采集:压力*1' })])
     api.getPerfRecordSeries.mockResolvedValue({
       record: mkRecord({ id: 9, name: 'CPU/采集:压力*1' }),
-      series: SERIES,
+      series: [{ item: 'CPU', columns: ['ts', 'total'], rows: [['0', '=1+1'], ['1', '+86-555'], ['2', '@cmd'], ['-3', '20']] }],
     })
     try {
       const w = mountPane()
@@ -308,6 +309,13 @@ describe('PerfRecordPane', () => {
         fr.readAsArrayBuffer(blob)
       })
       expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf])
+      // 公式注入防御:= + - @ 开头的单元格前置 '(负数同样被视为文本,可接受的代价)
+      const csvText = await new Promise<string>((resolve) => {
+        const fr = new FileReader()
+        fr.onload = () => resolve(String(fr.result))
+        fr.readAsText(blob)
+      })
+      expect(csvText).toBe('# item: CPU\nts,total\n0,\'=1+1\n1,\'+86-555\n2,\'@cmd\n\'-3,20')
       w.unmount()
     } finally {
       Object.defineProperty(URL, 'createObjectURL', { value: origCreate, configurable: true, writable: true })
