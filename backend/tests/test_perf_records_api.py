@@ -175,20 +175,36 @@ def test_compare_rejects_single(client, db_session):
     assert resp.status_code == 400
 
 
+def _real_summary(mean: float) -> dict:
+    """CLI perf-analyze 真实结构(计划14 冒烟修复):{files:[{path, columns:[…]}]},
+    文件名模式 <指标名>_<采集项>_<hex16>_<ts>_<ts>.csv,kind=skipped 列无统计。"""
+    return {"success": True, "files": [{
+        "path": f"CPU温度_Temperature_6f1c725f5fab3cd4_1789045016565_1789045048339.csv",
+        "columns": [
+            {"name": "CPU温度(度)", "index": 1, "kind": "numeric",
+             "mean": mean, "p90": mean + 5, "min": mean - 1, "max": mean + 8,
+             "median": mean, "sampleCount": 56},
+            {"name": "extra", "index": 2, "kind": "skipped",
+             "reason": "contains_non_numeric_values"},
+        ],
+    }]}
+
+
 def test_trend_groups_by_script_and_device(client, db_session):
     pid_h = _admin_headers(client, db_session)
     pid = _mk_project(client, pid_h)
     s = AppScript(project_id=pid, name="场景A", case_json=_SCRIPT_CASE)
     db_session.add(s); db_session.commit(); db_session.refresh(s)  # script_id 真 FK,先建脚本
-    summary = {"columns": [{"index": "CPU", "mean": 12.5, "p90": 20.0}]}
+    means = [12.5, 15.0, 20.0]
     for i, dev in enumerate(["dev1", "dev1", "dev2"]):
         run = AppRun(project_id=pid, script_id=s.id, script_name="场景A", device_serial=dev,
-                     status="passed", perf_summary=summary,
+                     status="passed", perf_summary=_real_summary(means[i]),
                      started_at=datetime(2026, 9, 1, 10, i),
                      finished_at=datetime(2026, 9, 1, 10, 10 + i))
         db_session.add(run); db_session.commit(); db_session.refresh(run)
         _mk_record(db_session, project_id=pid, source="run", app_run_id=run.id, source_ref=None,
-                   script_id=s.id, script_name="场景A", device_serial=dev, perf_summary=summary,
+                   script_id=s.id, script_name="场景A", device_serial=dev,
+                   perf_summary=_real_summary(means[i]),
                    finished_at=run.finished_at)
     _mk_record(db_session, project_id=pid, source="import", source_ref="performance-x")  # import 不参与
     body = client.get(f"/api/projects/{pid}/perf-trend?script_id={s.id}",
@@ -196,4 +212,10 @@ def test_trend_groups_by_script_and_device(client, db_session):
     assert len(body["groups"]) == 2  # dev1 一组、dev2 一组
     g = next(g for g in body["groups"] if g["device_serial"] == "dev1")
     assert len(g["points"]) == 2 and g["points"][0]["finished_at"] <= g["points"][1]["finished_at"]
-    assert g["points"][0]["series"]["CPU"]["mean"] == 12.5
+    # 趋势键 = fileKey(文件 stem 第二段=采集项)::列名,与前端 perfOption.ts fileKeyOf 同算法;
+    # kind=skipped 列不产键
+    key = "Temperature::CPU温度(度)"
+    assert g["points"][0]["series"] == {key: {"mean": 12.5, "p90": 17.5}}
+    # 同 fileKey 同列名跨 run 聚合到同组同键(键跨 run 稳定,趋势才能连线)
+    assert set(g["points"][1]["series"]) == {key}
+    assert g["points"][1]["series"][key]["mean"] == 15.0

@@ -58,9 +58,11 @@ _HISTORY_GET = {
 
 @pytest.fixture
 def stub_history(monkeypatch, tmp_path):
-    """CLI 全 stub:历史列表/详情、perf-analyze(确定性统计)、落盘目录(→ tmp_path)。"""
+    """CLI 全 stub:历史列表/详情、perf-analyze(确定性统计)、落盘目录(→ tmp_path)。
+    历史列表顶层键=records(CLI 真实返回,计划14 冒烟修复;items 为旧桩兼容,见
+    test_history_list_accepts_legacy_items_key)。"""
     monkeypatch.setattr(solopi_cli, "perf_history_list",
-                        lambda serial, limit=50: {"items": [{
+                        lambda serial, limit=50: {"records": [{
                             "id": "performance-abc", "startTime": 1725868800000,
                             "endTime": 1725868860000, "fileCount": 2, "sizeBytes": 1234,
                             "metrics": ["CPU", "FPS"]}]})
@@ -126,6 +128,20 @@ def test_import_truncated_marks_incomplete(client, db_session, stub_history, mon
                     json={"serial": "dev1", "history_id": "performance-abc"}, headers=h)
     assert r.status_code == 201, r.text
     assert r.json()["data_complete"] is False
+
+
+def test_history_list_accepts_legacy_items_key(client, db_session, stub_history, monkeypatch):
+    """旧桩/旧 CLI 顶层 items 键兼容:records 为主键,items 兜底(计划14 冒烟修复)。"""
+    monkeypatch.setattr(solopi_cli, "perf_history_list",
+                        lambda serial, limit=50: {"items": [{
+                            "id": "performance-legacy", "startTime": 1725868800000,
+                            "endTime": 1725868860000, "fileCount": 3, "sizeBytes": 456,
+                            "metrics": ["FPS"]}]})
+    h = _admin_headers(client, db_session)
+    _mk_project(client, h)
+    body = client.get("/api/app-devices/dev1/perf-history?limit=50", headers=h).json()
+    assert body["items"][0]["id"] == "performance-legacy"
+    assert body["items"][0]["file_count"] == 3 and body["items"][0]["metrics"] == ["FPS"]
 
 
 def test_import_save_failure_rolls_back(client, db_session, stub_history, monkeypatch, tmp_path):

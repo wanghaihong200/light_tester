@@ -3,6 +3,7 @@
 数据消费统一走 record_data_dir → read_perf_csvs;run 来源不复制数据(读执行目录)。"""
 import shutil
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -18,6 +19,31 @@ from app.permissions import ensure_project_access
 from app.schemas import PerfRecordOut
 
 router = APIRouter(prefix="/api", tags=["perf"])
+
+
+def _file_key(stem: str) -> str:
+    """文件 stem → 稳定大类 key(采集项段)。SoloPi 拆文件名模式
+    <指标名>_<采集项>_<hex16>_<ts>_<ts>.csv,取第二段(如 Temperature/CPU/Network);
+    段数<2 退第一段;空段用全 stem。与前端 perfOption.ts 的 fileKeyOf 同算法
+    (两端注释互指,改动必须同步):趋势聚合键跨 run 稳定正是趋势的意义。"""
+    parts = stem.split("_")
+    key = parts[1] if len(parts) > 1 else parts[0]
+    return key or stem
+
+
+def _trend_series(summary: dict | None) -> dict[str, dict]:
+    """perf_summary → {趋势键: {mean, p90}}(null 安全)。
+    CLI perf-analyze 真实结构={files:[{path, columns:[{name, kind, mean, p90, …}]}]},
+    遍历 files,每 kind=numeric 列产出键=<fileKeyOf(stem)>::<列名>(计划14 冒烟修复;
+    此前按顶层 {columns:[…]} 解析 → 趋势恒空)。"""
+    out: dict[str, dict] = {}
+    for f in (summary or {}).get("files") or []:
+        stem = Path(str(f.get("path") or "")).stem
+        for c in f.get("columns") or []:
+            if c.get("kind") != "numeric" or not c.get("name"):
+                continue
+            out[f"{_file_key(stem)}::{c['name']}"] = {"mean": c.get("mean"), "p90": c.get("p90")}
+    return out
 
 
 def _get_record(db: Session, record_id: int, current: User, min_role: str) -> PerfRecord:
@@ -103,11 +129,9 @@ def perf_trend(project_id: int, script_id: int | None = None, device_serial: str
         key = (r.script_id, r.device_serial)
         g = groups.setdefault(key, {"script_id": r.script_id, "script_name": r.script_name,
                                     "device_serial": r.device_serial, "points": []})
-        cols = ((r.perf_summary or {}).get("columns")) or []
         g["points"].append({
             "record_id": r.id, "finished_at": r.finished_at.isoformat(),
-            "series": {str(c.get("index")): {"mean": c.get("mean"), "p90": c.get("p90")}
-                       for c in cols if c.get("index") is not None},
+            "series": _trend_series(r.perf_summary),
         })
     return {"groups": list(groups.values())}
 
@@ -143,7 +167,9 @@ def device_perf_history(serial: str, limit: int = Query(50, ge=1, le=500),
     imported = {r.source_ref: r.id for r in db.query(PerfRecord).filter(
         PerfRecord.source == "import", PerfRecord.source_ref.isnot(None)).all()}
     items = []
-    for it in payload.get("items") or []:
+    # CLI perf-history-list 真实返回顶层 records(计划14 冒烟修复;此前取 items → 永远空),
+    # items 兜底兼容旧桩/旧 CLI。
+    for it in payload.get("records") or payload.get("items") or []:
         items.append({"id": it.get("id"), "start_time": it.get("startTime"),
                       "end_time": it.get("endTime"), "file_count": it.get("fileCount"),
                       "size_bytes": it.get("sizeBytes"), "metrics": it.get("metrics") or [],
