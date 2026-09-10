@@ -9,7 +9,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { DataZoomComponent, GridComponent, LegendComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { buildPerfOptions, type PerfChartOption, type PerfSummaryColumn } from './perfOption'
+import { buildPerfOptions, normalizePerfSummary, type PerfChartOption, type PerfSummaryColumn } from './perfOption'
 import { comparePerfRecords } from '../../api/perf'
 import type { AppPerfSeries, PerfRecord } from '../../types'
 
@@ -89,10 +89,14 @@ onUnmounted(() => {
 })
 
 // ── 统计对比表:行=各记录 summary columns index 并集,列=各记录名(mean / p90 并列)──
+// normalizePerfSummary 幂等:标准形透传,CLI perf-analyze 真实 {files:[…]} 归一(计划14 冒烟修复)
+const normCols = (r: PerfRecord): PerfSummaryColumn[] =>
+  normalizePerfSummary(r.perf_summary)?.columns ?? []
+
 const statRows = computed(() => {
   const seen: string[] = []
   for (const r of records.value) {
-    for (const c of r.perf_summary?.columns ?? []) {
+    for (const c of normCols(r)) {
       if (!seen.includes(c.index)) seen.push(c.index)
     }
   }
@@ -102,7 +106,7 @@ const statRows = computed(() => {
 const fmtNum = (v: number | null | undefined) => (v == null ? '—' : Number(v).toFixed(2))
 
 function cellText(r: PerfRecord, index: string): string {
-  const col: PerfSummaryColumn | undefined = (r.perf_summary?.columns ?? []).find((c) => c.index === index)
+  const col: PerfSummaryColumn | undefined = normCols(r).find((c) => c.index === index)
   if (!col || (col.mean == null && col.p90 == null)) return '—'
   return `${fmtNum(col.mean)} / ${fmtNum(col.p90)}`
 }

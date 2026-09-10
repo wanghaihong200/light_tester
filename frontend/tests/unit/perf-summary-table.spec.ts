@@ -50,4 +50,60 @@ describe('PerfSummaryTable', () => {
     expect(w.text()).toContain('暂无统计')
     w.unmount()
   })
+
+  // ── 计划14 冒烟修复:CLI perf-analyze 真实结构 {files:[…]} 在表内先归一(修2)──
+  it('CLI files 结构 summary:表内 normalize,指标列显 fileKey · 列名 短形', async () => {
+    const w = mountTable({
+      summary: {
+        files: [{
+          path: 'CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789.csv',
+          columns: [
+            { name: 'CPU温度(度)', index: 1, kind: 'numeric', mean: 50.5, p90: 56.4, sampleCount: 56 },
+            { name: 'extra', index: 2, kind: 'skipped' },
+          ],
+        }],
+      },
+    })
+    await vi.waitFor(() => {
+      expect(w.text()).toContain('Temperature · CPU温度(度)') // 短形:<fileKey> · <列名>
+    })
+    expect(w.text()).toContain('50.50')
+    expect(w.text()).not.toContain('skipped') // 非数值列不进统计
+    // 全量完整键保留在行数据上(el-table 的 data 行对象 index 属性)
+    const data = w.findComponent({ name: 'ElTable' }).props('data') as { index: string }[]
+    expect(data[0].index).toBe('CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789::CPU温度(度)')
+    w.unmount()
+  })
+
+  // ── 计划14 冒烟修复(修5):行数 >12 折叠,≤12 平铺 ──
+  it('行数>12:套 el-collapse 默认收起,标题含列数;点标题展开见全表', async () => {
+    const cols = Array.from({ length: 15 }, (_, i) => ({ index: `M${i}`, mean: i }))
+    const w = mountTable({ summary: { columns: cols } })
+    await vi.waitFor(() => {
+      expect(w.find('[data-test="stat-collapse"]').exists()).toBe(true)
+    })
+    expect(w.text()).toContain('统计明细(15 列)')
+    const table = w.find('[data-test="stat-table"]')
+    expect(table.exists()).toBe(true)
+    expect(table.isVisible()).toBe(false) // 默认收起,抽屉不被统计表撑爆
+    await w.find('.el-collapse-item__header').trigger('click')
+    // 展开态以 collapse 自身状态断言(过渡清理在 jsdom 有宏任务抖动,isVisible 偶发滞后)
+    await vi.waitFor(() => {
+      expect(w.find('.el-collapse-item__header').attributes('aria-expanded')).toBe('true')
+    })
+    expect(w.find('.el-collapse-item').classes()).toContain('is-active')
+    expect(w.findAll('.el-table__row')).toHaveLength(15) // 展开见全表
+    w.unmount()
+  })
+
+  it('行数≤12:直接平铺不折叠(既有小样例场景不受影响)', async () => {
+    const cols = Array.from({ length: 12 }, (_, i) => ({ index: `M${i}`, mean: i }))
+    const w = mountTable({ summary: { columns: cols } })
+    await vi.waitFor(() => {
+      expect(w.find('[data-test="stat-table"]').exists()).toBe(true)
+    })
+    expect(w.find('[data-test="stat-collapse"]').exists()).toBe(false)
+    expect(w.find('[data-test="stat-table"]').isVisible()).toBe(true)
+    w.unmount()
+  })
 })

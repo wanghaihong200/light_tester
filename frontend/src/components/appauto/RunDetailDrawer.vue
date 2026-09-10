@@ -1,17 +1,20 @@
 <script setup lang="ts">
-import { onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getAppRun, getAppRunPerfSeries, subscribeAppRunEvents, forceFinishAppRun } from '../../api/appAutomation'
 import type { AppPerfSeries, AppRun } from '../../types'
 import PerfCharts from '../perf/PerfCharts.vue'
 import PerfSummaryTable from '../perf/PerfSummaryTable.vue'
 import StartupSummaryCard from '../perf/StartupSummaryCard.vue'
+// CLI perf-analyze 真实结构 {files:[…]} → 标准形(幂等;计划14 冒烟修复),曲线/统计表共用
+import { normalizePerfSummary, type PerfSummary } from '../perf/perfOption'
 
 const props = defineProps<{ visible: boolean; run: AppRun | null }>()
 const emit = defineEmits<{ (e: 'update:visible', v: boolean): void; (e: 'changed'): void }>()
 
 const current = ref<AppRun | null>(null)
 const series = ref<AppPerfSeries[]>([])
+const perfSummary = computed<PerfSummary>(() => normalizePerfSummary(current.value?.perf_summary))
 let closeFn: (() => void) | null = null
 const TERMINAL = ['passed', 'failed', 'cancelled']
 
@@ -72,9 +75,9 @@ async function forceFinish() {
         </div>
       </template>
       <h4>性能曲线</h4>
-      <PerfCharts :series="series" :summary="current.perf_summary" />
+      <PerfCharts :series="series" :summary="perfSummary" />
       <h4>性能汇总 / 启动耗时</h4>
-      <PerfSummaryTable :summary="current.perf_summary" />
+      <PerfSummaryTable :summary="perfSummary" />
       <StartupSummaryCard :summary="current.startup_summary" />
       <h4>端上步骤结果</h4>
       <pre v-if="current.results">{{ JSON.stringify(current.results, null, 2) }}</pre>

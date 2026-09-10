@@ -156,6 +156,33 @@ describe('PerfRecordPane', () => {
     w.unmount()
   })
 
+  it('详情抽屉 summary 归一化:CLI 真实结构 {files} → PerfCharts/统计表收标准形(冒烟修复)', async () => {
+    api.listPerfRecords.mockResolvedValue([mkRecord({
+      perf_summary: {
+        files: [{
+          path: 'CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789.csv',
+          columns: [
+            { name: 'CPU温度(度)', index: 1, kind: 'numeric', mean: 50.5, p90: 56.4 },
+            { name: 'extra', index: 2, kind: 'skipped' },
+          ],
+        }],
+      },
+    })])
+    const w = mountPane()
+    await flushPromises()
+    await rows(w)[0].trigger('click')
+    await flushPromises()
+    expect(w.findComponent(PerfCharts).props('summary')).toEqual({
+      columns: [{
+        index: 'CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789::CPU温度(度)',
+        name: 'CPU温度(度)', file: 'CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789',
+        fileKey: 'Temperature', mean: 50.5, p90: 56.4,
+      }],
+    })
+    expect(w.find('[data-test="stat-table"]').exists()).toBe(true)
+    w.unmount()
+  })
+
   it('删除:confirm 后 deletePerfRecord 并刷新;取消分支不删', async () => {
     const confirmSpy = vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue({} as never)
     const w = mountPane()

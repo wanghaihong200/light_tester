@@ -2,10 +2,12 @@
 // 计划14 Task9:APP 性能测试页——性能记录列表(来源筛选/多选/删除)+ 详情抽屉(曲线/汇总/CSV 下载)
 // 计划14 Task10/11:接入手动导入向导 PerfImportDialog + 跨记录对比/趋势对话框(导入成功后刷新)
 // projectId 经 ProjectView 的 :project-id 下发(同 WebAutoPane)
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deletePerfRecord, getPerfRecordSeries, listPerfRecords } from '../../api/perf'
 import type { AppPerfSeries, PerfRecord, PerfSource } from '../../types'
+// CLI perf-analyze 真实结构 {files:[…]} → 标准形(幂等;计划14 冒烟修复),曲线/统计表共用
+import { normalizePerfSummary } from './perfOption'
 import PerfCharts from './PerfCharts.vue'
 import PerfCompareDialog from './PerfCompareDialog.vue'
 import PerfImportDialog from './PerfImportDialog.vue'
@@ -60,6 +62,8 @@ function onImported(record: PerfRecord) {
 const drawerVisible = ref(false)
 const detailRecord = ref<PerfRecord | null>(null)
 const detailSeries = ref<AppPerfSeries[]>([])
+// perf_summary 喂 PerfCharts/PerfSummaryTable 前先归一(标准形透传,幂等)
+const detailSummary = computed(() => normalizePerfSummary(detailRecord.value?.perf_summary))
 
 async function openDetail(row: PerfRecord) {
   detailRecord.value = row
@@ -210,9 +214,9 @@ function fmtTime(iso: string | null): string {
           </span>
           <el-button size="small" data-test="download-csv" :disabled="!detailSeries.length" @click="downloadCsv">下载 CSV</el-button>
         </div>
-        <PerfCharts :series="detailSeries" :summary="detailRecord.perf_summary" />
+        <PerfCharts :series="detailSeries" :summary="detailSummary" />
         <h4 class="section-title">性能汇总</h4>
-        <PerfSummaryTable :summary="detailRecord.perf_summary" />
+        <PerfSummaryTable :summary="detailSummary" />
       </template>
     </el-drawer>
 

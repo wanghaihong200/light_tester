@@ -127,6 +127,29 @@ describe('PerfCompareDialog', () => {
     w.unmount()
   })
 
+  it('perf_summary 为 CLI 真实结构({files})时先归一再并列统计(冒烟修复)', async () => {
+    const REC_FILES = mkRecord({
+      id: 15, name: '真实结构', device_serial: 'dev9',
+      perf_summary: {
+        files: [{
+          path: 'CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789.csv',
+          columns: [
+            { name: 'CPU温度(度)', index: 1, kind: 'numeric', mean: 50.5, p90: 56.4 },
+            { name: 'extra', index: 2, kind: 'skipped' },
+          ],
+        }],
+      },
+    })
+    api.comparePerfRecords.mockResolvedValue({ records: [REC_FILES], series: { '15': [] } })
+    const w = mountCompare([15])
+    await flushPromises()
+    const trs = w.find('[data-test="compare-stat-table"]').findAll('.el-table__row')
+    expect(trs).toHaveLength(1) // skipped 列不并列
+    expect(trs[0].text()).toContain('CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789::CPU温度(度)')
+    expect(trs[0].text()).toContain('50.50 / 56.40')
+    w.unmount()
+  })
+
   it('全部记录无可用曲线:图表区空态,不 init', async () => {
     api.comparePerfRecords.mockResolvedValue({ records: [REC_A], series: { '11': [] } })
     const w = mountCompare([11])
