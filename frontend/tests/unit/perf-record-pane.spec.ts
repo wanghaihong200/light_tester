@@ -140,11 +140,17 @@ describe('PerfRecordPane', () => {
     w.unmount()
   })
 
-  it('行点击(非操作列)开详情抽屉:标题=记录名,拉 series 渲染曲线+汇总表,不渲染启动卡', async () => {
+  it('操作列「详情」按钮开详情抽屉:标题=记录名,拉 series 渲染曲线+汇总表;行点击不再开抽屉(冒烟反馈)', async () => {
     const w = mountPane()
     await flushPromises()
     expect(api.getPerfRecordSeries).not.toHaveBeenCalled()
+    // 行点击不再触发抽屉:只有点「详情」才出现弹窗
     await rows(w)[0].trigger('click')
+    await flushPromises()
+    expect(api.getPerfRecordSeries).not.toHaveBeenCalled()
+    // el-drawer 关闭态根节点仍在 DOM,以可见性判定「未开」
+    expect(w.find('[data-test="detail-drawer"]').isVisible()).toBe(false)
+    await rowBtn(w, 0, '详情').trigger('click')
     await flushPromises()
     expect(api.getPerfRecordSeries).toHaveBeenCalledWith(1)
     expect(w.find('[data-test="detail-drawer"]').exists()).toBe(true)
@@ -170,7 +176,7 @@ describe('PerfRecordPane', () => {
     })])
     const w = mountPane()
     await flushPromises()
-    await rows(w)[0].trigger('click')
+    await rowBtn(w, 0, '详情').trigger('click')
     await flushPromises()
     expect(w.findComponent(PerfCharts).props('summary')).toEqual({
       columns: [{
@@ -274,7 +280,7 @@ describe('PerfRecordPane', () => {
     try {
       const w = mountPane()
       await flushPromises()
-      await rows(w)[0].trigger('click')
+      await rowBtn(w, 0, '详情').trigger('click')
       await flushPromises()
       await btn(w, 'download-csv').trigger('click')
       expect(createObjectURL).toHaveBeenCalledTimes(1)
@@ -323,7 +329,7 @@ describe('PerfRecordPane', () => {
     try {
       const w = mountPane()
       await flushPromises()
-      await rows(w)[0].trigger('click')
+      await rowBtn(w, 0, '详情').trigger('click')
       await flushPromises()
       await btn(w, 'download-csv').trigger('click')
       const anchor = click.mock.instances[0] as HTMLAnchorElement

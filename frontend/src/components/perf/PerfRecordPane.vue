@@ -160,11 +160,11 @@ function fmtTime(iso: string | null): string {
       </div>
     </div>
 
-    <!-- 行点击(操作列按钮已 .stop)开详情抽屉;row-key 必须:刷新换新引用时防 EP 内部状态坍缩 -->
+    <!-- 详情只由操作列「详情」按钮触发(冒烟反馈:行点击易误开抽屉);row-key 必须:刷新换新引用时防 EP 内部状态坍缩 -->
     <el-table
       v-loading="loading" :data="records" row-key="id" border
-      data-test="records-table" :row-style="{ cursor: 'pointer' }"
-      @row-click="openDetail" @selection-change="onSelectionChange"
+      data-test="records-table"
+      @selection-change="onSelectionChange"
     >
       <el-table-column type="selection" width="42" />
       <el-table-column prop="name" label="名称" min-width="150" show-overflow-tooltip />
@@ -191,8 +191,9 @@ function fmtTime(iso: string | null): string {
           <el-tag v-else type="danger" size="small" data-test="incomplete-badge">数据不完整</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="88">
+      <el-table-column label="操作" width="132">
         <template #default="{ row }">
+          <el-button link size="small" type="primary" data-test="detail-btn" @click.stop="openDetail(row)">详情</el-button>
           <el-button link size="small" type="danger" @click.stop="onDelete(row)">删除</el-button>
         </template>
       </el-table-column>
