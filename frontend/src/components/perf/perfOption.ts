@@ -6,6 +6,10 @@
 // {columns:[…]} 消费 → 统计表/趋势全空;normalizePerfSummary 负责归一为标准形。
 // 子图也由「每 series 一个 option」改为按采集项大类(fileKey)分组:一次真实采集设备端拆出
 // 51 个指标 CSV,逐文件一图会同步 init 51 个 echarts 实例 → 渲染崩/空白。
+// 冒烟反馈再修(2026-09-11):①option 加白底治透明画布叠影;②SimpleTime(精确同名末列,
+// 相对采集起始的秒)从指标线改为 X 轴秒值,可选 bucketSec 桶聚合;xAxis.name 随之定为
+// 「时间 (秒)/采样点」,yAxis.name 置空(超长 stem 竖排乱字)——ADR-0010「轴名即采集项名」
+// 至此只对历史非 SoloPi 数据的 title 语义成立。
 import type { AppPerfSeries } from '../../types'
 
 export interface PerfSummaryColumn {
@@ -70,6 +74,9 @@ export function normalizePerfSummary(raw: unknown): PerfSummary {
 
 const isNum = (v: string) => v.trim() !== '' && Number.isFinite(Number(v))
 
+// SimpleTime(精确同名)是相对采集起始的秒值(SoloPi 每文件末列),作 X 轴而非指标线
+const SIMPLE_TIME_COL = 'SimpleTime'
+
 function numericColumns(s: AppPerfSeries): number[] {
   const out: number[] = []
   for (let c = 1; c < s.columns.length; c++) {
@@ -78,6 +85,19 @@ function numericColumns(s: AppPerfSeries): number[] {
     if (s.rows.every((r) => isNum(r[c] ?? ''))) out.push(c)
   }
   return out
+}
+
+// 采样聚合:桶起点=floor(x/bucket)*bucket,x 取桶起点,y 取桶内算术均值,按桶起点升序
+function bucketize(pts: [number, number][], bucket: number): [number, number][] {
+  const acc = new Map<number, { sum: number; n: number }>()
+  for (const [x, y] of pts) {
+    const k = Math.floor(x / bucket) * bucket
+    const b = acc.get(k) ?? { sum: 0, n: 0 }
+    b.sum += y
+    b.n += 1
+    acc.set(k, b)
+  }
+  return [...acc.entries()].sort((a, b) => a[0] - b[0]).map(([k, b]) => [k, b.sum / b.n])
 }
 
 function refLines(item: string, col: string, summary: PerfSummary): unknown[] {
@@ -100,28 +120,36 @@ function refLines(item: string, col: string, summary: PerfSummary): unknown[] {
 
 export function buildPerfOptions(
   series: AppPerfSeries[],
-  opts: { showRefs?: boolean; summary?: PerfSummary; seriesNamePrefix?: string } = {},
+  opts: { showRefs?: boolean; summary?: PerfSummary; seriesNamePrefix?: string; bucketSec?: number } = {},
 ): PerfChartOption[] {
   // 按采集项大类(fileKeyOf(item))分组:同组全部系列的线画在一张图,title=大类 key,
-  // xAxis.max 取组内最大行数;Map 按首现顺序出图(确定性,利于快照式断言)。
+  // xAxis.max 取组内最大 x;Map 按首现顺序出图(确定性,利于快照式断言)。
   // 系列在合并组内仍带原 item(文件 stem),参考线按 `<stem>::<列名>` 逐线精确匹配。
-  type Group = { key: string; charts: unknown[]; maxLen: number }
+  type Group = { key: string; charts: unknown[]; maxX: number; hasTime: boolean }
   const groups = new Map<string, Group>()
   const prefix = opts.seriesNamePrefix ? `${opts.seriesNamePrefix} · ` : ''
   for (const s of series) {
-    const cols = numericColumns(s)
+    // SimpleTime(精确同名)列不画线,提取为该系列的 X 值数组(相对采集起始的秒)
+    const cols = numericColumns(s).filter((c) => s.columns[c] !== SIMPLE_TIME_COL)
     if (!cols.length || s.rows.length < 2) continue
     const key = fileKeyOf(s.item)
-    const g = groups.get(key) ?? { key, charts: [], maxLen: 0 }
+    const g = groups.get(key) ?? { key, charts: [], maxX: 0, hasTime: false }
+    const stIdx = s.columns.indexOf(SIMPLE_TIME_COL)
+    const xs = stIdx >= 0 ? s.rows.map((r) => Number(r[stIdx])) : null
+    // 无 SimpleTime 列 / 值含非数值(Number→NaN,如字符串 "null")→ X 回退采样序号 0..n-1
+    const timed = xs != null && xs.every((v) => Number.isFinite(v))
+    if (timed) g.hasTime = true
     for (const c of cols) {
+      let pts: [number, number][] = s.rows.map((r, i) => [timed ? xs![i] : i, Number(r[c])])
+      if (opts.bucketSec != null && opts.bucketSec > 0) pts = bucketize(pts, opts.bucketSec)
       g.charts.push({
         name: `${prefix}${s.columns[c] || `col${c}`}`,
         type: 'line', showSymbol: false, sampling: 'lttb',
-        data: s.rows.map((r, i) => [i, Number(r[c])]),
+        data: pts,
         ...(opts.showRefs ? { markLine: { silent: true, data: refLines(s.item, s.columns[c] || '', opts.summary ?? null) } } : {}),
       })
+      for (const p of pts) if (p[0] > g.maxX) g.maxX = p[0]
     }
-    g.maxLen = Math.max(g.maxLen, s.rows.length)
     groups.set(key, g)
   }
   return [...groups.values()].map((g) => ({
@@ -129,8 +157,12 @@ export function buildPerfOptions(
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
     legend: { top: 2, right: 10, type: 'scroll' },
     grid: { left: 50, right: 20, top: 34, bottom: 52 },
-    xAxis: { type: 'value', min: 0, max: g.maxLen - 1, name: '采样点' },
-    yAxis: { type: 'value', scale: true, name: g.key },
+    // 白底:echarts canvas 默认透明,多子图与下层页面内容互相透出叠加=标题重影(冒烟反馈)
+    backgroundColor: '#fff',
+    // X 轴:组内任一系列带 SimpleTime 即按秒(秒与序号并存以秒为准);全部回退则按采样点
+    xAxis: { type: 'value', min: 0, max: g.maxX, name: g.hasTime ? '时间 (秒)' : '采样点' },
+    // yAxis.name 置空:name 曾用文件 stem,超长竖排成乱字;子图含义由 title(采集大类)承担
+    yAxis: { type: 'value', scale: true, name: '' },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18, bottom: 10 }],
     series: g.charts,
   }))

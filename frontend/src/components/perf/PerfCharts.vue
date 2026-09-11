@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // src/components/perf/PerfCharts.vue
-// 性能曲线容器:多子图纵向排,echarts connect 十字准星跨子图联动。
-// option 组装全部在 perfOption 纯函数,组件只做 init/setOption 透传与生命周期管理。
+// 性能曲线容器:多子图纵向排;option 组装全部在 perfOption 纯函数,组件只做 init/setOption
+// 透传与生命周期管理。connect 联动经用户实测裁撤(悬停只看当前子图,跨子图 tooltip/十字
+// 同步反而是干扰),不再 import/调用 echarts.connect。
 import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -16,6 +17,7 @@ echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, DataZo
 const props = defineProps<{ series: AppPerfSeries[]; summary?: PerfSummary; showRefs?: boolean }>()
 
 const refsOn = ref(props.showRefs ?? false)
+const bucketSec = ref(0) // 聚合桶宽(秒);0=原始全采样
 const hasCharts = ref(false) // instances 非响应式:模板只以此开关图表容器/空态
 const host = ref<HTMLElement | null>(null)
 const instances: ReturnType<typeof echarts.init>[] = []
@@ -23,7 +25,7 @@ const instances: ReturnType<typeof echarts.init>[] = []
 async function render() {
   instances.forEach((c) => c.dispose())
   instances.length = 0
-  const opts = buildPerfOptions(props.series, { showRefs: refsOn.value, summary: props.summary ?? null })
+  const opts = buildPerfOptions(props.series, { showRefs: refsOn.value, summary: props.summary ?? null, bucketSec: bucketSec.value || undefined })
   hasCharts.value = opts.length > 0
   if (!opts.length) return
   await nextTick() // 容器随 hasCharts=true 挂载后才有 host 可 init
@@ -39,7 +41,6 @@ async function render() {
     chart.setOption(opt)
     instances.push(chart)
   }
-  echarts.connect(instances) // 十字准星跨子图联动
 }
 
 // 窗口尺寸变化 → 全部子图 resize;卸载时移除监听并 dispose
@@ -54,7 +55,7 @@ onUnmounted(() => {
 })
 
 onMounted(render)
-watch(() => [props.series, props.summary, refsOn.value], render)
+watch(() => [props.series, props.summary, refsOn.value, bucketSec.value], render)
 
 function exportPng() {
   const url = instances[0]?.getDataURL({ pixelRatio: 2, backgroundColor: '#fff' })
@@ -70,6 +71,14 @@ function exportPng() {
   <div class="perf-charts">
     <div class="toolbar">
       <el-checkbox v-model="refsOn" data-test="toggle-refs">mean/p90 参考线</el-checkbox>
+      <span class="bucket-lbl">聚合时长</span>
+      <el-select v-model="bucketSec" size="small" class="bucket-select" data-test="bucket-select">
+        <el-option label="原始采样" :value="0" />
+        <el-option label="1 分钟" :value="60" />
+        <el-option label="5 分钟" :value="300" />
+        <el-option label="20 分钟" :value="1200" />
+        <el-option label="1 小时" :value="3600" />
+      </el-select>
       <el-button size="small" data-test="export-png" @click="exportPng">导出 PNG</el-button>
     </div>
     <div v-if="hasCharts" ref="host" class="charts" />
@@ -79,6 +88,8 @@ function exportPng() {
 
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.bucket-lbl { color: var(--el-text-color-secondary); font-size: 13px; }
+.bucket-select { width: 118px; }
 .charts > div { width: 100%; height: 240px; margin-bottom: 8px; }
 /* 高度以内联样式为准(scoped 选择器匹配不到命令式创建的子 div),此规则仅作兜底 */
 .empty { color: var(--el-text-color-secondary); }

@@ -27,25 +27,30 @@ const instances: ReturnType<typeof echarts.init>[] = []
 
 // 合并同 item 子图:每记录一次 buildPerfOptions(纯函数,option 为平面对象),
 // 以 option.title.text(=item 名)为键归并各记录的 series 数组;
-// xAxis.max 取组内最长线(分组化后组内首线不一定最长,偏小会裁掉长线;计划14 冒烟修复 re-review)。
+// xAxis.max 取组内最大 x(分组化后组内首线不一定最长,偏小会裁掉长线;计划14 冒烟修复
+// re-review)。X 已从采样序号改为 SimpleTime 秒(perfOption 冒烟反馈修 2),故 max 必须
+// 取数据点 x 的最大值——沿用旧的「数据行数-1」会把 0~31s 的秒轴拉长到行数范围,线挤左半边。
 function mergedOptions(recordList: PerfRecord[], seriesMap: Record<string, AppPerfSeries[]>): PerfChartOption[] {
-  const byItem = new Map<string, { base: PerfChartOption; series: unknown[]; maxLen: number }>()
+  const byItem = new Map<string, { base: PerfChartOption; series: unknown[]; maxX: number }>()
   for (const r of recordList) {
     for (const opt of buildPerfOptions(seriesMap[String(r.id)] ?? [], { seriesNamePrefix: r.name })) {
       const item = String((opt.title as { text?: string } | undefined)?.text ?? '')
       if (!item) continue // item 名来自设备动态 CSV 数据,正常非空;空串(异常数据)不并入无标题子图
-      const e = byItem.get(item) ?? { base: opt, series: [], maxLen: 0 }
+      const e = byItem.get(item) ?? { base: opt, series: [], maxX: 0 }
       e.series.push(...((opt.series as unknown[] | undefined) ?? []))
-      const lens = ((opt.series as { data?: unknown[] }[] | undefined) ?? [])
-        .map((s) => s.data?.length ?? 0)
-      e.maxLen = Math.max(e.maxLen, ...(lens.length ? lens : [0]))
+      for (const s of ((opt.series as { data?: [number, number][] }[] | undefined) ?? [])) {
+        for (const p of s.data ?? []) {
+          const x = Number(p?.[0])
+          if (Number.isFinite(x) && x > e.maxX) e.maxX = x
+        }
+      }
       byItem.set(item, e)
     }
   }
   return [...byItem.values()].map((e) => ({
     ...e.base,
     series: e.series,
-    xAxis: { ...(e.base.xAxis as Record<string, unknown>), max: e.maxLen - 1 },
+    xAxis: { ...(e.base.xAxis as Record<string, unknown>), max: e.maxX },
   }))
 }
 

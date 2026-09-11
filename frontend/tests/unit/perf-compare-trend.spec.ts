@@ -203,6 +203,34 @@ describe('PerfCompareDialog', () => {
     w.unmount()
   })
 
+  it('系列带 SimpleTime(真实 SoloPi 数据):叠加子图 X 为秒值,max 取组内最大秒而非行数-1', async () => {
+    // buildPerfOptions 已把 X 从序号改为 SimpleTime 秒;合并侧若仍用 数据行数-1 当 max,
+    // 秒轴(0~31s)会被拉长到行数范围,线挤在左半边
+    const REC_T = mkRecord({
+      id: 24, name: '记录T', device_serial: 'devT', perf_items: ['Temperature'],
+      perf_summary: null,
+    })
+    api.comparePerfRecords.mockResolvedValue({
+      records: [REC_T],
+      series: {
+        '24': [{
+          item: 'CPU温度_Temperature_cccc_1_1',
+          columns: ['RecordTime', 'v', 'extra', 'SimpleTime'],
+          rows: [['1', '10', 'null', '0.5'], ['2', '20', 'null', '30.5'], ['3', '15', 'null', '31.5']],
+        }],
+      },
+    })
+    const w = mountCompare([24])
+    await flushPromises()
+    expect(setOption).toHaveBeenCalledTimes(1)
+    const opt = setOption.mock.calls[0][0] as any
+    expect(opt.series.map((s: any) => s.name)).toEqual(['记录T · v']) // SimpleTime 不画线
+    expect(opt.series[0].data[0]).toEqual([0.5, 10]) // X=SimpleTime 秒
+    expect(opt.xAxis.max).toBe(31.5) // 组内最大秒值,而非行数-1=2
+    expect(opt.xAxis.name).toBe('时间 (秒)')
+    w.unmount()
+  })
+
   it('全部记录无可用曲线:图表区空态,不 init', async () => {
     api.comparePerfRecords.mockResolvedValue({ records: [REC_A], series: { '11': [] } })
     const w = mountCompare([11])

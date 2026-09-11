@@ -13,11 +13,13 @@ const series = [
   { item: 'Memo', columns: ['label'], rows: [['non-numeric']] }, // 无数值列 → 无子图
 ]
 
-// 与 perfOption.numericColumns 同口径的本地复算(锁定「合并不丢线」的期望值)
+// 与 perfOption 系列构建同口径的本地复算(锁定「合并不丢线」的期望值);
+// SimpleTime(精确同名)已改作 X 秒值不再画线,此处同步剔除
 const numericCount = (s: AppPerfSeries): number => {
   const isNum = (v: string) => v.trim() !== '' && Number.isFinite(Number(v))
   let n = 0
   for (let c = 1; c < s.columns.length; c++) {
+    if (s.columns[c] === 'SimpleTime') continue
     const name = (s.columns[c] || '').toLowerCase()
     if (/^(time|ts|timestamp)/.test(name)) continue
     if (s.rows.every((r) => isNum(r[c] ?? ''))) n++
@@ -82,6 +84,14 @@ describe('buildPerfOptions', () => {
     expect(s.map((x: any) => x.name)).toEqual(['total', 'app'])
     expect((opts[0] as any).xAxis.max).toBe(2)
     expect((opts[0] as any).title.text).toBe('CPU')
+    expect(s[0].data).toEqual([[0, 10], [1, 20], [2, 30]]) // 无 SimpleTime → X=采样序号
+    expect((opts[0] as any).xAxis.name).toBe('采样点')
+  })
+
+  it('白底治叠影:每个 option backgroundColor=#fff(canvas 默认透明,子图与下层页面互相透出=标题重影)', () => {
+    const opts = buildPerfOptions(series)
+    expect(opts.length).toBeGreaterThan(0)
+    expect(opts.every((o) => (o as any).backgroundColor === '#fff')).toBe(true)
   })
 
   it('dataZoom/tooltip/legend 配置齐备(企业级清单)', () => {
@@ -115,6 +125,76 @@ describe('buildPerfOptions', () => {
   })
 })
 
+describe('buildPerfOptions:SimpleTime 时间轴 + 采样聚合(冒烟反馈修 2)', () => {
+  // 真实 SoloPi CSV 四列形态:RecordTime(epoch ms)/指标列/extra(字符串 "null")/SimpleTime(秒)
+  const timed: AppPerfSeries[] = [{
+    item: 'CPU温度_Temperature_x_1_2',
+    columns: ['RecordTime', 'CPU温度(度)', 'extra', 'SimpleTime'],
+    rows: [
+      ['1789045017067', '39.3', 'null', '0.5'],
+      ['1789045018067', '41.1', 'null', '1.5'],
+      ['1789045019067', '43.7', 'null', '2.5'],
+    ],
+  }]
+
+  it('SimpleTime 列不画线(图例无 SimpleTime),提取为该系列 X 秒值:首点 x=秒值', () => {
+    const o = buildPerfOptions(timed)[0] as any
+    expect(o.series.map((s: any) => s.name)).toEqual(['CPU温度(度)']) // SimpleTime 不在系列名
+    expect(o.series[0].data[0]).toEqual([0.5, 39.3])
+    expect(o.xAxis.name).toBe('时间 (秒)')
+    expect(o.xAxis.max).toBe(2.5) // 组内最大 x=最大秒值
+  })
+
+  it('无 SimpleTime 列 → X 回退采样序号 0..n-1,xAxis.name=采样点(旧行为等价)', () => {
+    const o = buildPerfOptions(series)[0] as any
+    expect(o.series[0].data[0]).toEqual([0, 10])
+    expect(o.xAxis.name).toBe('采样点')
+  })
+
+  it('SimpleTime 列含非数值(如字符串 "null")→ 整系列回退采样序号', () => {
+    const bad: AppPerfSeries[] = [{
+      item: 'CPU温度_Temperature_y_1_2',
+      columns: ['RecordTime', 'v', 'extra', 'SimpleTime'],
+      rows: [['1', '10', 'null', '0.5'], ['2', '20', 'null', 'null']],
+    }]
+    const o = buildPerfOptions(bad)[0] as any
+    expect(o.series[0].data.map((d: unknown[]) => d[0])).toEqual([0, 1])
+    expect(o.xAxis.name).toBe('采样点')
+  })
+
+  it('组内混排(部分系列带 SimpleTime)→ 以秒为准(任一系列带 SimpleTime 即 name=时间 (秒))', () => {
+    const mixed: AppPerfSeries[] = [
+      ...timed,
+      { item: 'CPU占用_Temperature_z_1_2', columns: ['RecordTime', 'v'], rows: [['1', '5'], ['2', '6'], ['3', '7']] },
+    ]
+    const o = buildPerfOptions(mixed)[0] as any
+    expect(o.series).toHaveLength(2)
+    expect(o.xAxis.name).toBe('时间 (秒)')
+    expect(o.series[1].data[0]).toEqual([0, 5]) // 无 SimpleTime 的系列自身仍回退序号
+  })
+
+  it('bucketSec=60:x 均为 60 倍数(桶起点),桶内 y 取算术均值,按桶起点升序', () => {
+    const mk = (rows: string[][]): AppPerfSeries[] => [{
+      item: 'CPU温度_Temperature_b_1_2',
+      columns: ['RecordTime', 'v', 'extra', 'SimpleTime'],
+      rows,
+    }]
+    // 计划样例:x=30(y=10)、x=90(y=20)→ 桶 0 均值 10、桶 60 均值 20
+    const o1 = buildPerfOptions(mk([['1', '10', 'null', '30'], ['2', '20', 'null', '90']]), { bucketSec: 60 })[0] as any
+    expect(o1.series[0].data).toEqual([[0, 10], [60, 20]])
+    // 多点同桶:x=70(y=30)、x=90(y=20)同落桶 60 → 均值 25
+    const o2 = buildPerfOptions(mk([['1', '30', 'null', '70'], ['2', '20', 'null', '90']]), { bucketSec: 60 })[0] as any
+    expect(o2.series[0].data).toEqual([[60, 25]])
+  })
+
+  it('bucketSec 缺省/0 → 原始全采样(X 原样逐点)', () => {
+    for (const bucketSec of [undefined, 0] as const) {
+      const o = buildPerfOptions(timed, { bucketSec })[0] as any
+      expect(o.series[0].data).toEqual([[0.5, 39.3], [1.5, 41.1], [2.5, 43.7]])
+    }
+  })
+})
+
 describe('buildPerfOptions:真实 51 系列按大类分组(fixtures/series15.json)', () => {
   const s15 = series15 as unknown as AppPerfSeries[]
 
@@ -139,16 +219,25 @@ describe('buildPerfOptions:真实 51 系列按大类分组(fixtures/series15.jso
     expect(drawn).toBe(s15.reduce((acc, s) => acc + numericCount(s), 0))
   })
 
-  it('xAxis.max = 组内各系列最大行数-1(组间行数不同取最大)', () => {
+  it('xAxis.max = 组内最大 SimpleTime 秒值(真实秒数,非行数-1)', () => {
     const opts = buildPerfOptions(s15)
-    const net = opts.find((o) => (o as any).title.text === 'Network') as any
-    const netRows = s15.filter((s) => fileKeyOf(s.item) === 'Network').map((s) => s.rows.length)
-    expect(net.xAxis.max).toBe(Math.max(...netRows) - 1)
+    const mem = opts.find((o) => (o as any).title.text === 'Memory') as any
+    // fixture 实测:Memory 组最大 SimpleTime=31.766 秒(0.501 起相对采集起始);
+    // 旧行为取行数-1(整数,Memory 组最长 63 行 → 62),秒轴下断然不等
+    expect(mem.xAxis.max).toBeGreaterThan(31)
+    expect(mem.xAxis.max).toBeLessThan(35)
+    expect(mem.xAxis.max).toBe(31.766)
   })
 
-  it('yAxis 名=大类 key(轴单位不做换算,沿用 ADR-0010)', () => {
+  it('全系列不再有名为 SimpleTime 的系列(SimpleTime 改作 X 秒值)', () => {
     const opts = buildPerfOptions(s15)
-    expect(opts.every((o) => (o as any).yAxis.name === (o as any).title.text)).toBe(true)
+    const names = opts.flatMap((o) => ((o as any).series as { name: string }[]).map((s) => s.name))
+    expect(names).not.toContain('SimpleTime')
+  })
+
+  it('yAxis.name 置空(超长文件 stem 竖排乱字下线,子图含义由 title=采集大类承担)', () => {
+    const opts = buildPerfOptions(s15)
+    expect(opts.every((o) => (o as any).yAxis.name === '')).toBe(true)
   })
 
   it('参考线:归一化 summary 以 <stem>::<列名> 精确命中;同文件兄弟列不串线、缺列不画', () => {
@@ -161,9 +250,8 @@ describe('buildPerfOptions:真实 51 系列按大类分组(fixtures/series15.jso
     const lines = opts.flatMap((o) => (o as any).series as { name: string; markLine?: { data: { yAxis: number }[] } }[])
     const metric = lines.find((l) => l.name === metricCol)!
     expect(metric.markLine?.data.map((l) => l.yAxis)).toEqual([50.5, 56.4])
-    // SimpleTime 不在 summary:精确键未命中即不画(归一化键不退前缀兜底,防同文件兄弟列张冠李戴)
-    const simple = lines.find((l) => l.name === 'SimpleTime')!
-    expect(simple.markLine?.data ?? []).toHaveLength(0)
+    // SimpleTime 已不画线(改作 X 秒值),参考线匹配无从谈起
+    expect(lines.find((l) => l.name === 'SimpleTime')).toBeUndefined()
   })
 })
 
