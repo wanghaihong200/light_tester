@@ -226,3 +226,23 @@ def test_hit_detail_response_body(client, db_session, make_user):
     assert detail.status_code == 200 and detail.json()["response_body"] == '{"x":1}'
     listed = client.get(f"/api/mock-instances/{inst.id}/hits", headers=ah).json()
     assert "response_body" not in listed[0] and listed[0]["outcome"] == "matched"
+
+
+def test_hits_group_filter_rejects_cross_instance_group(client, db_session, make_user):
+    """评审修复:group_id 属其它实例(即便同项目)→ 400;否则 A 实例未命中行会按
+    B 实例组模板被错归因(查询语义错,非泄漏)。"""
+    admin = make_user(db_session, "adm14", is_admin=True)
+    p = Project(name="p-rule-8")
+    db_session.add(p)
+    db_session.commit()
+    inst_a = MockInstance(project_id=p.id, name="a", port=19084, token="t" * 32)
+    inst_b = MockInstance(project_id=p.id, name="b", port=19085, token="t" * 32)
+    db_session.add_all([inst_a, inst_b])
+    db_session.commit()
+    g_b = _group(db_session, inst_b, method="GET", path="/a/{id}")
+    db_session.add(MockHit(instance_id=inst_a.id, method="GET", matched=False,
+                           outcome="fallback", path="/a/1"))
+    db_session.commit()
+    ah = _login(client, "adm14")
+    r = client.get(f"/api/mock-instances/{inst_a.id}/hits?group_id={g_b.id}", headers=ah)
+    assert r.status_code == 400 and r.json()["detail"] == "group_id 不属于该实例"

@@ -445,6 +445,8 @@ def list_hits(instance_id: int, filter: str = Query("all"),
     rows = q.order_by(MockHit.id.desc()).limit(1000).all()  # 表有 1000 滚动上限,全量进内存做组归因
     if group_id is not None:
         g = _get_group(db, current, group_id, "viewer")
+        if g.instance_id != inst.id:  # 跨实例组 → 400(组侧端点可独立探测存在性,400 不新增泄漏)
+            raise HTTPException(400, "group_id 不属于该实例")
         rule_ids = {r.id for r in db.query(MockRule.id)
                     .filter(MockRule.group_id == g.id).all()}  # 含软删:历史命中仍可归组
         rows = [h for h in rows if _hit_in_group(h, g, rule_ids)]
