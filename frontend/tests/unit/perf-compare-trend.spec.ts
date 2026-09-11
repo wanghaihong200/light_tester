@@ -145,8 +145,61 @@ describe('PerfCompareDialog', () => {
     await flushPromises()
     const trs = w.find('[data-test="compare-stat-table"]').findAll('.el-table__row')
     expect(trs).toHaveLength(1) // skipped 列不并列
-    expect(trs[0].text()).toContain('CPU温度_Temperature_6f1c725f5fab3cd4_1789_1789::CPU温度(度)')
+    expect(trs[0].text()).toContain('Temperature · CPU温度(度)')
     expect(trs[0].text()).toContain('50.50 / 56.40')
+    w.unmount()
+  })
+
+  it('统计表按 fileKey::列名 并列:两记录 stem 不同(含逐次采集 hex16+时间戳)同指标并作一行,两侧各有值(re-review)', async () => {
+    // 同 fileKey 同列名、stem 逐次采集唯一:行键若用完整 stem::列名会裂成两行、对方显 —
+    const mkFiles = (hex: string, ts: string, mean: number, p90: number) => ({
+      files: [{
+        path: `CPU温度_Temperature_${hex}_${ts}_${ts}.csv`,
+        columns: [{ name: 'CPU温度(度)', index: 1, kind: 'numeric', mean, p90 }],
+      }],
+    })
+    const REC_C = mkRecord({
+      id: 21, name: '采集C', device_serial: 'devC',
+      perf_summary: mkFiles('6f1c725f5fab3cd4', '1789045016565', 50.5, 56.4),
+    })
+    const REC_D = mkRecord({
+      id: 22, name: '采集D', device_serial: 'devD',
+      perf_summary: mkFiles('aabbccddeeff0011', '1789046016565', 61.0, 66.0),
+    })
+    api.comparePerfRecords.mockResolvedValue({ records: [REC_C, REC_D], series: { '21': [], '22': [] } })
+    const w = mountCompare([21, 22])
+    await flushPromises()
+    const trs = w.find('[data-test="compare-stat-table"]').findAll('.el-table__row')
+    expect(trs).toHaveLength(1) // 并成一行,不再按 stem 裂行
+    expect(trs[0].text()).toContain('Temperature · CPU温度(度)')
+    expect(trs[0].text()).toContain('50.50 / 56.40') // 采集C
+    expect(trs[0].text()).toContain('61.00 / 66.00') // 采集D
+    w.unmount()
+  })
+
+  it('叠加子图 xAxis.max 取组内最长线(分组化后组内首线不一定最长,re-review)', async () => {
+    // 同组(Temperature)两条不等长线,短线在前:旧实现 maxLen 取 series[0] → max=1 裁掉长线
+    const REC_E = mkRecord({
+      id: 23, name: '记录E', device_serial: 'devE', perf_items: ['Temperature'],
+      perf_summary: null,
+    })
+    api.comparePerfRecords.mockResolvedValue({
+      records: [REC_E],
+      series: {
+        '23': [
+          { item: 'CPU温度_Temperature_aaaa_1_1', columns: ['ts', 'v'], rows: [['0', '1'], ['1', '2']] },
+          { item: '全局占用_Temperature_bbbb_1_1', columns: ['ts', 'v'], rows: [['0', '1'], ['1', '2'], ['2', '3'], ['3', '4']] },
+        ],
+      },
+    })
+    const w = mountCompare([23])
+    await flushPromises()
+    // 同组合并为一个子图(两组系列线画一张)
+    expect(setOption).toHaveBeenCalledTimes(1)
+    const opt = setOption.mock.calls[0][0] as any
+    expect(opt.title.text).toBe('Temperature')
+    expect(opt.series).toHaveLength(2)
+    expect(opt.xAxis.max).toBe(3) // 最长线 4 点 → max=3
     w.unmount()
   })
 

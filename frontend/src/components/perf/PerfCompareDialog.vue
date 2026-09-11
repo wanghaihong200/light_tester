@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // 计划14 Task11:跨记录对比对话框(上=同 item 叠加曲线,下=统计对比表)
-// 叠加图:每记录各自 buildPerfOptions(seriesNamePrefix=记录名)后按 item 合并 series 数组,
-// 组成每 item 一个 option(item 取并集,缺该 item 的记录在该子图无系列);
-// 统计表只并列呈现 mean/p90,不做"最优值高亮"(方向因指标而异,ADR 共识)。
+// 叠加图:每记录各自 buildPerfOptions(seriesNamePrefix=记录名)后按大类组(title=组键)合并
+// series 数组,组成每组一个 option(组键取并集,缺该组的记录在该子图无系列);
+// 统计表行按 fileKey::列名 并列(计划14 冒烟修复 re-review),只呈现 mean/p90,
+// 不做"最优值高亮"(方向因指标而异,ADR 共识)。
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts/core'
@@ -26,7 +27,7 @@ const instances: ReturnType<typeof echarts.init>[] = []
 
 // 合并同 item 子图:每记录一次 buildPerfOptions(纯函数,option 为平面对象),
 // 以 option.title.text(=item 名)为键归并各记录的 series 数组;
-// xAxis.max 取各记录行数的最大值(行数不同起点仍 0),由 base option 覆写。
+// xAxis.max 取组内最长线(分组化后组内首线不一定最长,偏小会裁掉长线;计划14 冒烟修复 re-review)。
 function mergedOptions(recordList: PerfRecord[], seriesMap: Record<string, AppPerfSeries[]>): PerfChartOption[] {
   const byItem = new Map<string, { base: PerfChartOption; series: unknown[]; maxLen: number }>()
   for (const r of recordList) {
@@ -35,8 +36,9 @@ function mergedOptions(recordList: PerfRecord[], seriesMap: Record<string, AppPe
       if (!item) continue // item 名来自设备动态 CSV 数据,正常非空;空串(异常数据)不并入无标题子图
       const e = byItem.get(item) ?? { base: opt, series: [], maxLen: 0 }
       e.series.push(...((opt.series as unknown[] | undefined) ?? []))
-      const n = (opt.series as { data?: unknown[] }[] | undefined)?.[0]?.data?.length ?? 0
-      e.maxLen = Math.max(e.maxLen, n)
+      const lens = ((opt.series as { data?: unknown[] }[] | undefined) ?? [])
+        .map((s) => s.data?.length ?? 0)
+      e.maxLen = Math.max(e.maxLen, ...(lens.length ? lens : [0]))
       byItem.set(item, e)
     }
   }
@@ -88,25 +90,37 @@ onUnmounted(() => {
   instances.length = 0
 })
 
-// ── 统计对比表:行=各记录 summary columns index 并集,列=各记录名(mean / p90 并列)──
-// normalizePerfSummary 幂等:标准形透传,CLI perf-analyze 真实 {files:[…]} 归一(计划14 冒烟修复)
+// ── 统计对比表:行=各记录 summary 列按 键 并集,列=各记录名(mean / p90 并列)──
+// normalizePerfSummary 幂等:标准形透传,CLI perf-analyze 真实 {files:[…]} 归一(计划14 冒烟修复)。
+// 行键用 fileKey::列名(计划14 冒烟修复 re-review):真实 stem 内嵌 hex16+时间戳逐次采集唯一,
+// 按完整 stem::列名会让两记录同指标裂成两行、对方单元格显 —,并列目的落空;
+// legacy 标准形(无 fileKey)回退 index。显示名保持 <fileKey> · <列名>。
 const normCols = (r: PerfRecord): PerfSummaryColumn[] =>
   normalizePerfSummary(r.perf_summary)?.columns ?? []
 
+const colKey = (c: PerfSummaryColumn): string =>
+  c.fileKey != null && c.name ? `${c.fileKey}::${c.name}` : c.index
+const colLabel = (c: PerfSummaryColumn): string =>
+  c.fileKey != null && c.name ? `${c.fileKey} · ${c.name}` : c.index
+
 const statRows = computed(() => {
-  const seen: string[] = []
+  const rows: { key: string; label: string }[] = []
+  const seen = new Set<string>()
   for (const r of records.value) {
     for (const c of normCols(r)) {
-      if (!seen.includes(c.index)) seen.push(c.index)
+      const key = colKey(c)
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push({ key, label: colLabel(c) })
     }
   }
-  return seen.map((index) => ({ index }))
+  return rows
 })
 
 const fmtNum = (v: number | null | undefined) => (v == null ? '—' : Number(v).toFixed(2))
 
-function cellText(r: PerfRecord, index: string): string {
-  const col: PerfSummaryColumn | undefined = normCols(r).find((c) => c.index === index)
+function cellText(r: PerfRecord, key: string): string {
+  const col: PerfSummaryColumn | undefined = normCols(r).find((c) => colKey(c) === key)
   if (!col || (col.mean == null && col.p90 == null)) return '—'
   return `${fmtNum(col.mean)} / ${fmtNum(col.p90)}`
 }
@@ -121,9 +135,11 @@ function cellText(r: PerfRecord, index: string): string {
       <template v-if="records.length">
         <h4 class="section-title">统计对比</h4>
         <el-table :data="statRows" size="small" border max-height="280" data-test="compare-stat-table">
-          <el-table-column prop="index" label="指标" min-width="140" />
+          <el-table-column label="指标" min-width="140" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.label }}</template>
+          </el-table-column>
           <el-table-column v-for="r in records" :key="r.id" :label="r.name" min-width="130">
-            <template #default="{ row }">{{ cellText(r, row.index) }}</template>
+            <template #default="{ row }">{{ cellText(r, row.key) }}</template>
           </el-table-column>
         </el-table>
       </template>
