@@ -146,7 +146,7 @@ def create_mock_app(instance_id: int, upstream_transport: httpx.AsyncBaseTranspo
             if outcome == "fallback":
                 status_code = instance.default_status or 404
                 payload = instance.default_body or DEFAULT_MISS_BODY
-                headers_out, content_type = {}, None
+                headers_out, content_type = {}, "application/json"  # 兜底恒 JSON(brief 误写 None,恢复旧行为)
             # fwd.headers 的值可能为 list(set-cookie 恒 list):str 值进 headers dict,
             # list 值先建 Response 再逐条 append——否则 starlette 把 list str() 成一行
             multi = [(k, v) for k, vs in headers_out.items() if isinstance(vs, list) for v in vs]

@@ -31,9 +31,12 @@ def build_upstream_headers(headers: dict[str, str], upstream_host: str) -> dict[
 def build_client_response_headers(headers: httpx.Headers) -> dict[str, str | list[str]]:
     # set-cookie 单独走 get_list 取原始多条(items() 会把重复头逗号合并,
     # 劈坏 Expires=Wed, 21 Oct ... 这类含逗号的 cookie 值),其余头仍单值 str。
+    # content-encoding 必须剔除:httpx 已按该头透明解压 resp.content,若原样带回,
+    # 客户端拿到"已解压体+gzip 头"失配(浏览器 ERR_CONTENT_DECODING_FAILED)。
     out: dict[str, str | list[str]] = {
         k: v for k, v in headers.items()
-        if k.lower() not in _HOP_BY_HOP and k.lower() not in ("content-type", "set-cookie")}
+        if k.lower() not in _HOP_BY_HOP
+        and k.lower() not in ("content-type", "content-encoding", "set-cookie")}
     cookies = headers.get_list("set-cookie")
     if cookies:
         out["set-cookie"] = cookies

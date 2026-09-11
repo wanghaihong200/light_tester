@@ -1,4 +1,6 @@
 """透传引擎单测(httpx.MockTransport,零真实网络)。"""
+import gzip
+
 import httpx
 import pytest
 
@@ -71,3 +73,18 @@ def test_build_client_response_headers_strips_hop_by_hop():
     out = passthrough.build_client_response_headers(
         Headers({"content-type": "application/json", "connection": "close", "x-ok": "1"}))
     assert out == {"x-ok": "1"}
+
+
+@pytest.mark.asyncio
+async def test_forward_drops_content_encoding_after_decompression():
+    """httpx 已按 content-encoding 透明解压 resp.content,该头必须剔除——
+    否则客户端拿到"已解压体+gzip 头"失配(ERR_CONTENT_DECODING_FAILED)。"""
+    raw = b'{"real":true}'
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=gzip.compress(raw),
+                              headers={"content-encoding": "gzip"})
+
+    out = await passthrough.forward(_client(handler), "http://up:1", "GET", "/x", None, {}, b"")
+    assert out.ok and out.content == raw                       # 拿到的是解压后原始字节
+    assert "content-encoding" not in out.headers               # 头已剔除,体/头一致

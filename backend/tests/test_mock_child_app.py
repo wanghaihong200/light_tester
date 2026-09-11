@@ -189,6 +189,7 @@ def test_miss_passthrough_forwards_upstream(db_session):
     hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
     assert hit.outcome == "forwarded" and hit.matched is False
     assert hit.response_status == 201 and hit.response_body == '{"real":true}'
+    assert hit.delay_ms == 0                                   # 透传不产生规则延迟
 
 
 def test_miss_passthrough_upstream_5xx_still_forwarded(db_session):
@@ -209,6 +210,7 @@ def test_miss_passthrough_down_falls_back(db_session):
 
     resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(handler))).get("/x")
     assert resp.status_code == 404 and resp.json() == {"fb": 1}
+    assert resp.headers["content-type"] == "application/json"  # 兜底体恒 JSON
     hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
     assert hit.outcome == "fallback" and hit.error == "forward-failed: ConnectError"
     assert hit.response_body == '{"fb":1}'              # 兜底体也落 response_body
@@ -219,8 +221,21 @@ def test_miss_no_passthrough_falls_back(db_session):
     inst = _setup(db_session)
     resp = TestClient(create_mock_app(inst.id)).get("/x")
     assert resp.status_code == 404
+    assert resp.headers["content-type"] == "application/json"  # 兜底体恒 JSON
     hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
     assert hit.outcome == "fallback" and hit.error is None
+
+
+def test_miss_passthrough_large_body_truncated_in_hit(db_session):
+    """透传 >64KB 大响应体:客户端拿全量,hit.response_body 截到 64KB 摘录落库。"""
+    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1")
+    big = b'{"data":"' + b"x" * (100 * 1024) + b'"}'
+    resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, content=big)))).get("/big")
+    assert resp.status_code == 200 and resp.content == big
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "forwarded"
+    assert len(hit.response_body.encode("utf-8")) <= 65535     # TEXT 容量(65,535 字节)内
 
 
 def test_matched_rule_records_outcome_and_body(db_session):
