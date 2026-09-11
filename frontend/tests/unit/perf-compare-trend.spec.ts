@@ -271,16 +271,23 @@ const IMP_C = mkRecord({
   script_id: null, script_name: '', device_serial: 'dev3',
 })
 
-const TREND_GROUPS: TrendGroup[] = [
-  {
-    script_id: 9, script_name: '场景A', device_serial: 'dev1',
-    points: [
-      { record_id: 11, finished_at: '2026-09-01T10:00:00', series: { CPU: { mean: 15, p90: 19 } } },
-      { record_id: 12, finished_at: '2026-09-02T11:30:00', series: { CPU: { mean: 18, p90: 22 } } },
-    ],
-  },
-  { script_id: 10, script_name: '场景B', device_serial: 'dev2', points: [] },
-]
+// 两组、两键:场景A 有 CPU+Temperature,场景B 仅 CPU 且只有 1 个点
+// (验证多组合并画同键、缺点断线、某组整键缺失不画空线、键集变化自动重置)
+const KEY_TEMP = 'Temperature::CPU温度(度)'
+const GROUP_A: TrendGroup = {
+  script_id: 9, script_name: '场景A', device_serial: 'dev1',
+  points: [
+    { record_id: 11, finished_at: '2026-09-01T10:00:00', series: { CPU: { mean: 15, p90: 19 }, [KEY_TEMP]: { mean: 40, p90: 45 } } },
+    { record_id: 12, finished_at: '2026-09-02T11:30:00', series: { CPU: { mean: 18, p90: 22 }, [KEY_TEMP]: { mean: 42, p90: 47 } } },
+  ],
+}
+const GROUP_B: TrendGroup = {
+  script_id: 10, script_name: '场景B', device_serial: 'dev2',
+  points: [
+    { record_id: 13, finished_at: '2026-09-01T10:00:00', series: { CPU: { mean: 30, p90: 35 } } },
+  ],
+}
+const TREND_GROUPS: TrendGroup[] = [GROUP_A, GROUP_B]
 
 const mountTrend = () =>
   mount(PerfTrendDialog, {
@@ -293,7 +300,11 @@ describe('PerfTrendDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     api.listPerfRecords.mockResolvedValue([RUN_A, RUN_B, IMP_C])
-    api.getPerfTrend.mockResolvedValue({ groups: TREND_GROUPS })
+    // 服务端按筛选过滤 group 的真实行为:script_id=9 只回场景A,=10 只回场景B,否则全部
+    api.getPerfTrend.mockImplementation((_pid: unknown, params: { script_id?: number } = {}) =>
+      Promise.resolve({
+        groups: params.script_id != null ? TREND_GROUPS.filter((g) => g.script_id === params.script_id) : TREND_GROUPS,
+      }))
   })
 
   afterEach(() => {
@@ -315,27 +326,34 @@ describe('PerfTrendDialog', () => {
     w.unmount()
   })
 
-  it('趋势分组渲染:组标题=脚本@设备,每组每 series 键一个子图(mean 实线+p90 虚线),空 points 组空态', async () => {
+  it('指标下拉:选项=各组 points series 键去重,label 把 :: 换成 ·,默认选第一个键', async () => {
+    const w = mountTrend()
+    await flushPromises()
+    const keys = ['CPU', KEY_TEMP]
+    const opts = w.findAllComponents({ name: 'ElOption' }).filter((o) => keys.includes(String(o.props('value'))))
+    expect(opts).toHaveLength(2) // 选项数 = 去重键数
+    expect(opts.map((o) => o.props('label'))).toEqual(['CPU', 'Temperature · CPU温度(度)'])
+    // 默认选中第一个键(第 3 个 select = 脚本/设备/指标)
+    expect(w.findAllComponents({ name: 'ElSelect' })[2].props('modelValue')).toBe('CPU')
+    w.unmount()
+  })
+
+  it('默认渲染单指标一张图:多组同键 → 每组 mean/p90 系列(名含组标识),X=时间并集、缺点断线', async () => {
     const w = mountTrend()
     await flushPromises()
     expect(api.getPerfTrend).toHaveBeenCalledWith(1, {})
-    const groupBlocks = w.findAll('[data-test="trend-group"]')
-    expect(groupBlocks).toHaveLength(2)
-    expect(groupBlocks[0].text()).toContain('场景A@dev1')
-    expect(groupBlocks[0].find('[data-test="trend-charts"]').exists()).toBe(true)
-    // 空 points 组:显示组级空态,不 init 图
-    expect(groupBlocks[1].text()).toContain('场景B@dev2')
-    expect(groupBlocks[1].find('[data-test="group-empty"]').exists()).toBe(true)
-    expect(setOption).toHaveBeenCalledTimes(1)
+    expect(setOption).toHaveBeenCalledTimes(1) // 单图,不再每键一子图
+    expect(w.findAll('[data-test="trend-charts"]')).toHaveLength(1)
     const opt = setOption.mock.calls[0][0] as any
-    expect(opt.title.text).toBe('CPU') // 子图标题 = series 键
-    expect(opt.series).toHaveLength(2)
-    expect(opt.series.map((s: any) => s.name)).toEqual(['mean', 'p90'])
+    expect(opt.title.text).toBe('CPU') // 默认键 = 第一个
+    expect(opt.series.map((s: any) => s.name)).toEqual([
+      '场景A@dev1 · mean', '场景A@dev1 · p90', '场景B@dev2 · mean', '场景B@dev2 · p90',
+    ])
     expect(opt.series[0].lineStyle.type).toBe('solid')
     expect(opt.series[1].lineStyle.type).toBe('dashed')
     expect(opt.series[0].data).toEqual([15, 18])
-    expect(opt.series[1].data).toEqual([19, 22])
-    // X=点序,label=finished_at 格式化到分
+    expect(opt.series[2].data).toEqual([30, null]) // 场景B 缺 09-02 时间点 → null 断线
+    // X=点序(并集时间轴),label=finished_at 格式化到分
     expect(opt.xAxis.data).toEqual(['2026-09-01 10:00', '2026-09-02 11:30'])
     // 白底:echarts canvas 默认透明,叠在下层内容上=标题重影(冒烟反馈)
     expect(opt.backgroundColor).toBe('#fff')
@@ -343,32 +361,60 @@ describe('PerfTrendDialog', () => {
     expect(mockChart.dispose).toHaveBeenCalled()
   })
 
-  it('connect 联动经用户实测裁撤:趋势渲染后不调 echarts.connect(悬停只看当前子图)', async () => {
+  it('切换指标下拉:同一张图按新键重画;某组整个没有该键 → 该组不画空线', async () => {
     const w = mountTrend()
     await flushPromises()
-    expect(setOption).toHaveBeenCalled()
-    expect(connectMock).not.toHaveBeenCalled()
+    setOption.mockClear()
+    await w.findAllComponents({ name: 'ElSelect' })[2].vm.$emit('update:modelValue', KEY_TEMP)
+    await flushPromises()
+    expect(setOption).toHaveBeenCalledTimes(1) // 单次 setOption,一张图
+    const opt = setOption.mock.calls[0][0] as any
+    expect(opt.title.text).toBe('Temperature · CPU温度(度)')
+    // 场景B 无 Temperature 键 → 不画全空线
+    expect(opt.series.map((s: any) => s.name)).toEqual(['场景A@dev1 · mean', '场景A@dev1 · p90'])
+    expect(opt.series[0].data).toEqual([40, 42])
+    expect(opt.series[1].data).toEqual([45, 47])
     w.unmount()
   })
 
-  it('筛选联动:选脚本/设备后按条件重拉趋势;重渲染清空 host,子图容器不累积', async () => {
+  it('筛选联动:选脚本/设备按条件重拉趋势;单组时系列名免组前缀(mean/p90)', async () => {
     const w = mountTrend()
     await flushPromises()
-    // 首次渲染:host 内子图容器数 = series 键数(1)
-    expect(w.find('[data-test="trend-charts"]').element.children).toHaveLength(1)
+    setOption.mockClear() // 清掉初始渲染,只统计筛选后的重画
     const selects = w.findAllComponents({ name: 'ElSelect' })
     await selects[0].vm.$emit('update:modelValue', 9)
     await flushPromises()
     expect(api.getPerfTrend).toHaveBeenLastCalledWith(1, { script_id: 9 })
+    expect(setOption).toHaveBeenCalledTimes(1) // 每次重拉恰好一次 setOption
+    const opt = setOption.mock.calls[0][0] as any
+    expect(opt.series.map((s: any) => s.name)).toEqual(['mean', 'p90']) // 单组免前缀
+    expect(opt.series[0].data).toEqual([15, 18])
     await selects[1].vm.$emit('update:modelValue', 'dev1')
     await flushPromises()
     expect(api.getPerfTrend).toHaveBeenLastCalledWith(1, { script_id: 9, device_serial: 'dev1' })
-    // 两次重渲染后仍 = 1:重渲染必须先清 host 旧子节点(索引键复用下不清会越积越多)
-    expect(w.find('[data-test="trend-charts"]').element.children).toHaveLength(1)
+    expect(setOption).toHaveBeenCalledTimes(2)
     w.unmount()
   })
 
-  it('p90 全为 null 的 series 键只画 mean 一条线', async () => {
+  it('筛选变化后键集变化:当前键不在新键集 → 自动重置为第一个键并重画', async () => {
+    const w = mountTrend()
+    await flushPromises()
+    await w.findAllComponents({ name: 'ElSelect' })[2].vm.$emit('update:modelValue', KEY_TEMP)
+    await flushPromises()
+    setOption.mockClear()
+    await w.findAllComponents({ name: 'ElSelect' })[0].vm.$emit('update:modelValue', 10) // 场景B 只有 CPU
+    await flushPromises()
+    expect(api.getPerfTrend).toHaveBeenLastCalledWith(1, { script_id: 10 })
+    expect(w.findAllComponents({ name: 'ElSelect' })[2].props('modelValue')).toBe('CPU') // 自动重置
+    expect(setOption).toHaveBeenCalledTimes(1)
+    const opt = setOption.mock.calls[0][0] as any
+    expect(opt.title.text).toBe('CPU')
+    expect(opt.series.map((s: any) => s.name)).toEqual(['mean', 'p90'])
+    expect(opt.series[0].data).toEqual([30])
+    w.unmount()
+  })
+
+  it('p90 全为 null 的键只画 mean 一条线', async () => {
     api.getPerfTrend.mockResolvedValue({
       groups: [{
         script_id: 9, script_name: '场景A', device_serial: 'dev1',
@@ -387,6 +433,17 @@ describe('PerfTrendDialog', () => {
     w.unmount()
   })
 
+  it('组存在但全无 series 键:空态,不 init 图', async () => {
+    api.getPerfTrend.mockResolvedValue({
+      groups: [{ script_id: 9, script_name: '场景A', device_serial: 'dev1', points: [] }],
+    })
+    const w = mountTrend()
+    await flushPromises()
+    expect(setOption).not.toHaveBeenCalled()
+    expect(w.find('[data-test="trend-empty"]').exists()).toBe(true)
+    w.unmount()
+  })
+
   it('趋势拉取失败:error 提示 + 全局空态', async () => {
     api.getPerfTrend.mockRejectedValue(new Error('网络错误'))
     const errSpy = vi.spyOn(ElMessage, 'error').mockReturnValue({} as never)
@@ -395,6 +452,14 @@ describe('PerfTrendDialog', () => {
     expect(errSpy).toHaveBeenCalledWith('加载趋势数据失败:网络错误')
     expect(w.find('[data-test="trend-empty"]').exists()).toBe(true)
     expect(setOption).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('connect 联动经用户实测裁撤:趋势渲染后不调 echarts.connect(悬停只看当前子图)', async () => {
+    const w = mountTrend()
+    await flushPromises()
+    expect(setOption).toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
     w.unmount()
   })
 })

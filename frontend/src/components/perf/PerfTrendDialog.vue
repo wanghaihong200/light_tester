@@ -1,9 +1,10 @@
 <script setup lang="ts">
-// 计划14 Task11:性能趋势对话框(趋势仅 run 来源,聚合口径=perf_summary,同后端)
-// 筛选(脚本/设备,下拉数据=列表 run 记录去重,可空=全部)→ getPerfTrend →
-// 每 group(脚本@设备)一个区块,组内每 series 键一个子图:mean 实线 + p90 虚线,
-// X=点序(0..n-1),轴 label=finished_at(格式化到分);points/series 为空的组显示组级空态。
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+// 计划14 冒烟修复:趋势弹窗重构为「单指标下拉 + 单走势图」。
+// 旧实现每 group 每 series 键一张子图,真实数据(43 文件×列=97 键)→ 97 子图、弹窗 4.4 万像素,不可用。
+// 现在:脚本/设备筛选(可空=全部)→ getPerfTrend → 汇总键集(各 group points 的 series 键并集)
+// → 「指标」下拉(默认第一个键)→ 单张走势图:多 group 同键各出一组 mean/p90 系列(名前缀=脚本@设备),
+// 单组免前缀;mean 实线 + p90 虚线(p90 全 null 只画 mean);X=时间并轴(首现序),缺点 null 断线。
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
@@ -55,7 +56,7 @@ async function load() {
       ...(deviceSerial.value ? { device_serial: deviceSerial.value } : {}),
     })
     if (s !== seq) return
-    groups.value = res.groups ?? []
+    groups.value = res.groups ?? [] // 渲染统一由下方 [groups, metricKey] watcher 驱动
   } catch (e) {
     if (s !== seq) return
     groups.value = []
@@ -63,7 +64,6 @@ async function load() {
   } finally {
     if (s === seq) loading.value = false
   }
-  await renderCharts()
 }
 
 async function init() {
@@ -73,17 +73,38 @@ async function init() {
 onMounted(init)
 watch([scriptId, deviceSerial], () => { load() })
 
-// ── 图表:组内子图键 = 各点 series 键并集(顺序取首现);全部为空 → 组级空态 ──
-const wrap = ref<HTMLElement | null>(null)
-const instances: ReturnType<typeof echarts.init>[] = []
-
-function groupKeys(g: TrendGroup): string[] {
+// ── 指标键汇总:当前筛选覆盖的所有 group 的 points series 键并集去重(顺序取首现)──
+const metricKeys = computed<string[]>(() => {
   const keys: string[] = []
-  for (const p of g.points) {
-    for (const k of Object.keys(p.series ?? {})) if (!keys.includes(k)) keys.push(k)
+  for (const g of groups.value) {
+    for (const p of g.points) {
+      for (const k of Object.keys(p.series ?? {})) if (!keys.includes(k)) keys.push(k)
+    }
   }
   return keys
+})
+
+// 键 label:`<fileKey>::<列名>` → `fileKey · 列名`(同对比弹窗统计表口径)
+function metricLabel(key: string): string {
+  return key.split('::').join(' · ')
 }
+
+const metricKey = ref('')
+
+// groups 或指标变化统一走这里;键集变化需重置选中时只改选中值并先返回,
+// 由指标变化再次触发本 watcher 渲染,保证每次数据/切换恰好一次 setOption
+watch([groups, metricKey], () => {
+  const keys = metricKeys.value
+  if (keys.length && !keys.includes(metricKey.value)) {
+    metricKey.value = keys[0] ?? ''
+    return
+  }
+  renderCharts()
+})
+
+// ── 单走势图 ──
+const chartHost = ref<HTMLElement | null>(null)
+const instances: ReturnType<typeof echarts.init>[] = []
 
 function groupTitle(g: TrendGroup): string {
   return `${g.script_name || '未关联脚本'}@${g.device_serial}`
@@ -94,24 +115,41 @@ function fmtMinute(iso: string): string {
   return String(iso).slice(0, 16).replace('T', ' ')
 }
 
-function trendOption(points: TrendPoint[], key: string): Record<string, unknown> {
-  const mean = points.map((p) => p.series?.[key]?.mean ?? null)
-  const p90 = points.map((p) => p.series?.[key]?.p90 ?? null)
-  const series: Record<string, unknown>[] = [
-    { name: 'mean', type: 'line', showSymbol: true, lineStyle: { type: 'solid' }, data: mean },
-  ]
-  if (p90.some((v) => v != null)) { // p90 整键缺失(null)只画 mean
-    series.push({ name: 'p90', type: 'line', showSymbol: true, lineStyle: { type: 'dashed' }, data: p90 })
+function trendOption(allGroups: TrendGroup[], key: string): Record<string, unknown> {
+  // X 轴 = 各组点时间的有序并集(首现序);某组缺该时间点 → null 断线(echarts 跳点)
+  const labels: string[] = []
+  for (const g of allGroups) {
+    for (const p of g.points) {
+      const l = fmtMinute(p.finished_at)
+      if (!labels.includes(l)) labels.push(l)
+    }
+  }
+  const series: Record<string, unknown>[] = []
+  const multi = allGroups.length > 1
+  for (const g of allGroups) {
+    const byLabel = new Map<string, TrendPoint['series'][string]>()
+    for (const p of g.points) {
+      const v = p.series?.[key]
+      if (v) byLabel.set(fmtMinute(p.finished_at), v) // 同刻度取后点(截断到分理论碰撞防御)
+    }
+    if (byLabel.size === 0) continue // 该组整个没有此键(如其它脚本的独有指标)→ 不画全空线
+    const prefix = multi ? `${groupTitle(g)} · ` : ''
+    const mean = labels.map((l) => byLabel.get(l)?.mean ?? null)
+    series.push({ name: `${prefix}mean`, type: 'line', showSymbol: true, lineStyle: { type: 'solid' }, data: mean })
+    const p90 = labels.map((l) => byLabel.get(l)?.p90 ?? null)
+    if (p90.some((v) => v != null)) { // p90 整线缺失(null)只画 mean
+      series.push({ name: `${prefix}p90`, type: 'line', showSymbol: true, lineStyle: { type: 'dashed' }, data: p90 })
+    }
   }
   return {
-    title: { text: key, left: 10, top: 0, textStyle: { fontSize: 13 } },
+    title: { text: metricLabel(key), left: 10, top: 0, textStyle: { fontSize: 13 } },
     tooltip: { trigger: 'axis' },
     legend: { top: 2, right: 10 },
     grid: { left: 50, right: 20, top: 34, bottom: 40 },
     // 白底:echarts canvas 默认透明,叠在下层内容上=标题重影(冒烟反馈,同 perfOption)
     backgroundColor: '#fff',
-    xAxis: { type: 'category', name: '采集时间', boundaryGap: false, data: points.map((p) => fmtMinute(p.finished_at)) },
-    yAxis: { type: 'value', scale: true, name: key },
+    xAxis: { type: 'category', name: '采集时间', boundaryGap: false, data: labels },
+    yAxis: { type: 'value', scale: true, name: metricLabel(key) },
     series,
   }
 }
@@ -119,26 +157,13 @@ function trendOption(points: TrendPoint[], key: string): Record<string, unknown>
 async function renderCharts() {
   instances.forEach((c) => c.dispose())
   instances.length = 0
-  await nextTick() // 组块随 groups 渲染完成后才有容器可查
-  const hosts = wrap.value ? Array.from(wrap.value.querySelectorAll<HTMLDivElement>('[data-test="trend-charts"]')) : []
-  hosts.forEach((h) => {
-    const g = groups.value[Number(h.dataset.group)]
-    if (!g) return
-    // 先清旧子节点:dispose 只清 echarts 实例,追加的容器 div 本体会残留;
-    // 组块 v-for 用索引键、筛选变化时 host 被原位复用,不清会越积越多(PerfCharts 同款防护)
-    h.innerHTML = ''
-    for (const key of groupKeys(g)) {
-      const el = h.appendChild(document.createElement('div'))
-      // 动态建出的节点不带 scoped data-v,尺寸写内联(依赖 scoped 样式会拿不到高度)
-      el.style.width = '100%'
-      el.style.height = '220px'
-      el.style.marginBottom = '8px'
-      const chart = echarts.init(el)
-      chart.setOption(trendOption(g.points, key))
-      instances.push(chart)
-    }
-  })
-  // connect 联动经用户实测裁撤(悬停只看当前子图,跨子图 tooltip/十字同步反而是干扰)
+  await nextTick() // v-show 容器随键集出现后再 init
+  const host = chartHost.value
+  if (!host || !metricKey.value) return // 无键:走 el-empty 空态,不 init
+  const chart = echarts.init(host)
+  chart.setOption(trendOption(groups.value, metricKey.value))
+  instances.push(chart)
+  // connect 联动经用户实测裁撤(悬停只看当前图,跨图 tooltip/十字同步反而是干扰)
 }
 
 function onResize() {
@@ -163,15 +188,21 @@ onUnmounted(() => {
         <el-option label="全部设备" value="" />
         <el-option v-for="d in deviceOptions" :key="d" :label="d" :value="d" />
       </el-select>
+      <el-select
+        v-model="metricKey" size="small" data-test="metric-select" class="filter-select metric-select"
+        placeholder="指标" :disabled="metricKeys.length === 0"
+      >
+        <el-option v-for="k in metricKeys" :key="k" :label="metricLabel(k)" :value="k" />
+      </el-select>
     </div>
 
-    <div ref="wrap" v-loading="loading" class="trend-body">
-      <div v-for="(g, gi) in groups" :key="gi" class="trend-group" data-test="trend-group">
-        <h4 class="group-title" data-test="trend-group-title">{{ groupTitle(g) }}</h4>
-        <div v-if="groupKeys(g).length" class="charts" data-test="trend-charts" :data-group="gi" />
-        <p v-else class="empty" data-test="group-empty">该分组暂无趋势数据(采集中断或统计缺失)</p>
-      </div>
-      <el-empty v-if="!loading && groups.length === 0" description="暂无趋势数据" data-test="trend-empty" />
+    <div v-loading="loading" class="trend-body">
+      <div v-show="metricKeys.length > 0" ref="chartHost" class="charts" data-test="trend-charts" />
+      <el-empty
+        v-if="!loading && metricKeys.length === 0"
+        data-test="trend-empty"
+        :description="groups.length ? '当前筛选下暂无趋势数据(采集中断或统计缺失)' : '暂无趋势数据'"
+      />
     </div>
   </el-dialog>
 </template>
@@ -185,16 +216,14 @@ onUnmounted(() => {
 .filter-select {
   width: 200px;
 }
+.metric-select {
+  width: 260px; /* 键 label 含 fileKey·列名,比脚本/设备名长 */
+}
 .trend-body {
   min-height: 160px;
 }
-.trend-group {
-  margin-bottom: 14px;
-}
-.group-title {
-  margin: 0 0 6px;
-}
-.empty {
-  color: var(--el-text-color-secondary);
+.charts {
+  width: 100%;
+  height: 320px;
 }
 </style>
