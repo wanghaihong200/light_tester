@@ -9,20 +9,17 @@
   角色不足 403、admin 直通 owner);
 - _mk_run 直插 AppRun 前先建 AppScript(app_runs.script_id 是真 FK,同 test_perf_models 模式);
 - 清理 fixture 命名 _clean_app_tables(同名 _clean_tables 会遮蔽 conftest 的,projects/users
-  将不再被清理,同 test_perf_models.py 注),顺带清 runs/*/perf 与 perf_records/* 残留 CSV
-  (TRUNCATE 复位自增后 id 复用,残留文件会污染 series 断言)。
+  将不再被清理,同 test_perf_models.py 注),只清 DB 行;runs/*/perf 与 perf_records/* 残留
+  CSV 交 conftest._isolate_app_data(2026-09-10 事故后测试不再清真实 data/app)。
 - 趋势用例 Task4 brief 直插 AppRun(script_id=9, …)——app_runs.script_id 是真 FK,须先建
   AppScript 用真实 id(brief 稿的裸 9 入库即 FK 违例),查询串同步用该 id。
 """
-import shutil
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 from sqlalchemy import text
 
 from app import solopi_perf
-from app.config import settings
 from app.database import SessionLocal
 from app.models import AppRun, AppScript, PerfRecord
 
@@ -31,6 +28,8 @@ from tests.test_app_scripts_api import _admin_headers, _auth, _mk_project
 
 @pytest.fixture(autouse=True)
 def _clean_app_tables():
+    """DB 段保留(TRUNCATE 复位自增);落盘清理交 conftest._isolate_app_data
+    (2026-09-10 事故后测试不再清真实 data/app)。"""
     yield
     s = SessionLocal()
     try:
@@ -41,12 +40,6 @@ def _clean_app_tables():
         s.commit()
     finally:
         s.close()
-    data = Path(settings.app_data_dir)
-    for d in (data / "runs").glob("*/perf"):
-        shutil.rmtree(d, ignore_errors=True)
-    for d in (data / "perf_records").glob("*"):
-        if d.is_dir():
-            shutil.rmtree(d, ignore_errors=True)
 
 
 _SCRIPT_CASE = {

@@ -12,16 +12,13 @@
   不足以锁 Interfaces 节给前端 Task 10 的驼峰→蛇形映射契约;
 - PerfRecordOut 既有 schema 无 source_ref 字段,按 brief 断言在 schemas.py 补可选字段。
 """
-import shutil
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 from sqlalchemy import text
 
 from app import solopi_perf
 from app.app_automation import solopi_cli
-from app.config import settings
 from app.database import SessionLocal
 from app.models import PerfRecord
 
@@ -31,7 +28,8 @@ from tests.test_app_scripts_api import _admin_headers, _mk_project
 @pytest.fixture(autouse=True)
 def _clean_app_tables():
     """本文件写 perf_records 行;命名避开 conftest._clean_tables(同名会遮蔽,projects/users
-    将不再被清理,同 tests/test_perf_records_api.py 注),顺带清 perf_records 落盘残留。"""
+    将不再被清理,同 tests/test_perf_records_api.py 注)。落盘清理交
+    conftest._isolate_app_data(2026-09-10 事故后测试不再清真实 data/app)。"""
     yield
     s = SessionLocal()
     try:
@@ -42,17 +40,25 @@ def _clean_app_tables():
         s.commit()
     finally:
         s.close()
-    for d in (Path(settings.app_data_dir) / "perf_records").glob("*"):
-        if d.is_dir():
-            shutil.rmtree(d, ignore_errors=True)
+
+
+def _preview_dict(name: str, text: str, *, truncated: bool = False) -> dict:
+    """真机 perf-history-get 的 files[].preview 形状(2026-09-10 冒烟实锤):dict,
+    CSV 文本在 text 键,另带 charset/fileName/modifiedAt/pathAvailable/relativePath/
+    sizeBytes 与文件级 truncated 布尔。"""
+    return {"charset": "GBK", "fileName": name, "modifiedAt": 1725868800000,
+            "pathAvailable": True, "relativePath": name, "sizeBytes": 64,
+            "text": text, "truncated": truncated}
 
 
 _HISTORY_GET = {
     "success": True, "kind": "performance", "id": "performance-abc",
     "startTime": 1725868800000, "endTime": 1725868860000,
     "metrics": ["CPU", "FPS"], "filesTruncated": False,
-    "files": [{"fileName": "CPU_x_abc_0_0.csv", "preview": "ts,v\n0,1\n1,2\n"},
-              {"fileName": "FPS_y_abc_1_0.csv", "preview": "ts,v\n0,30\n1,29\n"}],
+    "files": [{"fileName": "CPU_x_abc_0_0.csv",
+               "preview": _preview_dict("CPU_x_abc_0_0.csv", "ts,v\n0,1\n1,2\n")},
+              {"fileName": "FPS_y_abc_1_0.csv",
+               "preview": _preview_dict("FPS_y_abc_1_0.csv", "ts,v\n0,30\n1,29\n")}],
 }
 
 
@@ -127,6 +133,24 @@ def test_import_truncated_marks_incomplete(client, db_session, stub_history, mon
     r = client.post(f"/api/projects/{pid}/perf-records/import",
                     json={"serial": "dev1", "history_id": "performance-abc"}, headers=h)
     assert r.status_code == 201, r.text
+    assert r.json()["data_complete"] is False
+
+
+def test_import_file_truncated_marks_incomplete(client, db_session, stub_history, monkeypatch):
+    """文件级截断同样置 data_complete=False(2026-09-10 冒烟:顶层 filesTruncated 之外,
+    真机每个文件还带自己的 preview.truncated 布尔,router 须一并感知)。"""
+    h = _admin_headers(client, db_session)
+    pid = _mk_project(client, h)
+    truncated_file = dict(_HISTORY_GET["files"][0],
+                          preview=_preview_dict("CPU_x_abc_0_0.csv", "ts,v\n0,1\n1,2\n",
+                                                truncated=True))
+    monkeypatch.setattr(
+        solopi_cli, "perf_history_get",
+        lambda serial, history_id: {**_HISTORY_GET,
+                                    "files": [truncated_file, _HISTORY_GET["files"][1]]})
+    r = client.post(f"/api/projects/{pid}/perf-records/import",
+                    json={"serial": "dev1", "history_id": "performance-abc"}, headers=h)
+    assert r.status_code == 201, r.text  # 截断文件照样落盘,导入成功
     assert r.json()["data_complete"] is False
 
 

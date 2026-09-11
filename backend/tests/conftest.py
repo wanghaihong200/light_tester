@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.main import create_app
 from app.models import (
@@ -28,6 +29,17 @@ def _create_tables():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_data(tmp_path_factory):
+    """所有测试的 app_data_dir 指向临时目录——真实 data/app 永不被测试读写/清理
+    (2026-09-10 事故:并行 pytest 的清理 fixture 删光用户冒烟数据 runs/*/perf)。
+    settings 为单例,直接改属性并在用例后还原,防止污染其他域测试。"""
+    real = settings.app_data_dir
+    settings.app_data_dir = tmp_path_factory.mktemp("app_data")
+    yield
+    settings.app_data_dir = real
 
 
 @pytest.fixture(autouse=True)

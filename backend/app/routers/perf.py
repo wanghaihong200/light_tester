@@ -181,7 +181,8 @@ def device_perf_history(serial: str, limit: int = Query(50, ge=1, le=500),
 def import_history(project_id: int, body: ImportBody, db: Session = Depends(get_db),
                    current: User = Depends(get_current_user)):
     """把设备端一条历史导入为 import 来源记录:CLI 详情→preview 落盘→perf-analyze 统计。
-    重复导入(同 source_ref)→409;CLI 失败→400;截断(filesTruncated)→data_complete=False。"""
+    重复导入(同 source_ref)→409;CLI 失败→400;顶层 filesTruncated 或任一文件级
+    preview.truncated →data_complete=False(2026-09-10 冒烟)。"""
     ensure_project_access(db, current, project_id, "editor")
     dup = db.query(PerfRecord).filter(PerfRecord.source == "import",
                                       PerfRecord.source_ref == body.history_id).first()
@@ -192,11 +193,15 @@ def import_history(project_id: int, body: ImportBody, db: Session = Depends(get_
     except CliError as e:
         raise HTTPException(400, f"拉取历史详情失败: {e.message}")
     files = detail.get("files") or []
+    # 文件级截断(2026-09-10 真机形状:除顶层 filesTruncated 外,每个文件还带自己的
+    # preview.truncated 布尔)——任一为真即 data_complete=False(文件照落盘,只标不完整)
+    file_truncated = any(isinstance(f.get("preview"), dict) and f["preview"].get("truncated")
+                         for f in files)
     rec = PerfRecord(project_id=project_id, source="import",
                      name=body.name or f"设备导入 {body.history_id[:20]}",
                      device_serial=body.serial, perf_items=detail.get("metrics") or [],
                      source_ref=body.history_id,
-                     data_complete=not bool(detail.get("filesTruncated")),
+                     data_complete=not bool(detail.get("filesTruncated")) and not file_truncated,
                      started_at=_ms_to_dt(detail.get("startTime")),
                      finished_at=_ms_to_dt(detail.get("endTime")))
     db.add(rec)

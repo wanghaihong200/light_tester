@@ -53,19 +53,24 @@ def register_run_perf_record(run_id: int) -> None:
 
 def save_imported_csvs(record_id: int, files: list[dict]) -> int:
     """把 perf-history-get 的 files[].preview 逐文件写进 import 落盘目录(utf-8;
-    read_perf_csvs 读侧 utf-8-sig→gbk 兼容)。preview 为空/缺省的文件跳过,返回落盘数。"""
+    read_perf_csvs 读侧 utf-8-sig→gbk 兼容)。preview 为空/缺省的文件跳过,返回落盘数。
+    真机 preview 是 dict({charset, fileName, modifiedAt, pathAvailable, relativePath,
+    sizeBytes, text, truncated}),CSV 文本在 text 键(2026-09-10 冒烟:当字符串
+    write_text 报 "data must be str, not dict");字符串 preview(旧桩)兼容。
+    文件级 preview.truncated 不影响落盘(截断感知在 router,置 data_complete=False)。"""
     out_dir = record_perf_dir(record_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     n = 0
     for f in files or []:
         if not isinstance(f, dict):  # Task5 顺手硬化:CLI 载荷异常项直接跳过(防 AttributeError)
             continue
-        preview = f.get("preview") or ""
+        preview = f.get("preview")
+        text = preview.get("text") if isinstance(preview, dict) else preview
         name = str(f.get("fileName") or "").replace("/", "_").replace("\\", "_")
-        if not preview or not name:
+        if not text or not name:
             continue
         if name in ("", ".", ".."):  # Task5 顺手硬化:归一后仍可能剩路径穿越名,拒落盘
             continue
-        (out_dir / name).write_text(preview, encoding="utf-8")
+        (out_dir / name).write_text(text, encoding="utf-8")
         n += 1
     return n
