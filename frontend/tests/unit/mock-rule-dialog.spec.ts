@@ -133,6 +133,18 @@ describe('RuleDialog', () => {
     w.unmount()
   })
 
+  it('body 作用域可发现性:key 占位符提示 JSONPath 填法、作用域显示中文标签、条件区带说明(后端 body key 本就是 JSONPath)', async () => {
+    const w = mountDialog(mkRule({ conditions: [{ scope: 'body', key: '$.id', match: 'eq', value: '1' }] }))
+    await flushPromises()
+    // body 行 key 占位符 = JSONPath 示例;非 body 作用域仍为「参数名」(header 行既有断言覆盖)
+    expect(condRows()[0].querySelector<HTMLInputElement>('input[placeholder^="JSONPath"]')!.value).toBe('$.id')
+    // 作用域下拉选中项显示中文(请求体),不再裸英文 body
+    expect(condRows()[0].textContent).toContain('请求体')
+    // 条件区说明文案教用户:body 的 key 填 JSONPath,eq/regex 作用于定位到的值
+    expect(w.text()).toContain('JSONPath')
+    w.unmount()
+  })
+
   it('轻校验:path_template 为空时拦截保存,不调 API', async () => {
     const w = mountDialog(null)
     await flushPromises()

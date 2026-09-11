@@ -11,8 +11,17 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'saved', r: MockRule): void }
 
 // 与后端 schemas.MockRuleSave 对齐:7 方法;条件 scope 三选/match 二选
 const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'] as const
-const SCOPES: MockConditionScope[] = ['query', 'header', 'body']
+const SCOPES: { value: MockConditionScope; label: string }[] = [
+  { value: 'query', label: '查询参数' },
+  { value: 'header', label: '请求头' },
+  { value: 'body', label: '请求体' },
+]
 const MATCH_MODES: MockMatchMode[] = ['eq', 'regex']
+
+// body 作用域的 key 是 JSONPath(matching.py 按其定位 JSON 节点)——占位符按作用域区分,否则无人知道填法
+function keyPlaceholder(c: MockCondition): string {
+  return c.scope === 'body' ? 'JSONPath 表达式,如 $.user.id' : '参数名'
+}
 
 const method = ref('GET')
 const pathTemplate = ref('')
@@ -121,16 +130,19 @@ async function save() {
         <div class="conditions">
           <div v-for="(c, i) in conditions" :key="i" class="cond-row" data-test="cond-row">
             <el-select v-model="c.scope" class="cond-scope">
-              <el-option v-for="s in SCOPES" :key="s" :label="s" :value="s" />
+              <el-option v-for="s in SCOPES" :key="s.value" :label="s.label" :value="s.value" />
             </el-select>
             <el-select v-model="c.match" class="cond-match">
               <el-option v-for="m in MATCH_MODES" :key="m" :label="m" :value="m" />
             </el-select>
-            <el-input v-model="c.key" placeholder="参数名" class="cond-key" />
+            <el-input v-model="c.key" :placeholder="keyPlaceholder(c)" class="cond-key" />
             <el-input v-model="c.value" placeholder="匹配值" class="cond-value" />
             <el-button link type="danger" data-test="cond-remove" @click="removeCondition(i)">删除</el-button>
           </div>
-          <el-button size="small" data-test="cond-add" @click="addCondition">+ 添加条件</el-button>
+          <div>
+            <el-button size="small" data-test="cond-add" @click="addCondition">+ 添加条件</el-button>
+            <span class="tip">请求体的参数名填 JSONPath(如 $.data.list[0].id),eq/regex 作用于定位到的值</span>
+          </div>
         </div>
       </el-form-item>
       <el-form-item label="响应状态码">
