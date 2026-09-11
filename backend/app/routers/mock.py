@@ -37,6 +37,17 @@ def _get_instance(db: Session, current: User, instance_id: int, min_role: str) -
     return inst
 
 
+def _validate_passthrough(enabled: bool, url: str | None) -> tuple[bool, str | None]:
+    """透传字段共用校验(create/update 同源,防漂移):
+    strip 后空串落 None;开启透传必须非空;非空须 http(s):// 开头。"""
+    url = (url or "").strip() or None
+    if enabled and not url:
+        raise HTTPException(400, "开启透传必须填写上游 base_url")
+    if url and not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "上游 base_url 须以 http:// 或 https:// 开头")
+    return enabled, url
+
+
 def _ensure_port_free(db: Session, port: int, exclude_id: int | None = None) -> None:
     """端口预检:库内查重(全表含软删行=端口预留)+ bind 试绑 → 400。"""
     q = db.query(MockInstance).filter(MockInstance.port == port)
@@ -56,6 +67,8 @@ def create_instance(project_id: int, payload: MockInstanceSave, db: Session = De
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "实例名称不能为空")
+    enabled, upstream = _validate_passthrough(payload.passthrough_enabled,
+                                              payload.upstream_base_url)
     port = payload.port
     if port is None:
         try:
@@ -67,6 +80,7 @@ def create_instance(project_id: int, payload: MockInstanceSave, db: Session = De
     inst = MockInstance(project_id=project_id, name=name, description=payload.description,
                         port=port, token=uuid4().hex, cors_enabled=payload.cors_enabled,
                         default_status=payload.default_status, default_body=payload.default_body,
+                        passthrough_enabled=enabled, upstream_base_url=upstream,
                         desired="stopped", status="stopped",
                         created_by=current.id, updated_by=current.id)
     db.add(inst)
@@ -113,14 +127,10 @@ def update_instance(instance_id: int, payload: MockInstancePatch, db: Session = 
     if payload.passthrough_enabled is not None or payload.upstream_base_url is not None:
         new_enabled = (payload.passthrough_enabled if payload.passthrough_enabled is not None
                        else inst.passthrough_enabled)
-        new_url = (payload.upstream_base_url.strip() if payload.upstream_base_url is not None
-                   else (inst.upstream_base_url or "").strip())
-        if new_enabled and not new_url:
-            raise HTTPException(400, "开启透传必须填写上游 base_url")
-        if new_url and not new_url.startswith(("http://", "https://")):
-            raise HTTPException(400, "上游 base_url 须以 http:// 或 https:// 开头")
-        inst.passthrough_enabled = new_enabled
-        inst.upstream_base_url = new_url or None
+        new_url = (payload.upstream_base_url if payload.upstream_base_url is not None
+                   else inst.upstream_base_url)
+        inst.passthrough_enabled, inst.upstream_base_url = _validate_passthrough(new_enabled,
+                                                                                 new_url)
     inst.updated_by = current.id
     db.commit()
     db.refresh(inst)

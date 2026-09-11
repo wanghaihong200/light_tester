@@ -149,6 +149,44 @@ def test_start_stop_endpoints_via_supervisor_mock(client, db_session, make_user)
         assert r2.status_code == 200 and r2.json()["status"] == "stopped"
 
 
+def test_create_instance_passthrough_fields(client, db_session, make_user):
+    admin = make_user(db_session, "adm20", is_admin=True)
+    p = _project_with_member(db_session, "p-inst-20", admin)
+    h = _login(client, admin.username)
+    r = client.post(f"/api/projects/{p.id}/mock-instances",
+                    json={"name": "x", "passthrough_enabled": True,
+                          "upstream_base_url": "http://real:8080"}, headers=h)
+    assert r.status_code == 201
+    assert r.json()["passthrough_enabled"] is True
+    assert r.json()["upstream_base_url"] == "http://real:8080"
+
+
+def test_create_instance_passthrough_requires_url(client, db_session, make_user):
+    """create 与 update 共用同一校验语义:开启必须非空 http(s) URL。"""
+    admin = make_user(db_session, "adm21", is_admin=True)
+    p = _project_with_member(db_session, "p-inst-21", admin)
+    h = _login(client, admin.username)
+    r1 = client.post(f"/api/projects/{p.id}/mock-instances",
+                     json={"name": "x", "passthrough_enabled": True}, headers=h)
+    assert r1.status_code == 400
+    assert r1.json()["detail"] == "开启透传必须填写上游 base_url"
+    r2 = client.post(f"/api/projects/{p.id}/mock-instances",
+                     json={"name": "x", "passthrough_enabled": True,
+                           "upstream_base_url": "ftp://x"}, headers=h)
+    assert r2.status_code == 400
+    assert r2.json()["detail"] == "上游 base_url 须以 http:// 或 https:// 开头"
+
+
+def test_create_instance_without_passthrough_defaults(client, db_session, make_user):
+    admin = make_user(db_session, "adm22", is_admin=True)
+    p = _project_with_member(db_session, "p-inst-22", admin)
+    h = _login(client, admin.username)
+    r = client.post(f"/api/projects/{p.id}/mock-instances", json={"name": "x"}, headers=h)
+    assert r.status_code == 201
+    assert r.json()["passthrough_enabled"] is False
+    assert r.json()["upstream_base_url"] is None
+
+
 def test_update_instance_passthrough_fields(client, db_session, make_user):
     admin = make_user(db_session, "adm7", is_admin=True)
     p = _project_with_member(db_session, "p-inst-8", admin)
