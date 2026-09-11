@@ -30,7 +30,12 @@ async function render() {
   if (!host.value) return
   host.value.innerHTML = ''
   for (const opt of opts) {
-    const chart = echarts.init(host.value.appendChild(document.createElement('div')))
+    // 子 div 为命令式创建,不吃 scoped CSS(无 data-v 标记)——高度必须内联,否则 0 高画布=全空白图
+    const el = document.createElement('div')
+    el.style.width = '100%'
+    el.style.height = '240px'
+    el.style.marginBottom = '8px'
+    const chart = echarts.init(host.value.appendChild(el))
     chart.setOption(opt)
     instances.push(chart)
   }
@@ -75,5 +80,6 @@ function exportPng() {
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
 .charts > div { width: 100%; height: 240px; margin-bottom: 8px; }
+/* 高度以内联样式为准(scoped 选择器匹配不到命令式创建的子 div),此规则仅作兜底 */
 .empty { color: var(--el-text-color-secondary); }
 </style>

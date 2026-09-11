@@ -78,4 +78,19 @@ describe('PerfCharts', () => {
     expect(w.text()).toContain('暂无性能数据')
     w.unmount()
   })
+
+  it('命令式创建的子 div 必须带内联高度(scoped CSS 匹配不到,0 高画布=空白图)', async () => {
+    const w = mountCharts({ series, summary: null, showRefs: false })
+    await nextTick()
+    await nextTick()
+    const host = w.find('.charts')
+    expect(host.exists()).toBe(true)
+    const subs = host.element.querySelectorAll(':scope > div')
+    expect(subs.length).toBeGreaterThan(0)
+    subs.forEach((el) => {
+      expect(el.style.height).toBe('240px')
+      expect(el.style.width).toBe('100%')
+    })
+    w.unmount()
+  })
 })
