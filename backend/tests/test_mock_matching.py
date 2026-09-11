@@ -1,13 +1,8 @@
-"""匹配引擎:路径模板/条件 AND/JSONPath/正则/首条命中。"""
+"""匹配引擎:路径模板/条件 AND/JSONPath/正则/组序→组内序首条命中。"""
 from types import SimpleNamespace as NS
 
-from app.mock_service.matching import (
-    match_path, pick_rule, rule_matches, validate_path_template,
-)
-
-
-def _rule(method="GET", path="/users/{id}", conditions=None, enabled=True):
-    return NS(method=method, path_template=path, conditions=conditions or [], enabled=enabled)
+from app.mock_service import matching
+from app.mock_service.matching import match_path, validate_path_template
 
 
 def test_validate_path_template_errors():
@@ -27,57 +22,59 @@ def test_match_path_exact_and_template():
     assert match_path("/users", "/users/") == {}                # 尾斜杠归一
 
 
-def test_method_and_enabled_gate():
-    r = _rule(method="POST")
-    assert rule_matches(r, "GET", "/users/1", {}, {}, b"") is None
-    r2 = _rule(enabled=False)
-    assert rule_matches(r2, "GET", "/users/1", {}, {}, b"") is None
+def _group(method="GET", path="/a/{id}", enabled=True, **kw):
+    return NS(method=method, path_template=path, enabled=enabled, **kw)
 
 
-def test_query_condition_eq_and_regex():
-    r_eq = _rule(conditions=[{"scope": "query", "key": "version", "match": "eq", "value": "2"}])
-    assert rule_matches(r_eq, "GET", "/users/1", {"version": ["2"]}, {}, b"") == {"id": "1"}
-    assert rule_matches(r_eq, "GET", "/users/1", {"version": ["1"]}, {}, b"") is None
-    r_re = _rule(conditions=[{"scope": "query", "key": "version", "match": "regex", "value": "^v[0-9]+$"}])
-    assert rule_matches(r_re, "GET", "/users/1", {"version": ["v2"]}, {}, b"") is not None
-    assert rule_matches(r_re, "GET", "/users/1", {"version": ["x2"]}, {}, b"") is None
-    r_bad_re = _rule(conditions=[{"scope": "query", "key": "v", "match": "regex", "value": "("}])
-    assert rule_matches(r_bad_re, "GET", "/users/1", {"v": ["x"]}, {}, b"") is None  # 非法正则不抛
+def _rule(conditions=None, enabled=True, **kw):
+    return NS(conditions=conditions or [], enabled=enabled, **kw)
 
 
-def test_header_condition_case_insensitive_key():
-    r = _rule(conditions=[{"scope": "header", "key": "X-Version", "match": "eq", "value": "2"}])
-    assert rule_matches(r, "GET", "/users/1", {}, {"x-version": ["2"]}, b"") is not None
+def _pick(groups_pair, method="GET", path="/a/1", query=None, headers=None, body=b""):
+    return matching.pick_rule(groups_pair, method, path, query or {}, headers or {}, body)
 
 
-def test_body_condition_jsonpath_typed_and_invalid_json():
-    r_num = _rule(method="POST", path="/x", conditions=[{"scope": "body", "key": "$.user.id", "match": "eq", "value": "123"}])
-    body = b'{"user": {"id": 123}}'
-    assert rule_matches(r_num, "POST", "/x", {}, {}, body) is not None
-    assert rule_matches(r_num, "POST", "/x", {}, {}, b'{"user": {"id": 124}}') is None
-    assert rule_matches(r_num, "POST", "/x", {}, {}, b"not-json") is None   # 非法 JSON 跳过
-    r_str = _rule(path="/x", conditions=[{"scope": "body", "key": "$.name", "match": "eq", "value": "王"}])
-    assert rule_matches(r_str, "GET", "/x", {}, {}, '{"name": "王"}'.encode()) is not None
-    r_bool = _rule(path="/x", conditions=[{"scope": "body", "key": "$.flag", "match": "eq", "value": "true"}])
-    assert rule_matches(r_bool, "GET", "/x", {}, {}, b'{"flag": true}') is not None
-    assert rule_matches(r_bool, "GET", "/x", {}, {}, b'{"flag": 1}') is None  # 严格类型:1 ≠ true
-    r_bool_num = _rule(path="/x", conditions=[{"scope": "body", "key": "$.flag", "match": "eq", "value": "1"}])
-    assert rule_matches(r_bool_num, "GET", "/x", {}, {}, b'{"flag": true}') is None  # 严格类型:true ≠ 1
-    r_missing = _rule(path="/x", conditions=[{"scope": "body", "key": "$.nope", "match": "eq", "value": "1"}])
-    assert rule_matches(r_missing, "GET", "/x", {}, {}, b'{"a": 1}') is None  # 无节点不成立
-    r_badpath = _rule(path="/x", conditions=[{"scope": "body", "key": "$$bad", "match": "eq", "value": "1"}])
-    assert rule_matches(r_badpath, "GET", "/x", {}, {}, b'{"a": 1}') is None  # 非法 JSONPath 不抛
+def test_pick_rule_group_order_then_rule_order():
+    """组序→组内序:前组命中即短路,后组同路由也不看;组内按序首条命中。"""
+    g1, g2 = _group(), _group()
+    r12, r11 = _rule(), _rule()          # g1 内:规则2 排前
+    hit = _pick([(g1, [r12, r11]), (g2, [_rule()])])
+    assert hit == (r12, g1, {"id": "1"})
 
 
-def test_conditions_are_and_and_pick_first_match():
-    r1 = _rule(conditions=[{"scope": "query", "key": "a", "match": "eq", "value": "1"},
-                           {"scope": "query", "key": "b", "match": "eq", "value": "2"}])
-    assert rule_matches(r1, "GET", "/users/1", {"a": ["1"]}, {}, b"") is None      # 缺 b → 不命中
-    r_late = _rule(path="/users/{id}")
-    r_first = _rule(path="/users/special")
-    got, vars_ = pick_rule([r_first, r_late], "GET", "/users/special", {}, {}, b"")
-    assert got is r_first and vars_ == {}
-    got2, _ = pick_rule([r_first, r_late], "GET", "/users/42", {}, {}, b"")
-    assert got2 is r_late
-    got3, _ = pick_rule([], "GET", "/x", {}, {}, b"")
-    assert got3 is None
+def test_pick_rule_disabled_group_skipped_whole():
+    """组级停用=整组跳过,组内规则再能中也不算。"""
+    g1, g2 = _group(enabled=False), _group(path="/b")
+    r1, r2 = _rule(), _rule()
+    rule, group, _ = _pick([(g1, [r1]), (g2, [r2])], path="/b")
+    assert rule is r2 and group is g2
+
+
+def test_pick_rule_disabled_rule_skipped_in_group():
+    """组内停用规则跳过,下一条仍可命中。"""
+    g = _group()
+    r1, r2 = _rule(enabled=False), _rule()
+    rule, group, _ = _pick([(g, [r1, r2])])
+    assert rule is r2 and group is g
+
+
+def test_pick_rule_conditions_gate_within_group():
+    """同组条件变体:条件不满足顺延下一条,全不满足=组未命中。"""
+    g = _group()
+    conds = [{"scope": "query", "key": "v", "match": "eq", "value": "2"}]
+    r_v2, r_any = _rule(conds), _rule()
+    rule, _, _ = _pick([(g, [r_v2, r_any])], path="/a/1", query={"v": ["1"]})
+    assert rule is r_any                  # 第一条条件不过,落到组内第二条
+    rule, _, _ = _pick([(g, [r_v2])], path="/a/1", query={"v": ["2"]})
+    assert rule is r_v2
+
+
+def test_pick_rule_none_when_all_groups_miss():
+    rule, group, path_vars = _pick([(_group(), [_rule()])], path="/zzz")
+    assert rule is None and group is None and path_vars == {}
+
+
+def test_route_matches():
+    assert matching.route_matches(_group(), "GET", "/a/9") is True
+    assert matching.route_matches(_group(), "POST", "/a/9") is False
+    assert matching.route_matches(_group(), "GET", "/b/9") is False

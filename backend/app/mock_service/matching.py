@@ -86,23 +86,23 @@ def _cond_ok(cond: dict, query, headers, body: bytes) -> bool:
     return any(_value_matches(mode, value, f.value) for f in found)
 
 
-def rule_matches(rule, method: str, path: str, query, headers, body: bytes) -> dict[str, str] | None:
-    if not rule.enabled:
-        return None
-    if rule.method.upper() != method.upper():
-        return None
-    captured = match_path(rule.path_template, path)
-    if captured is None:
-        return None
-    for cond in rule.conditions or []:
-        if not _cond_ok(cond, query, headers, body):
-            return None
-    return captured
+def route_matches(group, method: str, path: str) -> bool:
+    """组的路由(method+路径模板)是否匹配实际请求;方法忽略大小写。"""
+    return group.method.upper() == method.upper() and match_path(group.path_template, path) is not None
 
 
-def pick_rule(rules, method: str, path: str, query, headers, body: bytes):
-    for rule in rules:
-        captured = rule_matches(rule, method, path, query, headers, body)
-        if captured is not None:
-            return rule, captured
-    return None, {}
+def pick_rule(groups, method: str, path: str, query, headers, body: bytes):
+    """层级匹配(ADR-0011):按组序遍历 → 组级停用整组跳过 → 组内按序,首条命中即生效。
+    groups 形如 [(group, [rules...]), ...],组间/组内均已有序且不含软删行。"""
+    for group, rules in groups:
+        if not group.enabled:
+            continue
+        captured = match_path(group.path_template, path)
+        if captured is None or group.method.upper() != method.upper():
+            continue
+        for rule in rules:
+            if not rule.enabled:
+                continue
+            if all(_cond_ok(c, query, headers, body) for c in rule.conditions or []):
+                return rule, group, captured
+    return None, None, {}
