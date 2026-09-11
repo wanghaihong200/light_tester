@@ -145,6 +145,30 @@ def test_update_group_enabled_and_description_patch(client, db_session, make_use
     assert cleared.json()["enabled"] is False                # 未提及字段不被重置
 
 
+def test_update_group_null_and_empty_route_rejected(client, db_session, make_user):
+    """评审修复:update_group 判空——method/path_template 显式 null 或空串一律 400
+    (不得 500 穿透,也不得落脏数据),description 显式 null=清空语义保持。"""
+    admin = make_user(db_session, "adm39", is_admin=True)
+    inst = _project_inst(db_session, "p-group-10", 19072)
+    h = _login(client, admin.username)
+    g = _mk_group(client, h, inst.id, method="GET", path="/a", description="keep")
+
+    url = f"/api/mock-rule-groups/{g['id']}"
+    assert client.put(url, json={"method": None}, headers=h).status_code == 400
+    assert client.put(url, json={"path_template": None}, headers=h).status_code == 400
+    assert client.put(url, json={"method": ""}, headers=h).status_code == 400
+    assert client.put(url, json={"path_template": ""}, headers=h).status_code == 400
+    assert client.put(url, json={"method": "  "}, headers=h).status_code == 400
+    same = client.get(f"/api/mock-instances/{inst.id}/rule-groups", headers=h).json()[0]
+    assert same["method"] == "GET" and same["path_template"] == "/a"   # 拒绝后无脏写
+    assert same["description"] == "keep"
+
+    kept = client.put(url, json={"enabled": None}, headers=h)          # enabled null=未提供
+    assert kept.status_code == 200 and kept.json()["enabled"] is True
+    cleared = client.put(url, json={"description": None}, headers=h)   # 仅 description 可清空
+    assert cleared.status_code == 200 and cleared.json()["description"] is None
+
+
 def test_delete_group_soft_deletes_rules(client, db_session, make_user):
     """显式删组=组连同组内规则一并软删(空组保留原则只约束"逐条删规则")。"""
     admin = make_user(db_session, "adm35", is_admin=True)

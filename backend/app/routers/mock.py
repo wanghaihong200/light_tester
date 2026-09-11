@@ -258,14 +258,24 @@ def update_group(group_id: int, payload: MockRuleGroupPatch, db: Session = Depen
     g = _get_group(db, current, group_id, "editor")
     changed = payload.model_dump(exclude_unset=True)  # 部分PATCH:description 显式传 null=清空
     if "method" in changed or "path_template" in changed:
-        _validate_route(db, g.instance_id,
-                        (changed.get("method") or g.method).strip().upper(),
-                        changed.get("path_template") or g.path_template, exclude_id=g.id)
+        # 判空针对"实际将落库"的合并值,校验/落库同一判定:method/path_template 不接受
+        # 显式 null(无清空语义)也不接受空串(死路由)→ 400,不得穿透成 500 或脏写
+        method = changed.get("method")
+        path_template = changed.get("path_template")
+        if ("method" in changed and not (method and method.strip())) or \
+                ("path_template" in changed and not (path_template and path_template.strip())):
+            raise HTTPException(400, "method/路径不能为空,且不接受 null")
+        _validate_route(db, g.instance_id, (method or g.method).strip().upper(),
+                        path_template if path_template is not None else g.path_template,
+                        exclude_id=g.id)
     if "method" in changed:
         g.method = changed["method"].strip().upper()
-    for f in ("path_template", "description", "enabled"):
-        if f in changed:
-            setattr(g, f, changed[f])
+    if "path_template" in changed:
+        g.path_template = changed["path_template"]
+    if "description" in changed:
+        g.description = changed["description"]  # 仅 description 保留"显式 null=清空"
+    if changed.get("enabled") is not None:
+        g.enabled = changed["enabled"]  # enabled 为非空布尔列,null 按未提供处理
     g.updated_by = current.id
     db.commit()
     db.refresh(g)
