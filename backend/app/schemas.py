@@ -371,6 +371,7 @@ class MockHitOut(BaseModel):
     path: str
     query: str | None
     matched: bool
+    outcome: str
     response_status: int | None
     delay_ms: int
     elapsed_ms: int
@@ -381,3 +382,4 @@ class MockHitOut(BaseModel):
 class MockHitDetailOut(MockHitOut):
     request_headers: dict | None
     request_body: str | None
+    response_body: str | None

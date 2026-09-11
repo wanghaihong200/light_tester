@@ -418,21 +418,37 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db),
     db.commit()
 
 
-# ---------- 命中组(计划 13 T7) ----------
+# ---------- 命中组(计划 13 T7;计划 15 T7 四态过滤 + 按组归组过滤) ----------
+
+def _hit_in_group(hit: MockHit, group: MockRuleGroup, rule_ids: set[int]) -> bool:
+    if hit.rule_id in rule_ids:  # 命中行(规则可能已软删,rule_id 仍追溯)
+        return True
+    # 未命中行:方法相同且实际路径能被组模板匹配 = 打过这个路由但没接住(兜底/透传失败),归入组视角
+    return (not hit.matched and group.method.upper() == hit.method.upper()
+            and matching.match_path(group.path_template, hit.path) is not None)
+
 
 @router.get("/mock-instances/{instance_id}/hits", response_model=list[MockHitOut])
 def list_hits(instance_id: int, filter: str = Query("all"),
-              limit: int = Query(200, ge=1, le=1000), db: Session = Depends(get_db),
-              current: User = Depends(get_current_user)):
+              group_id: int | None = Query(None), limit: int = Query(200, ge=1, le=1000),
+              db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     inst = _get_instance(db, current, instance_id, "viewer")
-    if filter not in ("all", "matched", "unmatched"):
-        raise HTTPException(400, "filter 只支持 all|matched|unmatched")
+    if filter not in ("all", "matched", "unmatched", "forwarded"):
+        raise HTTPException(400, "filter 只支持 all|matched|unmatched|forwarded")
     q = db.query(MockHit).filter(MockHit.instance_id == inst.id)
     if filter == "matched":
         q = q.filter(MockHit.matched.is_(True))
     elif filter == "unmatched":
-        q = q.filter(MockHit.matched.is_(False))
-    return q.order_by(MockHit.id.desc()).limit(limit).all()
+        q = q.filter(MockHit.matched.is_(False), MockHit.outcome == "fallback")
+    elif filter == "forwarded":
+        q = q.filter(MockHit.outcome == "forwarded")
+    rows = q.order_by(MockHit.id.desc()).limit(1000).all()  # 表有 1000 滚动上限,全量进内存做组归因
+    if group_id is not None:
+        g = _get_group(db, current, group_id, "viewer")
+        rule_ids = {r.id for r in db.query(MockRule.id)
+                    .filter(MockRule.group_id == g.id).all()}  # 含软删:历史命中仍可归组
+        rows = [h for h in rows if _hit_in_group(h, g, rule_ids)]
+    return rows[:limit]
 
 
 @router.get("/mock-hits/{hit_id}", response_model=MockHitDetailOut)

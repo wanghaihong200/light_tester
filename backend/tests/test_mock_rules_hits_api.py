@@ -144,3 +144,85 @@ def test_hits_list_filter_detail_clear(client, db_session, make_user):
     db_session.add(MockHit(instance_id=inst.id, method="GET", path="/x", matched=False))
     db_session.commit()
     assert client.delete(f"/api/mock-instances/{inst.id}/hits", headers=vh).status_code == 403
+
+
+# ---------- 计划 15 T7:四态过滤 + 按组归组过滤 + 响应体出参 ----------
+
+def _hit(db, iid, **kw):
+    """直插 MockHit 行(不打真实请求);method/path 可覆盖,其余字段透传。"""
+    h = MockHit(instance_id=iid, method=kw.pop("method", "GET"), path=kw.pop("path", "/x"), **kw)
+    db.add(h)
+    db.commit()
+    return h
+
+
+def test_hits_filter_forwarded_and_unmatched_split(client, db_session, make_user):
+    """unmatched 只剩兜底行;forwarded 单列;透传失败落兜底行归 unmatched。
+
+    对 brief 样例的仓内现状对齐(非行为偏离):mock_hits.rule_id 有 FK 到
+    mock_rules.id,直插须指向真实规则行,故先建组+规则再引用其 id。
+    """
+    admin = make_user(db_session, "adm11", is_admin=True)
+    inst = _project_inst(db_session, "p-rule-5", 19081)
+    group = _group(db_session, inst)
+    rule = MockRule(instance_id=inst.id, group_id=group.id)
+    db_session.add(rule)
+    db_session.commit()
+    iid = inst.id
+    h_m = _hit(db_session, iid, matched=True, rule_id=rule.id, outcome="matched",
+               response_status=200)
+    h_f = _hit(db_session, iid, matched=False, outcome="forwarded", response_status=201)
+    h_b = _hit(db_session, iid, matched=False, outcome="fallback",
+               error="forward-failed: ConnectError", response_status=404)
+    ah = _login(client, "adm11")
+    fwd = client.get(f"/api/mock-instances/{iid}/hits?filter=forwarded", headers=ah).json()
+    assert [x["id"] for x in fwd] == [h_f.id]
+    unmatched = client.get(f"/api/mock-instances/{iid}/hits?filter=unmatched", headers=ah).json()
+    assert [x["id"] for x in unmatched] == [h_b.id]   # 透传失败行在 unmatched,不在 forwarded
+    assert h_m.id not in [x["id"] for x in unmatched]  # 命中行不混入 unmatched
+
+
+def test_hits_group_filter_attribution(client, db_session, make_user):
+    """组过滤:命中行按 rule_id(含软删规则)归组;未命中行按 method+模板匹配归组;他组不串。"""
+    admin = make_user(db_session, "adm12", is_admin=True)
+    inst = _project_inst(db_session, "p-rule-6", 19082)
+    iid = inst.id
+    h = _login(client, "adm12")
+    g = client.post(f"/api/mock-instances/{iid}/rule-groups",
+                    json={"method": "GET", "path_template": "/a/{id}"}, headers=h).json()
+    r1 = client.post(f"/api/mock-instances/{iid}/rules",
+                     json={"group_id": g["id"], "conditions": [], "response_status": 200},
+                     headers=h).json()
+    g2 = client.post(f"/api/mock-instances/{iid}/rule-groups",
+                     json={"method": "POST", "path_template": "/b"}, headers=h).json()
+    r2 = client.post(f"/api/mock-instances/{iid}/rules",
+                     json={"group_id": g2["id"], "conditions": [], "response_status": 200},
+                     headers=h).json()
+    h_hit = _hit(db_session, iid, matched=True, rule_id=r1["id"], outcome="matched", path="/a/1")
+    h_unm_in = _hit(db_session, iid, matched=False, outcome="fallback", path="/a/2")
+    h_other_m = _hit(db_session, iid, matched=False, outcome="fallback", method="POST", path="/a/3")
+    h_other_p = _hit(db_session, iid, matched=False, outcome="fallback", path="/b/9")
+    h_hit_g2 = _hit(db_session, iid, matched=True, rule_id=r2["id"], outcome="matched", path="/b")
+    assert client.delete(f"/api/mock-rules/{r1['id']}", headers=h).status_code == 204
+    ids = [x["id"] for x in
+           client.get(f"/api/mock-instances/{iid}/hits?group_id={g['id']}", headers=h).json()]
+    # 属G仅两行:h_hit(rule_id 归因,规则软删仍算)+ h_unm_in(未命中但 GET /a/2 命中模板 /a/{id});
+    # h_other_m 方法不同、h_other_p 模板不匹配、h_hit_g2 属他组 → 全不出现
+    assert ids == [h_unm_in.id, h_hit.id]
+
+
+def test_hit_detail_response_body(client, db_session, make_user):
+    """响应体出参:详情 MockHitDetailOut 带 response_body;列表 MockHitOut 不带。"""
+    admin = make_user(db_session, "adm13", is_admin=True)
+    inst = _project_inst(db_session, "p-rule-7", 19083)
+    group = _group(db_session, inst)
+    rule = MockRule(instance_id=inst.id, group_id=group.id)
+    db_session.add(rule)
+    db_session.commit()
+    hit = _hit(db_session, inst.id, matched=True, rule_id=rule.id, outcome="matched",
+               response_body='{"x":1}')
+    ah = _login(client, "adm13")
+    detail = client.get(f"/api/mock-hits/{hit.id}", headers=ah)
+    assert detail.status_code == 200 and detail.json()["response_body"] == '{"x":1}'
+    listed = client.get(f"/api/mock-instances/{inst.id}/hits", headers=ah).json()
+    assert "response_body" not in listed[0] and listed[0]["outcome"] == "matched"
