@@ -16,7 +16,7 @@ _HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriz
 class ForwardOutcome:
     ok: bool
     status_code: int = 0
-    headers: dict[str, str] = field(default_factory=dict)
+    headers: dict[str, str | list[str]] = field(default_factory=dict)
     content_type: str | None = None
     content: bytes = b""
     error: str | None = None
@@ -28,20 +28,29 @@ def build_upstream_headers(headers: dict[str, str], upstream_host: str) -> dict[
     return out
 
 
-def build_client_response_headers(headers: httpx.Headers) -> dict[str, str]:
-    return {k: v for k, v in headers.items() if k.lower() not in _HOP_BY_HOP and k.lower() != "content-type"}
+def build_client_response_headers(headers: httpx.Headers) -> dict[str, str | list[str]]:
+    # set-cookie 单独走 get_list 取原始多条(items() 会把重复头逗号合并,
+    # 劈坏 Expires=Wed, 21 Oct ... 这类含逗号的 cookie 值),其余头仍单值 str。
+    out: dict[str, str | list[str]] = {
+        k: v for k, v in headers.items()
+        if k.lower() not in _HOP_BY_HOP and k.lower() not in ("content-type", "set-cookie")}
+    cookies = headers.get_list("set-cookie")
+    if cookies:
+        out["set-cookie"] = cookies
+    return out
 
 
 async def forward(client: httpx.AsyncClient, base_url: str, method: str, path: str,
                   query: str | None, headers: dict[str, str], body: bytes) -> ForwardOutcome:
-    url = f"{base_url.rstrip('/')}{path}" + (f"?{query}" if query else "")
-    up_host = httpx.URL(base_url).host
-    if httpx.URL(base_url).port:
-        up_host = f"{up_host}:{httpx.URL(base_url).port}"
     try:
+        url = f"{base_url.rstrip('/')}{path}" + (f"?{query}" if query else "")
+        up_url = httpx.URL(base_url)
+        up_host = up_url.host
+        if up_url.port:
+            up_host = f"{up_host}:{up_url.port}"
         resp = await client.request(method, url,
                                     headers=build_upstream_headers(headers, up_host), content=body)
-    except httpx.HTTPError as e:  # 传输层失败;HTTP 响应本身不抛
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:  # 传输层/URL 构造失败;HTTP 响应本身不抛
         return ForwardOutcome(ok=False, error=type(e).__name__)
     return ForwardOutcome(ok=True, status_code=resp.status_code,
                           headers=build_client_response_headers(resp.headers),

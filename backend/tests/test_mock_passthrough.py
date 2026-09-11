@@ -45,6 +45,27 @@ async def test_forward_builds_url_query_body_and_host():
     assert seen["keep"] == "y" and seen["te"] is None
 
 
+@pytest.mark.asyncio
+async def test_forward_invalid_url_returns_not_ok():
+    """非法上游 URL(如 http://up:port)不抛穿,ok=False 记 InvalidURL 交兜底。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+    out = await passthrough.forward(_client(handler), "http://up:port", "GET", "/x", None, {}, b"")
+    assert not out.ok and out.error == "InvalidURL" and out.status_code == 0
+
+
+@pytest.mark.asyncio
+async def test_forward_preserves_multiple_set_cookie():
+    """上游多条 Set-Cookie 保序原样保留为 list,不被 items() 逗号合并劈坏。"""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers=[
+            ("set-cookie", "sid=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT"),
+            ("set-cookie", "theme=dark"),
+        ])
+    out = await passthrough.forward(_client(handler), "http://up:1", "GET", "/x", None, {}, b"")
+    assert out.headers["set-cookie"] == ["sid=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT", "theme=dark"]
+
+
 def test_build_client_response_headers_strips_hop_by_hop():
     from httpx import Headers
     out = passthrough.build_client_response_headers(
