@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.mock_service.app import HIT_KEEP_PER_INSTANCE, create_mock_app
-from app.models import MockHit, MockInstance, MockRule, Project
+from app.models import MockHit, MockInstance, MockRule, MockRuleGroup, Project
 
 
 def _setup(db: Session, *, port=19011, cors=False, rule_kwargs=None, **inst_kw) -> MockInstance:
@@ -18,8 +18,16 @@ def _setup(db: Session, *, port=19011, cors=False, rule_kwargs=None, **inst_kw) 
     db.add(inst)
     db.commit()
     if rule_kwargs:
-        # sort_order 允许被 rule_kwargs 覆盖(test_conditions 用例显式传 sort_order=0)
-        db.add(MockRule(instance_id=inst.id, **{"sort_order": 0, **rule_kwargs}))
+        # T1 起 method/path_template 上移到组级:先建组,再把规则挂 group_id
+        g = MockRuleGroup(instance_id=inst.id, method=rule_kwargs.get("method", "GET"),
+                          path_template=rule_kwargs.get("path_template", "/x"), sort_order=0)
+        db.add(g)
+        db.flush()
+        # 组内 sort_order 允许被 rule_kwargs 覆盖(test_conditions 用例显式传 sort_order=0)
+        db.add(MockRule(instance_id=inst.id, group_id=g.id,
+                        **{"sort_order": 0,
+                           **{k: v for k, v in rule_kwargs.items()
+                              if k not in ("method", "path_template")}}))
         db.commit()
     return inst
 
@@ -59,8 +67,9 @@ def test_conditions_gate_and_order_first_match_wins(db_session):
         method="GET", path_template="/pay", sort_order=0,
         conditions=[{"scope": "query", "key": "mode", "match": "eq", "value": "fail"}],
         response_status=500, response_body='{"code":"FAIL"}'))
-    db_session.add(MockRule(instance_id=inst.id, sort_order=1, method="GET",
-                            path_template="/pay", response_status=200, response_body='{"code":"OK"}'))
+    g = db_session.query(MockRuleGroup).filter_by(instance_id=inst.id).one()
+    db_session.add(MockRule(instance_id=inst.id, group_id=g.id, sort_order=1,
+                            response_status=200, response_body='{"code":"OK"}'))
     db_session.commit()
     with _client(db_session, inst) as c:
         assert c.get("/pay", params={"mode": "fail"}).status_code == 500
@@ -149,7 +158,10 @@ def test_real_subprocess_end_to_end(db_session):
     inst = MockInstance(project_id=p.id, name="real", port=9499, token="real" + "0" * 28)
     db_session.add(inst)
     db_session.commit()
-    db_session.add(MockRule(instance_id=inst.id, method="GET", path_template="/hi",
+    g = MockRuleGroup(instance_id=inst.id, method="GET", path_template="/hi", sort_order=0)
+    db_session.add(g)
+    db_session.flush()
+    db_session.add(MockRule(instance_id=inst.id, group_id=g.id,
                             response_status=200, response_body="hello"))
     db_session.commit()
     try:
@@ -161,3 +173,67 @@ def test_real_subprocess_end_to_end(db_session):
         assert inst.status == "stopped"
     finally:
         supervisor.shutdown_all()
+
+
+def test_miss_passthrough_forwards_upstream(db_session):
+    """未命中+透传开 → 转发上游:上游 200 原样回;hit 记 forwarded+响应体。"""
+    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1")
+
+    def handler(request):
+        return httpx.Response(201, content=b'{"real":true}', headers={"x-from": "up"})
+
+    resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(handler))).get(
+        "/no/rule", headers={"x-tag": "t"})
+    assert resp.status_code == 201 and resp.content == b'{"real":true}'
+    assert resp.headers["x-from"] == "up"
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "forwarded" and hit.matched is False
+    assert hit.response_status == 201 and hit.response_body == '{"real":true}'
+
+
+def test_miss_passthrough_upstream_5xx_still_forwarded(db_session):
+    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1")
+    resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(
+        lambda r: httpx.Response(500, text="boom")))).get("/x")
+    assert resp.status_code == 500                      # 5xx 照透,不是兜底
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "forwarded"
+
+
+def test_miss_passthrough_down_falls_back(db_session):
+    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1",
+                  default_status=404, default_body='{"fb":1}')
+
+    def handler(request):
+        raise httpx.ConnectError("refused")
+
+    resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(handler))).get("/x")
+    assert resp.status_code == 404 and resp.json() == {"fb": 1}
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "fallback" and hit.error == "forward-failed: ConnectError"
+    assert hit.response_body == '{"fb":1}'              # 兜底体也落 response_body
+
+
+def test_miss_no_passthrough_falls_back(db_session):
+    """透传关(或未配上游)= 现行为:直接兜底,outcome=fallback,error 空。"""
+    inst = _setup(db_session)
+    resp = TestClient(create_mock_app(inst.id)).get("/x")
+    assert resp.status_code == 404
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "fallback" and hit.error is None
+
+
+def test_matched_rule_records_outcome_and_body(db_session):
+    """规则命中:outcome=matched,response_body=模板渲染后的实际响应。"""
+    inst = _setup(db_session)  # 透传关
+    g = MockRuleGroup(instance_id=inst.id, method="GET", path_template="/a/{id}", sort_order=0)
+    db_session.add(g)
+    db_session.flush()
+    db_session.add(MockRule(instance_id=inst.id, group_id=g.id, conditions=[],
+                            response_status=200, response_headers={}, enable_template=True,
+                            response_body='hi {{ path["id"] }}', sort_order=0))
+    db_session.commit()
+    resp = TestClient(create_mock_app(inst.id)).get("/a/7")
+    assert resp.status_code == 200 and resp.text == "hi 7"
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "matched" and hit.response_body == "hi 7"

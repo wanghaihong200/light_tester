@@ -8,13 +8,14 @@ import threading
 import time
 from urllib.parse import parse_qs
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, Request, Response
 
 from app.database import SessionLocal
-from app.mock_service.matching import pick_rule
+from app.mock_service import matching, passthrough
 from app.mock_service.templating import render_template
-from app.models import MockHit, MockInstance, MockRule
+from app.models import MockHit, MockInstance, MockRule, MockRuleGroup
 
 HIT_KEEP_PER_INSTANCE = 1000
 HIT_BODY_MAX = 64 * 1024
@@ -43,8 +44,18 @@ def _trim_hits(db, instance_id: int) -> None:
          .delete(synchronize_session=False))
 
 
-def create_mock_app(instance_id: int) -> FastAPI:
+def _clip_body(data: bytes) -> str:
+    # 解码→按字节截断→replace 兜尾:先解码把非法字节收成 U+FFFD,再按字节截到
+    # 65,532(TEXT 容量 65,535 减余量);截口可能落在 U+FFFD 序列中间(残 1~2 字节),
+    # 末次 replace 会把残序列回涨成 3 字节,最多 +2 ⇒ 终值 ≤65,534,必在 TEXT 容量内。
+    # (若直接截原始字节再解码,1 非法字节→3 字节膨胀,严格模式下 commit 炸成 500)
+    return (data[:HIT_BODY_MAX].decode("utf-8", "replace").encode()[:HIT_BODY_MAX - 4]
+            .decode("utf-8", "replace"))
+
+
+def create_mock_app(instance_id: int, upstream_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.upstream_transport = upstream_transport  # 测试注 httpx.MockTransport;生产 None
 
     def _check_token(instance: MockInstance | None, token: str) -> bool:
         return instance is not None and bool(token) and token == instance.token
@@ -79,13 +90,20 @@ def create_mock_app(instance_id: int) -> FastAPI:
             instance = db.get(MockInstance, instance_id)
             if instance is None or instance.is_deleted:
                 return Response(content="mock instance removed", status_code=404)
-            rules = (db.query(MockRule)
-                     .filter(MockRule.instance_id == instance_id,
-                             MockRule.is_deleted.is_(False), MockRule.enabled.is_(True))
-                     .order_by(MockRule.sort_order.asc(), MockRule.id.asc()).all())
-            rule, path_vars = pick_rule(rules, method, path, query, headers, body)
+            groups = (db.query(MockRuleGroup)
+                      .filter(MockRuleGroup.instance_id == instance_id,
+                              MockRuleGroup.is_deleted.is_(False))
+                      .order_by(MockRuleGroup.sort_order.asc(), MockRuleGroup.id.asc()).all())
+            rules_by_group: dict[int, list] = {}
+            for r in (db.query(MockRule)
+                      .filter(MockRule.instance_id == instance_id,
+                              MockRule.is_deleted.is_(False))
+                      .order_by(MockRule.sort_order.asc(), MockRule.id.asc()).all()):
+                rules_by_group.setdefault(r.group_id, []).append(r)
             if method == "OPTIONS" and instance.cors_enabled:
-                return Response(status_code=204, headers=_cors_headers())  # 预检不耗规则不记日志
+                return Response(status_code=204, headers=_cors_headers())  # 预检不耗规则不记日志(位置不变)
+            rule, group, path_vars = matching.pick_rule(
+                [(g, rules_by_group.get(g.id, [])) for g in groups], method, path, query, headers, body)
             hold_error = None
             delay_ms = rule.delay_ms if rule else 0
             if rule is not None and rule.timeout_enabled:
@@ -93,16 +111,13 @@ def create_mock_app(instance_id: int) -> FastAPI:
                 hold_error = "timeout-simulated"
             elif delay_ms:
                 await asyncio.sleep(delay_ms / 1000)
-            if rule is None:
-                status_code = instance.default_status or 404
-                payload = instance.default_body or DEFAULT_MISS_BODY
-                headers_out: dict[str, str] = {}
-                content_type = "application/json"
-            else:
+            outcome, error = "fallback", None
+            if rule is not None:
+                outcome = "matched"
                 status_code = rule.response_status
                 headers_out = {str(k): str(v) for k, v in (rule.response_headers or {}).items()}
                 content_type = headers_out.pop("content-type", None)
-                payload = rule.response_body or ""
+                payload: str | bytes = rule.response_body or ""
                 if rule.enable_template:
                     try:
                         body_json = json.loads(body.decode("utf-8"))
@@ -110,8 +125,35 @@ def create_mock_app(instance_id: int) -> FastAPI:
                         body_json = None
                     payload = render_template(payload, path_vars=path_vars, query=query,
                                               headers=headers, body_json=body_json)
-            resp = Response(content=payload, status_code=status_code,
-                            media_type=content_type, headers=headers_out)
+            elif instance.passthrough_enabled and (instance.upstream_base_url or "").strip():
+                client_kwargs: dict = {"timeout": httpx.Timeout(
+                    connect=passthrough.CONNECT_TIMEOUT, read=passthrough.READ_TIMEOUT,
+                    write=passthrough.READ_TIMEOUT, pool=passthrough.CONNECT_TIMEOUT)}
+                if app.state.upstream_transport is not None:
+                    client_kwargs["transport"] = app.state.upstream_transport
+                async with httpx.AsyncClient(**client_kwargs) as client:
+                    fwd = await passthrough.forward(
+                        client, instance.upstream_base_url, method, path,
+                        request.url.query or None, dict(request.headers), body)
+                if fwd.ok:
+                    outcome = "forwarded"
+                    status_code = fwd.status_code
+                    headers_out = fwd.headers
+                    content_type = fwd.content_type
+                    payload = fwd.content
+                else:
+                    error = f"forward-failed: {fwd.error}"
+            if outcome == "fallback":
+                status_code = instance.default_status or 404
+                payload = instance.default_body or DEFAULT_MISS_BODY
+                headers_out, content_type = {}, None
+            # fwd.headers 的值可能为 list(set-cookie 恒 list):str 值进 headers dict,
+            # list 值先建 Response 再逐条 append——否则 starlette 把 list str() 成一行
+            multi = [(k, v) for k, vs in headers_out.items() if isinstance(vs, list) for v in vs]
+            resp = Response(content=payload, status_code=status_code, media_type=content_type,
+                            headers={k: v for k, v in headers_out.items() if not isinstance(v, list)})
+            for k, v in multi:
+                resp.headers.append(k, v)
             if instance.cors_enabled:
                 for k, v in _cors_headers().items():
                     resp.headers[k] = v
@@ -121,13 +163,13 @@ def create_mock_app(instance_id: int) -> FastAPI:
                            method=method, path=path[:500],
                            query=request.url.query[:1000] if request.url.query else None,
                            request_headers=dict(request.headers) or None,
-                           # 解码→按字节截断→replace 兜尾:先解码把非法字节收成 U+FFFD,再按字节截到
-                           # 65,532(TEXT 容量 65,535 减余量);截口可能落在 U+FFFD 序列中间(残 1~2 字节),
-                           # 末次 replace 会把残序列回涨成 3 字节,最多 +2 ⇒ 终值 ≤65,534,必在 TEXT 容量内。
-                           # (若直接截原始字节再解码,1 非法字节→3 字节膨胀,严格模式下 commit 炸成 500)
-                           request_body=body[:HIT_BODY_MAX].decode("utf-8", "replace").encode()[:HIT_BODY_MAX - 4].decode("utf-8", "replace") if body else None,
+                           request_body=_clip_body(body) if body else None,
                            matched=rule is not None, response_status=status_code,
-                           delay_ms=delay_ms, elapsed_ms=elapsed, error=hold_error))
+                           delay_ms=delay_ms, elapsed_ms=elapsed,
+                           outcome=outcome, error=error or hold_error,
+                           response_body=_clip_body(
+                               payload.encode("utf-8", "replace") if isinstance(payload, str)
+                               else payload) or None))
             _trim_hits(db, instance_id)
             db.commit()
             return resp
