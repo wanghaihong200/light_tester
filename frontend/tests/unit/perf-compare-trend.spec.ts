@@ -261,6 +261,15 @@ describe('PerfCompareDialog', () => {
     expect(connectMock).not.toHaveBeenCalled()
     w.unmount()
   })
+
+  it('弹窗体局部不透明白:全局毛玻璃 token(--el-bg-color 半透白)会透底重影,dialog 根 style 须自带背景(2026-09-11 冒烟反馈)', async () => {
+    const w = mountCompare()
+    await flushPromises()
+    const dlg = document.body.querySelector('.el-dialog') as HTMLElement | null
+    expect(dlg).not.toBeNull()
+    expect(dlg.style.getPropertyValue('background-color')).toBe('rgb(255, 255, 255)')
+    w.unmount()
+  })
 })
 
 // ── 趋势 ─────────────────────────────────────────────
@@ -346,6 +355,7 @@ describe('PerfTrendDialog', () => {
     expect(w.findAll('[data-test="trend-charts"]')).toHaveLength(1)
     const opt = setOption.mock.calls[0][0] as any
     expect(opt.title.text).toBe('CPU') // 默认键 = 第一个
+    expect(opt.yAxis.name).toBe('') // 轴名留空:指标 label 若再画上轴名,同串双画=标题区重影(2026-09-11 冒烟复测)
     expect(opt.series.map((s: any) => s.name)).toEqual([
       '场景A@dev1 · mean', '场景A@dev1 · p90', '场景B@dev2 · mean', '场景B@dev2 · p90',
     ])
@@ -460,6 +470,15 @@ describe('PerfTrendDialog', () => {
     await flushPromises()
     expect(setOption).toHaveBeenCalled()
     expect(connectMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('弹窗体局部不透明白:列表 <td> 文字透过半透弹窗体=重影,dialog 根 style 须自带背景(2026-09-11 冒烟反馈)', async () => {
+    const w = mountTrend()
+    await flushPromises()
+    const dlg = document.body.querySelector('.el-dialog') as HTMLElement | null
+    expect(dlg).not.toBeNull()
+    expect(dlg.style.getPropertyValue('background-color')).toBe('rgb(255, 255, 255)')
     w.unmount()
   })
 })

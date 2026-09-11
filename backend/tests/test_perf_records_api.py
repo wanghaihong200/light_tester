@@ -170,14 +170,22 @@ def test_compare_rejects_single(client, db_session):
 
 def _real_summary(mean: float) -> dict:
     """CLI perf-analyze 真实结构(计划14 冒烟修复):{files:[{path, columns:[…]}]},
-    文件名模式 <指标名>_<采集项>_<hex16>_<ts>_<ts>.csv,kind=skipped 列无统计。"""
+    文件名模式 <指标名>_<采集项>_<hex16>_<ts>_<ts>.csv,kind=skipped 列无统计。
+    RecordTime(epoch ms)/SimpleTime(秒)为 SoloPi 每行必带的纯辅助时间列,kind 仍是
+    numeric——趋势必须滤掉,否则时间戳量级撑爆 Y 轴(2026-09-11 冒烟反馈)。"""
     return {"success": True, "files": [{
         "path": f"CPU温度_Temperature_6f1c725f5fab3cd4_1789045016565_1789045048339.csv",
         "columns": [
             {"name": "CPU温度(度)", "index": 1, "kind": "numeric",
              "mean": mean, "p90": mean + 5, "min": mean - 1, "max": mean + 8,
              "median": mean, "sampleCount": 56},
-            {"name": "extra", "index": 2, "kind": "skipped",
+            {"name": "RecordTime", "index": 2, "kind": "numeric",
+             "mean": 1789045032452.0, "p90": 1789045048339.0, "min": 1789045016565.0,
+             "max": 1789045048339.0, "median": 1789045032452.0, "sampleCount": 56},
+            {"name": "SimpleTime", "index": 3, "kind": "numeric",
+             "mean": 16.5, "p90": 31.8, "min": 0.0, "max": 31.8,
+             "median": 16.5, "sampleCount": 56},
+            {"name": "extra", "index": 4, "kind": "skipped",
              "reason": "contains_non_numeric_values"},
         ],
     }]}
@@ -209,6 +217,9 @@ def test_trend_groups_by_script_and_device(client, db_session):
     # kind=skipped 列不产键
     key = "Temperature::CPU温度(度)"
     assert g["points"][0]["series"] == {key: {"mean": 12.5, "p90": 17.5}}
+    # 纯辅助时间列无趋势意义:RecordTime 毫秒级时间戳混入会把 Y 轴撑爆(2026-09-11 冒烟反馈)
+    assert "Temperature::RecordTime" not in g["points"][0]["series"]
+    assert "Temperature::SimpleTime" not in g["points"][0]["series"]
     # 同 fileKey 同列名跨 run 聚合到同组同键(键跨 run 稳定,趋势才能连线)
     assert set(g["points"][1]["series"]) == {key}
     assert g["points"][1]["series"][key]["mean"] == 15.0

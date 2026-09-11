@@ -42,6 +42,8 @@ def _trend_series(summary: dict | None) -> dict[str, dict]:
         for c in f.get("columns") or []:
             if c.get("kind") != "numeric" or not c.get("name"):
                 continue
+            if c["name"] in ("RecordTime", "SimpleTime"):  # 纯辅助时间列,无趋势意义(2026-09-11 冒烟)
+                continue
             out[f"{_file_key(stem)}::{c['name']}"] = {"mean": c.get("mean"), "p90": c.get("p90")}
     return out
 

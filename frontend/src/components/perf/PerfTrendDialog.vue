@@ -149,7 +149,8 @@ function trendOption(allGroups: TrendGroup[], key: string): Record<string, unkno
     // 白底:echarts canvas 默认透明,叠在下层内容上=标题重影(冒烟反馈,同 perfOption)
     backgroundColor: '#fff',
     xAxis: { type: 'category', name: '采集时间', boundaryGap: false, data: labels },
-    yAxis: { type: 'value', scale: true, name: metricLabel(key) },
+    // 轴名留空(perfOption 同约定):指标 label 已由 title 画一次,再上轴名=同串双画,标题区重影
+    yAxis: { type: 'value', scale: true, name: '' },
     series,
   }
 }
@@ -178,7 +179,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <el-dialog :model-value="true" title="性能趋势" width="900px" top="5vh" @close="emit('close')">
+  <el-dialog :model-value="true" style="background-color: #fff" title="性能趋势" width="900px" top="5vh" @close="emit('close')">
     <div class="filters">
       <el-select v-model="scriptId" size="small" data-test="trend-script-filter" class="filter-select">
         <el-option label="全部脚本" value="" />

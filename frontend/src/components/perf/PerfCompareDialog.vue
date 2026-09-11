@@ -132,7 +132,7 @@ function cellText(r: PerfRecord, key: string): string {
 </script>
 
 <template>
-  <el-dialog :model-value="true" title="跨记录对比" width="900px" top="5vh" @close="emit('close')">
+  <el-dialog :model-value="true" style="background-color: #fff" title="跨记录对比" width="900px" top="5vh" @close="emit('close')">
     <div v-loading="loading" class="compare-body">
       <div v-if="hasCharts" ref="host" class="charts" data-test="compare-charts" />
       <p v-else-if="!loading" class="empty" data-test="charts-empty">暂无对比曲线(记录缺少可绘制的数值列)</p>
