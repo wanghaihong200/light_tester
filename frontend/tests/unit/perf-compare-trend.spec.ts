@@ -42,7 +42,10 @@ vi.mock('../../src/api/perf', () => api)
 
 import PerfCompareDialog from '../../src/components/perf/PerfCompareDialog.vue'
 import PerfTrendDialog from '../../src/components/perf/PerfTrendDialog.vue'
+import * as echartsCore from 'echarts/core'
 import type { AppPerfSeries, PerfRecord, TrendGroup } from '../../src/types'
+
+const connectMock = echartsCore.connect as unknown as ReturnType<typeof vi.fn>
 
 // ── fixtures ─────────────────────────────────────────
 function mkRecord(over: Partial<PerfRecord> = {}): PerfRecord {
@@ -250,6 +253,14 @@ describe('PerfCompareDialog', () => {
     expect(setOption).not.toHaveBeenCalled()
     w.unmount()
   })
+
+  it('connect 联动经用户实测裁撤:渲染后不调 echarts.connect(悬停只看当前子图)', async () => {
+    const w = mountCompare()
+    await flushPromises()
+    expect(setOption).toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
 })
 
 // ── 趋势 ─────────────────────────────────────────────
@@ -326,8 +337,18 @@ describe('PerfTrendDialog', () => {
     expect(opt.series[1].data).toEqual([19, 22])
     // X=点序,label=finished_at 格式化到分
     expect(opt.xAxis.data).toEqual(['2026-09-01 10:00', '2026-09-02 11:30'])
+    // 白底:echarts canvas 默认透明,叠在下层内容上=标题重影(冒烟反馈)
+    expect(opt.backgroundColor).toBe('#fff')
     w.unmount()
     expect(mockChart.dispose).toHaveBeenCalled()
+  })
+
+  it('connect 联动经用户实测裁撤:趋势渲染后不调 echarts.connect(悬停只看当前子图)', async () => {
+    const w = mountTrend()
+    await flushPromises()
+    expect(setOption).toHaveBeenCalled()
+    expect(connectMock).not.toHaveBeenCalled()
+    w.unmount()
   })
 
   it('筛选联动:选脚本/设备后按条件重拉趋势;重渲染清空 host,子图容器不累积', async () => {

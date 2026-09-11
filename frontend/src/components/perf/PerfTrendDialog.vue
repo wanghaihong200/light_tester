@@ -108,6 +108,8 @@ function trendOption(points: TrendPoint[], key: string): Record<string, unknown>
     tooltip: { trigger: 'axis' },
     legend: { top: 2, right: 10 },
     grid: { left: 50, right: 20, top: 34, bottom: 40 },
+    // 白底:echarts canvas 默认透明,叠在下层内容上=标题重影(冒烟反馈,同 perfOption)
+    backgroundColor: '#fff',
     xAxis: { type: 'category', name: '采集时间', boundaryGap: false, data: points.map((p) => fmtMinute(p.finished_at)) },
     yAxis: { type: 'value', scale: true, name: key },
     series,
@@ -136,7 +138,7 @@ async function renderCharts() {
       instances.push(chart)
     }
   })
-  if (instances.length) echarts.connect(instances)
+  // connect 联动经用户实测裁撤(悬停只看当前子图,跨子图 tooltip/十字同步反而是干扰)
 }
 
 function onResize() {

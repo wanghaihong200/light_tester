@@ -8,7 +8,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { DataZoomComponent, GridComponent, LegendComponent, MarkLineComponent, TitleComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { buildPerfOptions, type PerfSummary } from './perfOption'
+import { buildPerfOptions, type PerfChartOption, type PerfSummary } from './perfOption'
 import type { AppPerfSeries } from '../../types'
 
 // echarts/core 按需注册,控制包体
@@ -31,16 +31,24 @@ async function render() {
   await nextTick() // 容器随 hasCharts=true 挂载后才有 host 可 init
   if (!host.value) return
   host.value.innerHTML = ''
-  for (const opt of opts) {
-    // 子 div 为命令式创建,不吃 scoped CSS(无 data-v 标记)——高度必须内联,否则 0 高画布=全空白图
+  opts.forEach((opt, i) => {
+    // wrapper 为命令式创建,不吃 scoped CSS(无 data-v 标记)——高度必须内联,否则 0 高画布=全空白图;
+    // relative 定位承载右上角单子图下载钮,echarts.init 的目标是其内撑满的 chart div
+    const wrap = document.createElement('div')
+    wrap.style.position = 'relative'
+    wrap.style.width = '100%'
+    wrap.style.height = '240px'
+    wrap.style.marginBottom = '8px'
     const el = document.createElement('div')
     el.style.width = '100%'
-    el.style.height = '240px'
-    el.style.marginBottom = '8px'
-    const chart = echarts.init(host.value.appendChild(el))
+    el.style.height = '100%'
+    wrap.appendChild(el)
+    host.value.appendChild(wrap)
+    const chart = echarts.init(el)
     chart.setOption(opt)
     instances.push(chart)
-  }
+    wrap.appendChild(downloadBtn(opt, i, chart))
+  })
 }
 
 // 窗口尺寸变化 → 全部子图 resize;卸载时移除监听并 dispose
@@ -57,13 +65,58 @@ onUnmounted(() => {
 onMounted(render)
 watch(() => [props.series, props.summary, refsOn.value, bucketSec.value], render)
 
-function exportPng() {
-  const url = instances[0]?.getDataURL({ pixelRatio: 2, backgroundColor: '#fff' })
+// 触发浏览器下载:url 为 dataURL,沿用 a[download] 点击方式
+function downloadUrl(url: string, name: string) {
   if (!url) return
   const a = document.createElement('a')
   a.href = url
-  a.download = 'perf-chart.png'
+  a.download = name
   a.click()
+}
+
+// 单子图下载文件名:优先取子图 title(采集大类),清洗文件系统非法字符;无 title 回退序号
+function chartFileName(opt: PerfChartOption, index: number): string {
+  const t = (opt.title as { text?: string } | undefined)?.text?.trim()
+  const base = (t || `chart-${index + 1}`).replace(/[\\/:*?"<>|\s]+/g, '_')
+  return `perf-chart-${base}.png`
+}
+
+// 单子图下载小钮:右上 top:28px(偏移避开顶部图例 legend top:2;底部有 dataZoom 不落下方)
+function downloadBtn(opt: PerfChartOption, index: number, chart: ReturnType<typeof echarts.init>) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.style.cssText =
+    'position:absolute;top:28px;right:4px;z-index:5;border:none;border-radius:4px;' +
+    'background:rgba(255,255,255,.75);cursor:pointer;font-size:12px;padding:2px 6px;line-height:1;'
+  btn.textContent = '⬇'
+  btn.title = '下载本子图 PNG'
+  btn.addEventListener('click', () =>
+    downloadUrl(chart.getDataURL({ pixelRatio: 2, backgroundColor: '#fff' }), chartFileName(opt, index)),
+  )
+  return btn
+}
+
+// 导出 PNG 改为全部子图拼一张长图(只导首个子图=用户报的问题):
+// 各子图 canvas 同容器等宽(物理像素含 dpr),白底纵向堆叠;
+// 拿不到 2d 上下文(jsdom/异常环境)时静默降级,不抛错、不触发下载
+function exportPng() {
+  const canvases = instances
+    .map((c) => c.getDom().querySelector('canvas'))
+    .filter((cv): cv is HTMLCanvasElement => !!cv)
+  if (!canvases.length) return
+  const out = document.createElement('canvas')
+  out.width = canvases[0].width
+  out.height = canvases.reduce((h, cv) => h + cv.height, 0)
+  const ctx = out.getContext('2d')
+  if (!ctx) return
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, out.width, out.height)
+  let y = 0
+  for (const cv of canvases) {
+    ctx.drawImage(cv, 0, y)
+    y += cv.height
+  }
+  downloadUrl(out.toDataURL('image/png'), 'perf-charts.png')
 }
 </script>
 

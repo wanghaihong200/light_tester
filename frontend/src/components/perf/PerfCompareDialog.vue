@@ -75,7 +75,7 @@ async function load() {
       chart.setOption(opt)
       instances.push(chart)
     }
-    echarts.connect(instances) // 十字准星跨子图联动
+    // connect 联动经用户实测裁撤(悬停只看当前子图,跨子图 tooltip/十字同步反而是干扰)
   } catch (e) {
     ElMessage.error(`加载对比数据失败:${(e as Error).message}`)
     emit('close') // 无数据可展示,关窗回到列表页
