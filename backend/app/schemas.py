@@ -285,8 +285,7 @@ class MockInstanceOut(BaseModel):
 
 
 class MockRuleSave(BaseModel):
-    method: str
-    path_template: str
+    group_id: int
     conditions: list[MockCondition] = []
     enabled: bool = True
     response_status: int = Field(200, ge=100, le=599)
@@ -299,8 +298,7 @@ class MockRuleSave(BaseModel):
 
 
 class MockRulePatch(MockRuleSave):
-    method: str | None = None
-    path_template: str | None = None
+    group_id: int | None = None   # 部分PATCH:允许省略;规则改挂组暂不支持(端点不应用该字段)
     conditions: list[MockCondition] | None = None
     enabled: bool | None = None
     response_status: int | None = Field(None, ge=100, le=599)
@@ -315,8 +313,7 @@ class MockRuleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     instance_id: int
-    method: str
-    path_template: str
+    group_id: int
     conditions: list
     enabled: bool
     response_status: int
@@ -328,6 +325,41 @@ class MockRuleOut(BaseModel):
     timeout_seconds: int
     sort_order: int
     updated_at: datetime
+
+
+class MockRuleGroupSave(BaseModel):
+    method: str
+    path_template: str
+    description: str | None = None
+    enabled: bool = True
+
+
+class MockRuleGroupPatch(BaseModel):
+    method: str | None = None
+    path_template: str | None = None
+    description: str | None = None
+    enabled: bool | None = None
+
+
+class MockRuleGroupOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    instance_id: int
+    method: str
+    path_template: str
+    description: str | None
+    enabled: bool
+    sort_order: int
+    rules: list[MockRuleOut] = []
+    updated_at: datetime
+
+
+class MockReorderBody(BaseModel):
+    rule_ids: list[int]
+
+
+class MockGroupReorderBody(BaseModel):
+    group_ids: list[int]
 
 
 class MockHitOut(BaseModel):
@@ -349,7 +381,3 @@ class MockHitOut(BaseModel):
 class MockHitDetailOut(MockHitOut):
     request_headers: dict | None
     request_body: str | None
-
-
-class MockReorderBody(BaseModel):
-    rule_ids: list[int]

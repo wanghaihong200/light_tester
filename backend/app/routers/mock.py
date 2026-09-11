@@ -13,10 +13,12 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.database import get_db
 from app.mock_service import matching, supervisor
-from app.models import MockHit, MockInstance, MockRule, Project, User
+from app.models import MockHit, MockInstance, MockRule, MockRuleGroup, Project, User
 from app.permissions import ensure_project_access
-from app.schemas import (MockHitDetailOut, MockHitOut, MockInstanceOut, MockInstancePatch,
-                         MockInstanceSave, MockReorderBody, MockRuleOut, MockRulePatch, MockRuleSave)
+from app.schemas import (MockGroupReorderBody, MockHitDetailOut, MockHitOut, MockInstanceOut,
+                         MockInstancePatch, MockInstanceSave, MockReorderBody, MockRuleGroupOut,
+                         MockRuleGroupPatch, MockRuleGroupSave, MockRuleOut, MockRulePatch,
+                         MockRuleSave)
 
 router = APIRouter(prefix="/api", tags=["mock"], dependencies=[Depends(get_current_user)])
 
@@ -168,7 +170,7 @@ def stop_instance(instance_id: int, db: Session = Depends(get_db),
     return inst
 
 
-# ---------- 规则组(计划 13 T7) ----------
+# ---------- 规则组(计划 15 T6:组承载 method+路径,组间/组内两级有序) ----------
 
 def _validate_rule_payload(method: str, path_template: str) -> None:
     """规则载荷校验:method(已大写化)须 ∈ HTTP_METHODS,路径模板校验错误透传 → 400 列表合并报错。"""
@@ -179,6 +181,146 @@ def _validate_rule_payload(method: str, path_template: str) -> None:
     if errs:
         raise HTTPException(400, "; ".join(errs))
 
+
+def _get_group(db: Session, current: User, group_id: int, min_role: str) -> MockRuleGroup:
+    """行闸同 _get_instance:404=不存在或已软删(不泄漏存在性),403=成员但角色不足。"""
+    g = db.get(MockRuleGroup, group_id)
+    if g is None or g.is_deleted:
+        raise HTTPException(404, "mock rule group not found")
+    _get_instance(db, current, g.instance_id, min_role)
+    return g
+
+
+def _validate_route(db: Session, instance_id: int, method: str, path_template: str,
+                    exclude_id: int | None = None) -> None:
+    """组路由校验:method∈表+模板合法,且同实例内(未删)method+path_template 唯一 → 400。"""
+    _validate_rule_payload(method, path_template)
+    q = (db.query(MockRuleGroup)
+         .filter(MockRuleGroup.instance_id == instance_id, MockRuleGroup.method == method,
+                 MockRuleGroup.path_template == path_template, MockRuleGroup.is_deleted.is_(False)))
+    if exclude_id is not None:
+        q = q.filter(MockRuleGroup.id != exclude_id)
+    if q.first() is not None:
+        raise HTTPException(400, f"该实例下已存在 {method} {path_template} 的规则组")
+
+
+def _groups_with_rules(db: Session, instance_id: int) -> list[tuple[MockRuleGroup, list]]:
+    """实例下未删组(组间序)+ 各组未删规则(组内序),一次两条查询拼装。"""
+    groups = (db.query(MockRuleGroup)
+              .filter(MockRuleGroup.instance_id == instance_id, MockRuleGroup.is_deleted.is_(False))
+              .order_by(MockRuleGroup.sort_order.asc(), MockRuleGroup.id.asc()).all())
+    rules_by_group: dict[int, list] = {}
+    for r in (db.query(MockRule)
+              .filter(MockRule.instance_id == instance_id, MockRule.is_deleted.is_(False))
+              .order_by(MockRule.sort_order.asc(), MockRule.id.asc()).all()):
+        rules_by_group.setdefault(r.group_id, []).append(r)
+    return [(g, rules_by_group.get(g.id, [])) for g in groups]
+
+
+def _group_out(db: Session, g: MockRuleGroup) -> MockRuleGroupOut:
+    """组 Out 带 rules 内嵌(pydantic 无 from_attributes 嵌套来源,手工组)。"""
+    rules = (db.query(MockRule)
+             .filter(MockRule.group_id == g.id, MockRule.is_deleted.is_(False))
+             .order_by(MockRule.sort_order.asc(), MockRule.id.asc()).all())
+    base = MockRuleGroupOut.model_validate(g)
+    return base.model_copy(update={"rules": [MockRuleOut.model_validate(r) for r in rules]})
+
+
+@router.post("/mock-instances/{instance_id}/rule-groups", response_model=MockRuleGroupOut,
+             status_code=201)
+def create_group(instance_id: int, payload: MockRuleGroupSave, db: Session = Depends(get_db),
+                 current: User = Depends(get_current_user)):
+    inst = _get_instance(db, current, instance_id, "editor")
+    method = payload.method.strip().upper()  # 入参小写归一为大写落库
+    _validate_route(db, inst.id, method, payload.path_template)
+    # 含软删行一起取最大:实例内组 sort_order 不重号,匹配序稳定
+    max_order = (db.query(func.max(MockRuleGroup.sort_order))
+                 .filter(MockRuleGroup.instance_id == inst.id).scalar()) or 0
+    g = MockRuleGroup(instance_id=inst.id, method=method, path_template=payload.path_template,
+                      description=payload.description, enabled=payload.enabled,
+                      sort_order=max_order + 1, created_by=current.id, updated_by=current.id)
+    db.add(g)
+    db.commit()
+    db.refresh(g)
+    return _group_out(db, g)
+
+
+@router.get("/mock-instances/{instance_id}/rule-groups", response_model=list[MockRuleGroupOut])
+def list_groups(instance_id: int, db: Session = Depends(get_db),
+                current: User = Depends(get_current_user)):
+    inst = _get_instance(db, current, instance_id, "viewer")
+    return [_group_out(db, g) for g, _ in _groups_with_rules(db, inst.id)]
+
+
+@router.put("/mock-rule-groups/{group_id}", response_model=MockRuleGroupOut)
+def update_group(group_id: int, payload: MockRuleGroupPatch, db: Session = Depends(get_db),
+                 current: User = Depends(get_current_user)):
+    g = _get_group(db, current, group_id, "editor")
+    changed = payload.model_dump(exclude_unset=True)  # 部分PATCH:description 显式传 null=清空
+    if "method" in changed or "path_template" in changed:
+        _validate_route(db, g.instance_id,
+                        (changed.get("method") or g.method).strip().upper(),
+                        changed.get("path_template") or g.path_template, exclude_id=g.id)
+    if "method" in changed:
+        g.method = changed["method"].strip().upper()
+    for f in ("path_template", "description", "enabled"):
+        if f in changed:
+            setattr(g, f, changed[f])
+    g.updated_by = current.id
+    db.commit()
+    db.refresh(g)
+    return _group_out(db, g)
+
+
+@router.delete("/mock-rule-groups/{group_id}", status_code=204)
+def delete_group(group_id: int, db: Session = Depends(get_db),
+                 current: User = Depends(get_current_user)):
+    g = _get_group(db, current, group_id, "editor")
+    g.is_deleted = True
+    g.updated_by = current.id
+    for r in (db.query(MockRule)
+              .filter(MockRule.group_id == g.id, MockRule.is_deleted.is_(False)).all()):
+        r.is_deleted = True  # 组亡规则亡(软删;命中记录 rule_id 仍可追溯)
+        r.updated_by = current.id
+    db.commit()
+
+
+@router.put("/mock-instances/{instance_id}/rule-groups/reorder",
+            response_model=list[MockRuleGroupOut])
+def reorder_groups(instance_id: int, payload: MockGroupReorderBody,
+                   db: Session = Depends(get_db), current: User = Depends(get_current_user)):
+    inst = _get_instance(db, current, instance_id, "editor")
+    groups = (db.query(MockRuleGroup)
+              .filter(MockRuleGroup.instance_id == inst.id, MockRuleGroup.is_deleted.is_(False)).all())
+    by_id = {g.id: g for g in groups}
+    # group_ids=全量新序:集合不等(缺/多/跨实例 id)或入参含重复 → 400
+    if len(payload.group_ids) != len(set(payload.group_ids)) or set(payload.group_ids) != set(by_id):
+        raise HTTPException(400, "group_ids 必须恰好是实例下全部规则组的 id 全量新序")
+    for idx, gid in enumerate(payload.group_ids):
+        by_id[gid].sort_order = idx
+        by_id[gid].updated_by = current.id
+    db.commit()
+    return [_group_out(db, by_id[gid]) for gid in payload.group_ids]
+
+
+@router.put("/mock-rule-groups/{group_id}/rules/reorder", response_model=list[MockRuleOut])
+def reorder_group_rules(group_id: int, payload: MockReorderBody, db: Session = Depends(get_db),
+                        current: User = Depends(get_current_user)):
+    g = _get_group(db, current, group_id, "editor")
+    rules = (db.query(MockRule)
+             .filter(MockRule.group_id == g.id, MockRule.is_deleted.is_(False)).all())
+    by_id = {r.id: r for r in rules}
+    # rule_ids=组内全量新序:集合不等(缺/多/他组 id)或入参含重复 → 400
+    if len(payload.rule_ids) != len(set(payload.rule_ids)) or set(payload.rule_ids) != set(by_id):
+        raise HTTPException(400, "rule_ids 必须恰好是该组下全部规则的 id 全量新序")
+    for idx, rid in enumerate(payload.rule_ids):
+        by_id[rid].sort_order = idx
+        by_id[rid].updated_by = current.id
+    db.commit()
+    return [by_id[rid] for rid in payload.rule_ids]
+
+
+# ---------- 规则(挂组:只存条件+响应,method/path 由组承载) ----------
 
 def _get_rule(db: Session, current: User, rule_id: int, min_role: str) -> MockRule:
     """行闸同 _get_instance:404=不存在或已软删(不泄漏存在性),403=成员但角色不足。"""
@@ -193,13 +335,16 @@ def _get_rule(db: Session, current: User, rule_id: int, min_role: str) -> MockRu
 def create_rule(instance_id: int, payload: MockRuleSave, db: Session = Depends(get_db),
                 current: User = Depends(get_current_user)):
     inst = _get_instance(db, current, instance_id, "editor")
-    method = payload.method.strip().upper()  # 入参小写归一为大写落库
-    _validate_rule_payload(method, payload.path_template)
-    # 含软删行一起取最大:实例内 sort_order 不重号,匹配序稳定
+    group = db.get(MockRuleGroup, payload.group_id)
+    if group is None or group.is_deleted:
+        raise HTTPException(404, "mock rule group not found")
+    if group.instance_id != inst.id:
+        raise HTTPException(400, "rule group 不属于该实例")
+    # 含软删行一起取最大:组内 sort_order 不重号,匹配序稳定
     max_order = (db.query(func.max(MockRule.sort_order))
-                 .filter(MockRule.instance_id == inst.id).scalar()) or 0
+                 .filter(MockRule.group_id == group.id).scalar()) or 0
     rule = MockRule(
-        instance_id=inst.id, method=method, path_template=payload.path_template,
+        instance_id=inst.id, group_id=group.id,
         conditions=[c.model_dump() for c in payload.conditions], enabled=payload.enabled,
         response_status=payload.response_status, response_headers=payload.response_headers,
         response_body=payload.response_body, enable_template=payload.enable_template,
@@ -216,23 +361,20 @@ def create_rule(instance_id: int, payload: MockRuleSave, db: Session = Depends(g
 def list_rules(instance_id: int, db: Session = Depends(get_db),
                current: User = Depends(get_current_user)):
     inst = _get_instance(db, current, instance_id, "viewer")
-    return (db.query(MockRule)
-            .filter(MockRule.instance_id == inst.id, MockRule.is_deleted.is_(False))
-            .order_by(MockRule.sort_order.asc(), MockRule.id.asc()).all())
+    rules = (db.query(MockRule)
+             .filter(MockRule.instance_id == inst.id, MockRule.is_deleted.is_(False)).all())
+    groups = {g.id: g.sort_order for g in (db.query(MockRuleGroup)
+              .filter(MockRuleGroup.instance_id == inst.id, MockRuleGroup.is_deleted.is_(False))
+              .all())}
+    # 平铺序=组间序再组内序;孤儿(软删组)历史规则沉底,仅测试兜底用
+    rules.sort(key=lambda r: (groups.get(r.group_id, 1 << 30), r.sort_order, r.id))
+    return rules
 
 
 @router.put("/mock-rules/{rule_id}", response_model=MockRuleOut)
 def update_rule(rule_id: int, payload: MockRulePatch, db: Session = Depends(get_db),
                 current: User = Depends(get_current_user)):
     rule = _get_rule(db, current, rule_id, "editor")
-    if payload.method is not None or payload.path_template is not None:
-        _validate_rule_payload(
-            payload.method.strip().upper() if payload.method is not None else rule.method,
-            payload.path_template if payload.path_template is not None else rule.path_template)
-    if payload.method is not None:
-        rule.method = payload.method.strip().upper()
-    if payload.path_template is not None:
-        rule.path_template = payload.path_template
     if payload.conditions is not None:
         rule.conditions = [c.model_dump() for c in payload.conditions]
     if payload.enabled is not None:
@@ -264,22 +406,6 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db),
     rule.is_deleted = True  # 软删(命中记录 rule_id 仍可追溯)
     rule.updated_by = current.id
     db.commit()
-
-
-@router.put("/mock-instances/{instance_id}/rules/reorder", response_model=list[MockRuleOut])
-def reorder_rules(instance_id: int, payload: MockReorderBody, db: Session = Depends(get_db),
-                  current: User = Depends(get_current_user)):
-    inst = _get_instance(db, current, instance_id, "editor")
-    rules = (db.query(MockRule)
-             .filter(MockRule.instance_id == inst.id, MockRule.is_deleted.is_(False)).all())
-    by_id = {r.id: r for r in rules}
-    # rule_ids=全量新序:集合不等(缺/多/跨实例 id)或入参含重复 → 400
-    if len(payload.rule_ids) != len(set(payload.rule_ids)) or set(payload.rule_ids) != set(by_id):
-        raise HTTPException(400, "rule_ids 必须恰好是实例下全部规则的 id 全量新序")
-    for idx, rid in enumerate(payload.rule_ids):
-        by_id[rid].sort_order = idx
-    db.commit()
-    return [by_id[rid] for rid in payload.rule_ids]
 
 
 # ---------- 命中组(计划 13 T7) ----------
