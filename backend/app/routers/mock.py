@@ -110,6 +110,17 @@ def update_instance(instance_id: int, payload: MockInstancePatch, db: Session = 
         inst.default_status = payload.default_status
     if payload.default_body is not None:
         inst.default_body = payload.default_body
+    if payload.passthrough_enabled is not None or payload.upstream_base_url is not None:
+        new_enabled = (payload.passthrough_enabled if payload.passthrough_enabled is not None
+                       else inst.passthrough_enabled)
+        new_url = (payload.upstream_base_url.strip() if payload.upstream_base_url is not None
+                   else (inst.upstream_base_url or "").strip())
+        if new_enabled and not new_url:
+            raise HTTPException(400, "开启透传必须填写上游 base_url")
+        if new_url and not new_url.startswith(("http://", "https://")):
+            raise HTTPException(400, "上游 base_url 须以 http:// 或 https:// 开头")
+        inst.passthrough_enabled = new_enabled
+        inst.upstream_base_url = new_url or None
     inst.updated_by = current.id
     db.commit()
     db.refresh(inst)
