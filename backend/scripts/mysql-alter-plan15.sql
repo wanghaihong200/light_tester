@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS mock_rule_groups (
   updated_by INT NULL COMMENT '最后修改人 users.id',
   KEY idx_mockgroups_instance (instance_id),
   CONSTRAINT fk_mockgroups_instance FOREIGN KEY (instance_id) REFERENCES mock_instances (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='规则组表:实例内 method+路径模板 相同的规则的容器,两级有序匹配';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='规则组表:实例内 method+路径模板 相同的规则的容器,以「METHOD / 路径」命名,组间+组内两级有序匹配(ADR-0011)';
 
 -- 1) 规则表先加 group_id 列(回填前置条件)
 ALTER TABLE mock_rules
@@ -39,12 +39,12 @@ WHERE r.group_id IS NULL;
 -- 4) 规则表去 method/path(已上移到组)
 ALTER TABLE mock_rules DROP COLUMN method, DROP COLUMN path_template;
 
--- 4) 实例透传字段
+-- 5) 实例透传字段
 ALTER TABLE mock_instances
   ADD COLUMN passthrough_enabled TINYINT(1) DEFAULT 0 COMMENT '透传开关:未命中转发原始请求到上游' AFTER default_body,
   ADD COLUMN upstream_base_url VARCHAR(500) NULL COMMENT '上游真实服务 base_url;透传开启时必填' AFTER passthrough_enabled;
 
--- 5) 命中记录 outcome + response_body;存量行按 matched 归结
+-- 6) 命中记录 outcome + response_body;存量行按 matched 归结
 ALTER TABLE mock_hits
   ADD COLUMN outcome VARCHAR(16) DEFAULT 'fallback' COMMENT '结局:matched/fallback/forwarded' AFTER matched,
   ADD COLUMN response_body TEXT NULL COMMENT '实际响应体(64KB 截断)' AFTER request_body;
