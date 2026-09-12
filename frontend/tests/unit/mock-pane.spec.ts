@@ -97,10 +97,11 @@ describe('MockPane', () => {
     expect(routerPush).not.toHaveBeenCalled()
     await w.find('[data-test="instance-detail-18081"]').trigger('click')
     expect(routerPush).toHaveBeenCalledTimes(1)
-    // instanceId 取自行数据(RUNNING.id=1),目标路由名即 T10 详情页契约
-    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'project-mock-http-detail', params: { instanceId: 1 },
-    }))
+    // instanceId 取自行数据(RUNNING.id=1),目标路由名即 T10 详情页契约;
+    // params 须含父级 id(缺它在真实浏览器抛 Missing required param「id」),完整形状防回归
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'project-mock-http-detail', params: { id: 3, instanceId: 1 },
+    })
     w.unmount()
   })
 

@@ -11,6 +11,7 @@ import HitsPanel from './HitsPanel.vue'
 const route = useRoute()
 const router = useRouter()
 const instanceId = computed(() => Number(route.params.instanceId))
+const projectId = computed(() => Number(route.params.id))
 
 const instance = ref<MockInstance | null>(null)
 const groups = ref<MockRuleGroup[]>([])
@@ -34,7 +35,8 @@ const groupLabel = (g: MockRuleGroup) => `${g.method} ${g.path_template}`
 <template>
   <div class="hits-page">
     <div class="hits-head">
-      <el-button link @click="router.push({ name: 'project-mock-http-detail', params: { instanceId } })">
+      <!-- 命名路由须带链上全部参数:/projects/:id 是父级,缺 id 抛 Missing required param「id」 -->
+      <el-button link @click="router.push({ name: 'project-mock-http-detail', params: { id: projectId, instanceId } })">
         ← 返回规则组
       </el-button>
       <span class="hits-title">{{ instance?.name }} · 命中记录</span>

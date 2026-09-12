@@ -15,6 +15,7 @@ import RuleDialog from './RuleDialog.vue'
 const route = useRoute()
 const router = useRouter()
 const instanceId = computed(() => Number(route.params.instanceId))
+const projectId = computed(() => Number(route.params.id))
 
 const instance = ref<MockInstance | null>(null)
 const groups = ref<MockRuleGroup[]>([])
@@ -136,7 +137,8 @@ function openGroupEdit(g: MockRuleGroup) { dialogGroup.value = g }
 function openRuleCreate(g: MockRuleGroup) { dialogRuleGroup.value = g; dialogRule.value = null }
 function openRuleEdit(g: MockRuleGroup, row: MockRule) { dialogRuleGroup.value = g; dialogRule.value = row }
 function openHits(g: MockRuleGroup) {
-  router.push({ name: 'project-mock-http-hits', query: { group: String(g.id) } })
+  // 命名路由须带链上全部参数:/projects/:id 是父级,缺 id 抛 Missing required param「id」
+  router.push({ name: 'project-mock-http-hits', params: { id: projectId.value }, query: { group: String(g.id) } })
 }
 // 保存成功回调:关框后刷新;刷新失败不静默(对齐本组件其余调用点的错误透出,计划15 T11 顺手项)
 async function onGroupSaved() {
@@ -161,7 +163,7 @@ async function onRuleSaved() {
 <template>
   <div class="rgp">
     <div class="rgp-head">
-      <el-button link @click="router.push({ name: 'project-mock-http' })">← 返回实例列表</el-button>
+      <el-button link @click="router.push({ name: 'project-mock-http', params: { id: projectId } })">← 返回实例列表</el-button>
       <span class="rgp-title">{{ instance?.name }} · 规则与命中记录</span>
       <el-tag v-if="instance" size="small" class="rgp-url">{{ baseUrl }}</el-tag>
       <el-button type="primary" size="small" data-test="new-group" class="rgp-new" @click="openGroupCreate">

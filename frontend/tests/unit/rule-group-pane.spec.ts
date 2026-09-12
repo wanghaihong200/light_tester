@@ -135,9 +135,10 @@ describe('RuleGroupPane', () => {
     expect(routerPush).not.toHaveBeenCalled()
     await w.find('[data-test="group-hits"]').trigger('click')
     expect(routerPush).toHaveBeenCalledTimes(1)
-    expect(routerPush).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'project-mock-http-hits', query: { group: String(G1.id) },
-    }))
+    // 完整形状断言:params 须含父级 id(缺它在真实浏览器抛 Missing required param「id」)
+    expect(routerPush).toHaveBeenCalledWith({
+      name: 'project-mock-http-hits', params: { id: 3 }, query: { group: String(G1.id) },
+    })
     w.unmount()
   })
 

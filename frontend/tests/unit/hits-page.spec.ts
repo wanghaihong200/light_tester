@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // HitsPage:instanceId/query.group 从路由取参,返回按钮走 useRouter.push
 const routerState = vi.hoisted(() => ({
   push: vi.fn(),
-  params: { instanceId: '9' } as Record<string, string>,
+  params: { id: '3', instanceId: '9' } as Record<string, string>,
   query: {} as Record<string, string>,
 }))
 vi.mock('vue-router', async (importOriginal) => ({
@@ -68,7 +68,7 @@ const optionLabels = () =>
 describe('HitsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    routerState.params = { instanceId: '9' }
+    routerState.params = { id: '3', instanceId: '9' }
     routerState.query = {}
     api.getMockInstance.mockResolvedValue(INSTANCE)
     api.listMockRuleGroups.mockResolvedValue([G1, G2])
@@ -131,13 +131,14 @@ describe('HitsPage', () => {
     w.unmount()
   })
 
-  it('「← 返回规则组」回 project-mock-http-detail(带 instanceId)', async () => {
+  it('「← 返回规则组」回 project-mock-http-detail(params 带链上全部参数 id+instanceId)', async () => {
     const w = mountPage()
     await flushPromises()
     expect(routerState.push).not.toHaveBeenCalled()
     await w.findAll('button').find((b) => b.text().includes('← 返回'))!.trigger('click')
+    // 完整形状断言(不用 objectContaining):缺父级 id 会在真实浏览器抛 Missing required param「id」
     expect(routerState.push).toHaveBeenCalledWith({
-      name: 'project-mock-http-detail', params: { instanceId: 9 },
+      name: 'project-mock-http-detail', params: { id: 3, instanceId: 9 },
     })
     w.unmount()
   })

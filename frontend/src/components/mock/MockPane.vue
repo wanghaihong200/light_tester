@@ -77,8 +77,9 @@ onBeforeUnmount(() => {
 })
 
 // 「详情」下钻:规则组与命中记录在独立路由页(T10/T11),路由契约见 router/index.ts
+// 命名路由须带链上全部参数:/projects/:id 是父级,缺 id 抛 Missing required param「id」
 function openDetail(row: MockInstance) {
-  router.push({ name: 'project-mock-http-detail', params: { instanceId: row.id } })
+  router.push({ name: 'project-mock-http-detail', params: { id: projectId.value, instanceId: row.id } })
 }
 
 function openCreate() { dialogInstance.value = null }
