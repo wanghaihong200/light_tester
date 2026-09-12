@@ -126,7 +126,10 @@ def create_mock_app(instance_id: int, upstream_transport: httpx.AsyncBaseTranspo
                     payload = render_template(payload, path_vars=path_vars, query=query,
                                               headers=headers, body_json=body_json)
             elif instance.passthrough_enabled and (instance.upstream_base_url or "").strip():
-                client_kwargs: dict = {"timeout": httpx.Timeout(
+                # trust_env=False:上游是显式配置的真实服务,必须直连。默认 True 时 httpx 会吃
+                # 系统代理(如本机 Clash),代理把"连不上上游"转成 502 响应,骗过传输层失败
+                # 判定,该回兜底的请求变成透传一个代理错误页(2026-09-12 冒烟实测)。
+                client_kwargs: dict = {"trust_env": False, "timeout": httpx.Timeout(
                     connect=passthrough.CONNECT_TIMEOUT, read=passthrough.READ_TIMEOUT,
                     write=passthrough.READ_TIMEOUT, pool=passthrough.CONNECT_TIMEOUT)}
                 if app.state.upstream_transport is not None:
