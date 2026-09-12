@@ -335,24 +335,32 @@ export interface MockCondition { scope: MockConditionScope; key: string; match: 
 export interface MockInstance {
   id: number; project_id: number; name: string; description: string | null; port: number
   cors_enabled: boolean; default_status: number; default_body: string | null
+  passthrough_enabled: boolean; upstream_base_url: string | null
   desired: 'running' | 'stopped'; status: MockInstanceStatus; error_message: string | null
   created_at: string; updated_at: string
 }
 export interface MockRule {
-  id: number; instance_id: number; method: string; path_template: string; conditions: MockCondition[]
+  id: number; instance_id: number; group_id: number; conditions: MockCondition[]
   enabled: boolean; response_status: number; response_headers: Record<string, string>
   response_body: string | null; enable_template: boolean; delay_ms: number
   timeout_enabled: boolean; timeout_seconds: number; sort_order: number; updated_at: string
 }
 export interface MockRuleBody {
-  method: string; path_template: string; conditions: MockCondition[]; enabled: boolean
+  group_id: number; conditions: MockCondition[]; enabled: boolean
   response_status: number; response_headers: Record<string, string>
   response_body: string | null; enable_template: boolean; delay_ms: number
   timeout_enabled: boolean; timeout_seconds: number
 }
+export interface MockRuleGroup {
+  id: number; instance_id: number; method: string; path_template: string
+  description: string | null; enabled: boolean; sort_order: number
+  rules: MockRule[]; updated_at: string
+}
+export interface MockRuleGroupBody { method: string; path_template: string; description?: string | null }
+export type MockHitOutcome = 'matched' | 'fallback' | 'forwarded'
 export interface MockHit {
   id: number; instance_id: number; rule_id: number | null; method: string; path: string
-  query: string | null; matched: boolean; response_status: number | null
+  query: string | null; matched: boolean; outcome: MockHitOutcome; response_status: number | null
   delay_ms: number; elapsed_ms: number; error: string | null; created_at: string
 }
-export interface MockHitDetail extends MockHit { request_headers: Record<string, string> | null; request_body: string | null }
+export interface MockHitDetail extends MockHit { request_headers: Record<string, string> | null; request_body: string | null; response_body: string | null }
