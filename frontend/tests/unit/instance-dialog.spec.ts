@@ -1,5 +1,5 @@
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElMessage } from 'element-plus'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // InstanceDialog 同 MockPane:projectId 从路由取参(覆写 useRoute,不挂真实路由)
@@ -108,6 +108,27 @@ describe('InstanceDialog', () => {
     await flushPromises()
     expect(api.createMockInstance).toHaveBeenCalledWith(3, expect.objectContaining({
       passthrough_enabled: false, upstream_base_url: null,
+    }))
+    w.unmount()
+  })
+
+  it('上游地址非空时须 http(s):// 开头:scheme 不符保存被拦并 warning(对齐后端 400 文案语义)', async () => {
+    const warnSpy = vi.spyOn(ElMessage, 'warning')
+    const w = mountDialog(null)
+    await flushPromises()
+    await new DOMWrapper(nameInput()).setValue('库存Mock')
+    await w.find('[data-test="passthrough-switch"]').find('.el-switch__core').trigger('click')
+    await upstreamInput(w).setValue('real-api:8080') // 无 scheme → 拦
+    await new DOMWrapper(saveBtn()).trigger('click')
+    await flushPromises()
+    expect(api.createMockInstance).not.toHaveBeenCalled()
+    expect(String(warnSpy.mock.calls[0][0])).toContain('http:// 或 https://')
+    // 补上 scheme → 放行提交
+    await upstreamInput(w).setValue('https://real:8443')
+    await new DOMWrapper(saveBtn()).trigger('click')
+    await flushPromises()
+    expect(api.createMockInstance).toHaveBeenCalledWith(3, expect.objectContaining({
+      passthrough_enabled: true, upstream_base_url: 'https://real:8443',
     }))
     w.unmount()
   })

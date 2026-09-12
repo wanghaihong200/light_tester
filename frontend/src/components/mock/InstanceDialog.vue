@@ -48,6 +48,12 @@ async function save() {
     ElMessage.warning('开启透传必须填写上游地址')
     return
   }
+  // 计划15 T11 顺手项:地址非空须带 scheme,对齐后端 mock.py 400「上游 base_url 须以 http:// 或 https:// 开头」
+  const upstream = upstreamBaseUrl.value.trim()
+  if (upstream && !upstream.startsWith('http://') && !upstream.startsWith('https://')) {
+    ElMessage.warning('上游地址须以 http:// 或 https:// 开头')
+    return
+  }
   busy.value = true
   try {
     const body = {

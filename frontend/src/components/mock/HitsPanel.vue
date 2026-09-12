@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 计划13 T11:命中记录面板(过滤 + 3s 轮询 + 详情抽屉 + 清空)
+// 计划15 T11:四态过滤(+透传)/组筛选 groupId/命中三态 tag(透传蓝·命中绿·兜底红)/响应体段
 // 轮询/列表失败静默(后台刷新不弹全局错防噪音);用户动作(详情/清空)失败仍提示
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -7,13 +8,15 @@ import { clearMockHits, getMockHit, listMockHits } from '../../api/mock'
 import type { MockHitsFilter } from '../../api/mock'
 import type { MockHit, MockHitDetail } from '../../types'
 
-const props = defineProps<{ instanceId: number }>()
+// groupId:规则组下钻筛选,null/undefined=全部(RuleGroupPane 命中记录入口与 HitsPage 组下拉共用)
+const props = defineProps<{ instanceId: number; groupId?: number | null }>()
 
 const POLL_MS = 3000
 const FILTERS: { value: MockHitsFilter; label: string }[] = [
   { value: 'all', label: '全部' },
   { value: 'matched', label: '命中' },
   { value: 'unmatched', label: '未命中' },
+  { value: 'forwarded', label: '透传' },
 ]
 
 const hits = ref<MockHit[]>([])
@@ -27,7 +30,8 @@ let disposed = false // 卸载守卫:在途 loadHits resolve 后不得复活定�
 async function loadHits() {
   loading.value = true
   try {
-    hits.value = await listMockHits(props.instanceId, filter.value)
+    // groupId null/undefined=全部(api 侧不拼 group_id 参);limit 显式 200
+    hits.value = await listMockHits(props.instanceId, filter.value, 200, props.groupId ?? undefined)
   } catch {
     // 静默:轮询/列表失败不弹全局错,保留旧列表待下次轮询
   } finally {
@@ -60,6 +64,7 @@ onMounted(async () => {
 })
 
 watch(() => props.instanceId, reload)
+watch(() => props.groupId, reload) // 计划15 T11:切组下钻重拉(与 instanceId/filter 并列,走同一 reload 重建定时器)
 watch(filter, reload)
 
 onBeforeUnmount(() => {
@@ -120,9 +125,12 @@ function fullPath(row: MockHit): string {
   return row.query ? `${row.path}?${row.query}` : row.path
 }
 
-// 命中 tag 文案:绿「命中→状态码」/ 红「未命中→状态码」(后端超时挂住时状态码可能为 null)
-function hitTagText(row: MockHit): string {
-  return `${row.matched ? '命中' : '未命中'}→${row.response_status ?? '-'}`
+// tag 文案与配色:命中绿 / 透传蓝 / 兜底红;透传失败落兜底的行 outcome=fallback 且 error 带 forward-failed,错误红字已在行内展示
+// (后端超时挂住时状态码可能为 null,统一落 '-';outcome=forwarded 优先于 matched 判定)
+function hitTag(row: MockHit): { type: 'success' | 'primary' | 'danger'; text: string } {
+  if (row.outcome === 'forwarded') return { type: 'primary', text: `透传→${row.response_status ?? '-'}` }
+  if (row.matched) return { type: 'success', text: `命中→${row.response_status ?? '-'}` }
+  return { type: 'danger', text: `未命中→${row.response_status ?? '-'}` }
 }
 </script>
 
@@ -156,13 +164,17 @@ function hitTagText(row: MockHit): string {
       </el-table-column>
       <el-table-column label="命中" width="118" align="center">
         <template #default="{ row }">
-          <el-tag :type="row.matched ? 'success' : 'danger'" size="small" data-test="hit-tag">
-            {{ hitTagText(row) }}
+          <el-tag :type="hitTag(row).type" size="small" data-test="hit-tag">
+            {{ hitTag(row).text }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="耗时" width="76" align="center">
-        <template #default="{ row }">{{ row.elapsed_ms }}ms</template>
+      <!-- 行尾「详情」link:@click.stop 防触发整行点击,宽 76→120 容纳按钮(计划15 T11) -->
+      <el-table-column label="耗时" width="120" align="center">
+        <template #default="{ row }">
+          <span>{{ row.elapsed_ms }}ms</span>
+          <el-button link size="small" data-test="hit-detail" @click.stop="openDetail(row)">详情</el-button>
+        </template>
       </el-table-column>
     </el-table>
     <el-empty v-if="!loading && hits.length === 0" description="暂无命中记录" />
@@ -197,6 +209,10 @@ function hitTagText(row: MockHit): string {
             <span class="kv-k">延迟</span><span>{{ detail.delay_ms }}ms</span>
             <span class="kv-k">耗时</span><span>{{ detail.elapsed_ms }}ms</span>
           </div>
+          <!-- 计划15 T11:响应体段(透传时为上游原样返回体) -->
+          <h4>响应体</h4>
+          <pre v-if="detail.response_body" class="body-pre" data-test="hit-resp-body">{{ detail.response_body }}</pre>
+          <p v-else class="muted">无</p>
         </template>
       </div>
     </el-drawer>

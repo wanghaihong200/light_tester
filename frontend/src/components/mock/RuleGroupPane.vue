@@ -138,8 +138,24 @@ function openRuleEdit(g: MockRuleGroup, row: MockRule) { dialogRuleGroup.value =
 function openHits(g: MockRuleGroup) {
   router.push({ name: 'project-mock-http-hits', query: { group: String(g.id) } })
 }
-function onGroupSaved() { dialogGroup.value = undefined; reload() }
-function onRuleSaved() { dialogRule.value = undefined; reload() }
+// 保存成功回调:关框后刷新;刷新失败不静默(对齐本组件其余调用点的错误透出,计划15 T11 顺手项)
+async function onGroupSaved() {
+  dialogGroup.value = undefined
+  try {
+    await reload()
+  } catch (e) {
+    ElMessage.error(`刷新规则组失败:${(e as Error).message}`)
+  }
+}
+
+async function onRuleSaved() {
+  dialogRule.value = undefined
+  try {
+    await reload()
+  } catch (e) {
+    ElMessage.error(`刷新规则组失败:${(e as Error).message}`)
+  }
+}
 </script>
 
 <template>

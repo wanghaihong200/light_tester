@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import ElementPlus, { ElMessageBox } from 'element-plus'
+import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 
 // RuleGroupPane 同 MockPane:instanceId/projectId 从路由取参;openHits 跳命中页需 useRouter
@@ -29,6 +29,8 @@ const api = vi.hoisted(() => ({
 
 vi.mock('../../src/api/mock', () => api)
 
+import GroupDialog from '../../src/components/mock/GroupDialog.vue'
+import RuleDialog from '../../src/components/mock/RuleDialog.vue'
 import RuleGroupPane from '../../src/components/mock/RuleGroupPane.vue'
 import type { MockInstance, MockRule, MockRuleGroup } from '../../src/types'
 
@@ -202,6 +204,25 @@ describe('RuleGroupPane', () => {
     // 删除后 reload:组卡片仍在(空组保留),组内显空态占位
     expect(w.find('[data-test="group-card-1"]').exists()).toBe(true)
     expect(w.text()).toContain('组内暂无规则')
+    w.unmount()
+  })
+
+  it('保存组/保存规则后的刷新失败:ElMessage.error 透出不静默(计划15 T11 顺手项)', async () => {
+    const errSpy = vi.spyOn(ElMessage, 'error')
+    const w = mountPane()
+    await flushPromises()
+    // 组保存回调 onGroupSaved → reload 失败须透出,不静默
+    api.listMockRuleGroups.mockRejectedValueOnce(new Error('网络抖动'))
+    await w.find('[data-test="new-group"]').trigger('click')
+    w.findComponent(GroupDialog).vm.$emit('saved', G1)
+    await flushPromises()
+    expect(errSpy).toHaveBeenCalledWith('刷新规则组失败:网络抖动')
+    // 规则保存回调 onRuleSaved → reload 失败同样透出
+    api.listMockRuleGroups.mockRejectedValueOnce(new Error('再抖'))
+    await gToolBtn(w, 1, '新建规则').trigger('click')
+    w.findComponent(RuleDialog).vm.$emit('saved', mkRule())
+    await flushPromises()
+    expect(errSpy).toHaveBeenLastCalledWith('刷新规则组失败:再抖')
     w.unmount()
   })
 })
