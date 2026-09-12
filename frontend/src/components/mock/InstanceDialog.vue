@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 计划13 T9:Mock 实例新建/编辑对话框(create/edit 双模)
+// 计划13 T9:Mock 实例新建/编辑对话框(create/edit 双模);计划15 T9 增透传配置
 // prop 契约照 brief:仅 instance?: MockInstance | null;projectId 同 MockPane 从路由取参
 import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -19,6 +19,8 @@ const port = ref<number | null>(null)
 const cors = ref(false)
 const defaultStatus = ref(200)
 const defaultBody = ref('')
+const passthroughEnabled = ref(false)
+const upstreamBaseUrl = ref('')
 const busy = ref(false)
 
 // edit 模式且实例处于 running/starting 时端口锁定(与后端 409 对齐)
@@ -32,11 +34,18 @@ watch(() => props.instance, (s) => {
   cors.value = s?.cors_enabled ?? false
   defaultStatus.value = s?.default_status ?? 200
   defaultBody.value = s?.default_body ?? ''
+  passthroughEnabled.value = s?.passthrough_enabled ?? false
+  upstreamBaseUrl.value = s?.upstream_base_url ?? ''
 }, { immediate: true })
 
 async function save() {
   if (!name.value.trim()) {
     ElMessage.warning('请填写实例名称')
+    return
+  }
+  // 透传前端校验:开关开必须给上游地址(后端也有同款校验,这里先拦省一次往返)
+  if (passthroughEnabled.value && !upstreamBaseUrl.value.trim()) {
+    ElMessage.warning('开启透传必须填写上游地址')
     return
   }
   busy.value = true
@@ -48,6 +57,8 @@ async function save() {
       cors_enabled: cors.value,
       default_status: defaultStatus.value,
       default_body: defaultBody.value.trim() || null,
+      passthrough_enabled: passthroughEnabled.value,
+      upstream_base_url: upstreamBaseUrl.value.trim() || null,
     }
     const saved = props.instance
       ? await updateMockInstance(props.instance.id, body)
@@ -87,6 +98,17 @@ async function save() {
       <el-form-item label="默认响应体">
         <el-input v-model="defaultBody" type="textarea" :rows="4" placeholder="默认返回的响应体" />
       </el-form-item>
+      <!-- 透传(计划15):规则未命中时原样转发上游;开关开才显示上游地址 -->
+      <el-form-item label="透传">
+        <el-switch v-model="passthroughEnabled" data-test="passthrough-switch" />
+        <span class="hint">开启后:规则未命中时原样转发到上游真实服务,转发不通才回兜底</span>
+      </el-form-item>
+      <el-form-item v-if="passthroughEnabled" label="上游地址">
+        <el-input
+          v-model="upstreamBaseUrl" data-test="upstream-url"
+          placeholder="http://real-api:8080"
+        />
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="emit('close')">取消</el-button>
@@ -102,6 +124,11 @@ async function save() {
 .port-lock-tip {
   margin-left: 8px;
   font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.hint {
+  font-size: 12px;
+  margin-left: 8px;
   color: var(--el-text-color-secondary);
 }
 </style>

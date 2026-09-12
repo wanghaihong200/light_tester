@@ -33,6 +33,15 @@ const router = createRouter({
             { path: 'ui/web', name: 'project-ui-web', component: () => import('../components/webauto/WebAutoPane.vue') },
             { path: 'ui/app', name: 'project-ui-app', component: () => import('../components/appauto/AppAutoPane.vue') },
             { path: 'mock/http', name: 'project-mock-http', component: () => import('../components/mock/MockPane.vue') },
+            // 详情/命中页为 HTTP Mock 的下钻路由(计划15);正则参数防 'hits' 等段被吞进 instanceId
+            {
+              path: 'mock/http/:instanceId(\\d+)', name: 'project-mock-http-detail',
+              component: () => import('../components/mock/RuleGroupPane.vue'),
+            },
+            {
+              path: 'mock/http/:instanceId(\\d+)/hits', name: 'project-mock-http-hits',
+              component: () => import('../components/mock/HitsPage.vue'),
+            },
             { path: 'perf/app', name: 'project-perf-app', component: () => import('../components/perf/PerfRecordPane.vue') },
           ],
         },

@@ -50,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 interface MenuLeaf {
   key: string // 与路由名 project-<key> 对应(cases/knowledge/ai-jobs/ai-repo/ai-cross/ui-web/ui-app)
@@ -111,6 +111,11 @@ const PROJECT_MENU: (MenuLeaf | MenuGroup)[] = [
 const props = defineProps<{ activeKey: string; collapsed: boolean; projectId: number | null }>()
 const emit = defineEmits<{ (e: 'navigate', path: string): void }>()
 
+// 高亮归一化(计划15 T9):详情/命中页是 HTTP Mock 的下钻路由,菜单高亮留在「HTTP Mock」项上。
+// activeKey 语义见 AppLayout(project-<id>:<功能段>),这里剥掉 mock-http 后的下钻段;
+// 同名 computed 会遮蔽模板里的同名 prop,模板与 watch 统一走归一化后的值
+const activeKey = computed(() => props.activeKey.replace(/^(project-\d+:mock-http)-.+$/, '$1'))
+
 const isLeaf = (item: MenuLeaf | MenuGroup): item is MenuLeaf => !('children' in item)
 
 function itemKey(item: MenuLeaf): string {
@@ -128,7 +133,7 @@ function toggle(key: string): void {
 }
 
 watch(
-  () => props.activeKey,
+  () => activeKey.value,
   (k) => {
     const m = k.match(/^project-\d+:(.+)$/)
     if (!m) return

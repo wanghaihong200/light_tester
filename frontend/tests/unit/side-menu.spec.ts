@@ -84,6 +84,22 @@ describe('SideMenu', () => {
     w.unmount()
   })
 
+  it('高亮归一化(计划15 T9):mock 下钻路由的 activeKey 仍高亮 HTTP Mock 菜单项', () => {
+    for (const key of ['project-3:mock-http-detail', 'project-3:mock-http-hits']) {
+      const w = mount(SideMenu, { props: { activeKey: key, collapsed: false, projectId: 3 } })
+      const item = w.findAll('.menu-item').find((i) => i.find('.menu-name').text() === 'HTTP Mock')!
+      expect(item.classes(), `activeKey=${key}`).toContain('active')
+      w.unmount()
+    }
+  })
+
+  it('高亮归一化不越界:其他前缀相近的 activeKey 不被误归一(知识库不受 mock-http 影响是平凡例,防回归写死)', () => {
+    const w = mount(SideMenu, { props: { activeKey: 'project-3:knowledge', collapsed: false, projectId: 3 } })
+    const item = w.findAll('.menu-item').find((i) => i.find('.menu-name').text() === 'HTTP Mock')!
+    expect(item.classes()).not.toContain('active')
+    w.unmount()
+  })
+
   it('首页项高亮与导航不受项目态影响', async () => {
     const w = mount(SideMenu, { props: { activeKey: 'project-3:cases', collapsed: false, projectId: 3 } })
     const home = w.findAll('.menu-item')[0]
