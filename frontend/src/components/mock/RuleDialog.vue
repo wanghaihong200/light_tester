@@ -1,16 +1,15 @@
 <script setup lang="ts">
 // 计划13 T10:Mock 规则新建/编辑对话框(create/edit 双模,双 emit 照 InstanceDialog)
-// 轻校验只拦 method/path_template;复杂校验(模板段/正则/响应头键名)交后端 400 文案直接透出
+// 计划15 T10:规则挂组——props 改挂所属规则组,方法/路径只读展示由组决定;新建带 group_id、编辑走 Partial
 import { ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { createMockRule, updateMockRule } from '../../api/mock'
-import type { MockCondition, MockMatchMode, MockConditionScope, MockRule } from '../../types'
+import type { MockCondition, MockMatchMode, MockConditionScope, MockRule, MockRuleGroup } from '../../types'
 
-const props = defineProps<{ instanceId: number; rule?: MockRule | null }>()
+const props = defineProps<{ group: MockRuleGroup; rule?: MockRule | null }>()
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved', r: MockRule): void }>()
 
-// 与后端 schemas.MockRuleSave 对齐:7 方法;条件 scope 三选/match 二选
-const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'] as const
+// 条件 scope 三选/match 二选
 const SCOPES: { value: MockConditionScope; label: string }[] = [
   { value: 'query', label: '查询参数' },
   { value: 'header', label: '请求头' },
@@ -23,8 +22,6 @@ function keyPlaceholder(c: MockCondition): string {
   return c.scope === 'body' ? 'JSONPath 表达式,如 $.user.id' : '参数名'
 }
 
-const method = ref('GET')
-const pathTemplate = ref('')
 const enabled = ref(true)
 const conditions = ref<MockCondition[]>([])
 const responseStatus = ref(200)
@@ -55,8 +52,6 @@ function parseHeaders(text: string): Record<string, string> {
 }
 
 watch(() => props.rule, (r) => {
-  method.value = r?.method ?? 'GET'
-  pathTemplate.value = r?.path_template ?? ''
   enabled.value = r?.enabled ?? true
   conditions.value = (r?.conditions ?? []).map((c) => ({ ...c }))
   responseStatus.value = r?.response_status ?? 200
@@ -76,19 +71,9 @@ function removeCondition(i: number) {
 }
 
 async function save() {
-  if (!method.value) {
-    ElMessage.warning('请选择请求方法')
-    return
-  }
-  if (!pathTemplate.value.trim()) {
-    ElMessage.warning('请填写路径模板,如 /users/{id}')
-    return
-  }
   busy.value = true
   try {
     const body = {
-      method: method.value,
-      path_template: pathTemplate.value.trim(),
       conditions: conditions.value,
       enabled: enabled.value,
       response_status: responseStatus.value,
@@ -99,9 +84,10 @@ async function save() {
       timeout_enabled: timeoutEnabled.value,
       timeout_seconds: timeoutSeconds.value,
     }
+    // 新建需挂组带 group_id(instance_id 取自所属组);编辑走 Partial 不带
     const saved = props.rule
       ? await updateMockRule(props.rule.id, body)
-      : await createMockRule(props.instanceId, body)
+      : await createMockRule(props.group.instance_id, { ...body, group_id: props.group.id })
     ElMessage.success('已保存')
     emit('saved', saved)
   } catch (e) {
@@ -115,13 +101,11 @@ async function save() {
 <template>
   <el-dialog :model-value="true" :title="rule ? '编辑规则' : '新建规则'" width="680px" @close="emit('close')">
     <el-form label-width="110px">
-      <el-form-item label="请求方法" required>
-        <el-select v-model="method" class="method-select">
-          <el-option v-for="m in METHODS" :key="m" :label="m" :value="m" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="路径模板" required>
-        <el-input v-model="pathTemplate" placeholder="/users/{id}" />
+      <!-- 方法/路径由所属规则组决定,此处只读提示(计划15 T10) -->
+      <el-form-item label="规则组">
+        <span class="group-route-ro" data-test="group-route-ro">
+          {{ group.method }} {{ group.path_template }}(方法与路径由所属规则组决定)
+        </span>
       </el-form-item>
       <el-form-item label="启用">
         <el-switch v-model="enabled" />
@@ -184,8 +168,10 @@ async function save() {
 </template>
 
 <style scoped>
-.method-select {
-  width: 160px;
+.group-route-ro {
+  color: var(--el-text-color-primary);
+  font-family: Consolas, Menlo, monospace;
+  font-size: 13px;
 }
 .conditions {
   display: flex;

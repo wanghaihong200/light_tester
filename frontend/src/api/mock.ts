@@ -19,6 +19,8 @@ export const updateMockInstance = (id: number, body: Partial<MockInstanceBody>) 
 export const deleteMockInstance = (id: number) => http.del(`/mock-instances/${id}`)
 export const startMockInstance = (id: number) => http.post<MockInstance>(`/mock-instances/${id}/start`)
 export const stopMockInstance = (id: number) => http.post<MockInstance>(`/mock-instances/${id}/stop`)
+// 实例单查(计划15 T10 详情页头部要实例名+port 拼 base_url;后端 mock.py GET /mock-instances/{id} 已有)
+export const getMockInstance = (id: number) => http.get<MockInstance>(`/mock-instances/${id}`)
 
 // ── 规则组(计划15):规则挂到组下,组按 method+path_template 匹配 ──
 export const listMockRuleGroups = (instanceId: number) =>
