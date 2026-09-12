@@ -68,6 +68,27 @@ def test_create_group_and_duplicate_route_400(client, db_session, make_user):
     assert bad2.status_code == 400
 
 
+def test_create_group_path_template_strip_and_blank(client, db_session, make_user):
+    """计划15 收口:path_template 入参首尾空白 strip 归一——strip 后值参与唯一校验与落库,
+    防 " /a " 这类死路由绕过重路校验;strip 后为空 → 400。"""
+    admin = make_user(db_session, "adm40", is_admin=True)
+    inst = _project_inst(db_session, "p-group-11", 19073)
+    h = _login(client, admin.username)
+
+    r = client.post(f"/api/mock-instances/{inst.id}/rule-groups",
+                    json={"method": "GET", "path_template": " /a "}, headers=h)
+    assert r.status_code == 201
+    assert r.json()["path_template"] == "/a"                     # strip 归一后落库
+
+    blank = client.post(f"/api/mock-instances/{inst.id}/rule-groups",
+                        json={"method": "GET", "path_template": "   "}, headers=h)
+    assert blank.status_code == 400                              # strip 后为空 → 400
+
+    dup = client.post(f"/api/mock-instances/{inst.id}/rule-groups",
+                      json={"method": "GET", "path_template": " /a "}, headers=h)
+    assert dup.status_code == 400                                # 先建 "/a" 再建 " /a " → 重路 400
+
+
 def test_create_rule_requires_group_of_instance(client, db_session, make_user):
     """组下建规则:组不存在/软删 → 404;组属其它实例 → 400。"""
     admin = make_user(db_session, "adm31", is_admin=True)

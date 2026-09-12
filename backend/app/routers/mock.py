@@ -232,11 +232,15 @@ def create_group(instance_id: int, payload: MockRuleGroupSave, db: Session = Dep
                  current: User = Depends(get_current_user)):
     inst = _get_instance(db, current, instance_id, "editor")
     method = payload.method.strip().upper()  # 入参小写归一为大写落库
-    _validate_route(db, inst.id, method, payload.path_template)
+    # path_template 首尾空白归一(计划15 收口):strip 后值参与唯一校验与落库,防 "/a " 死路由绕过重路校验
+    path_template = payload.path_template.strip()
+    if not path_template:
+        raise HTTPException(400, "路径不能为空")
+    _validate_route(db, inst.id, method, path_template)
     # 含软删行一起取最大:实例内组 sort_order 不重号,匹配序稳定
     max_order = (db.query(func.max(MockRuleGroup.sort_order))
                  .filter(MockRuleGroup.instance_id == inst.id).scalar()) or 0
-    g = MockRuleGroup(instance_id=inst.id, method=method, path_template=payload.path_template,
+    g = MockRuleGroup(instance_id=inst.id, method=method, path_template=path_template,
                       description=payload.description, enabled=payload.enabled,
                       sort_order=max_order + 1, created_by=current.id, updated_by=current.id)
     db.add(g)
@@ -266,12 +270,12 @@ def update_group(group_id: int, payload: MockRuleGroupPatch, db: Session = Depen
                 ("path_template" in changed and not (path_template and path_template.strip())):
             raise HTTPException(400, "method/路径不能为空,且不接受 null")
         _validate_route(db, g.instance_id, (method or g.method).strip().upper(),
-                        path_template if path_template is not None else g.path_template,
+                        path_template.strip() if path_template is not None else g.path_template,
                         exclude_id=g.id)
     if "method" in changed:
         g.method = changed["method"].strip().upper()
     if "path_template" in changed:
-        g.path_template = changed["path_template"]
+        g.path_template = changed["path_template"].strip()  # 与校验同源:strip 后值落库(计划15 收口)
     if "description" in changed:
         g.description = changed["description"]  # 仅 description 保留"显式 null=清空"
     if changed.get("enabled") is not None:
