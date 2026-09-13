@@ -228,33 +228,34 @@ async function onRuleSaved() {
             </span>
           </div>
         </template>
-        <!-- 组内规则表:method/path 由组决定,列只余 排序/条件数/状态码/启用/延迟/超时/操作 -->
+        <!-- 组内规则表:method/path 由组决定,列只余 排序/条件数/状态码/启用/延迟/超时/操作;
+             全列 min-width(2026-09-13 验收反馈):宽屏下按比例铺满整行,不留固定宽死区 -->
         <el-table :data="g.rules" row-key="id" border size="small" class="g-rules" :data-test="`rules-of-${g.id}`">
-          <el-table-column label="排序" width="90" align="center">
+          <el-table-column label="排序" min-width="90" align="center">
             <template #default="{ $index }">
               <el-button link size="small" data-test="rule-up" :disabled="$index === 0" @click="moveRule(g, $index, -1)">↑</el-button>
               <el-button link size="small" data-test="rule-down" :disabled="$index === g.rules.length - 1" @click="moveRule(g, $index, 1)">↓</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="条件数" width="76" align="center">
+          <el-table-column label="条件数" min-width="90" align="center">
             <template #default="{ row }">{{ row.conditions.length }}</template>
           </el-table-column>
-          <el-table-column prop="response_status" label="状态码" width="72" align="center" />
-          <el-table-column label="启用" width="68" align="center">
+          <el-table-column prop="response_status" label="状态码" min-width="100" align="center" />
+          <el-table-column label="启用" min-width="100" align="center">
             <template #default="{ row }">
               <el-switch :model-value="row.enabled" @change="onToggleRule(g, row, $event)" />
             </template>
           </el-table-column>
-          <el-table-column label="延迟" width="84" align="center">
+          <el-table-column label="延迟" min-width="110" align="center">
             <template #default="{ row }">{{ row.delay_ms > 0 ? `${row.delay_ms}ms` : '-' }}</template>
           </el-table-column>
-          <el-table-column label="超时" width="72" align="center">
+          <el-table-column label="超时" min-width="100" align="center">
             <template #default="{ row }">
               <el-tag v-if="row.timeout_enabled" type="warning" size="small">{{ row.timeout_seconds }}s</el-tag>
               <span v-else>-</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="150">
+          <el-table-column label="操作" min-width="150">
             <template #default="{ row }">
               <el-button link size="small" :data-test="`rule-copy-${row.id}`" @click="onCopyRule(g, row)">复制</el-button>
               <el-button link size="small" @click="openRuleEdit(g, row)">编辑</el-button>
