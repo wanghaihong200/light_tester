@@ -335,7 +335,6 @@ export interface MockCondition { scope: MockConditionScope; key: string; match: 
 export interface MockInstance {
   id: number; project_id: number; name: string; description: string | null; port: number
   cors_enabled: boolean; default_status: number; default_body: string | null
-  passthrough_enabled: boolean; upstream_base_url: string | null
   desired: 'running' | 'stopped'; status: MockInstanceStatus; error_message: string | null
   created_at: string; updated_at: string
 }
@@ -353,10 +352,14 @@ export interface MockRuleBody {
 }
 export interface MockRuleGroup {
   id: number; instance_id: number; method: string; path_template: string
-  description: string | null; enabled: boolean; sort_order: number
-  rules: MockRule[]; updated_at: string
+  description: string | null; enabled: boolean
+  passthrough_enabled: boolean; upstream_base_url: string | null   // 组级透传:组即"被 mock 的原始接口"
+  sort_order: number; rules: MockRule[]; updated_at: string
 }
-export interface MockRuleGroupBody { method: string; path_template: string; description?: string | null }
+export interface MockRuleGroupBody {
+  method: string; path_template: string; description?: string | null
+  passthrough_enabled?: boolean; upstream_base_url?: string | null
+}
 export type MockHitOutcome = 'matched' | 'fallback' | 'forwarded'
 export interface MockHit {
   id: number; instance_id: number; rule_id: number | null; method: string; path: string

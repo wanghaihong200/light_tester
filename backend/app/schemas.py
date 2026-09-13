@@ -250,8 +250,7 @@ class MockInstanceSave(BaseModel):
     cors_enabled: bool = False
     default_status: int = Field(404, ge=100, le=599)
     default_body: str | None = None
-    passthrough_enabled: bool = False
-    upstream_base_url: str | None = None
+    # 透传已移至规则组级(2026-09-13 验收调整):实例只余兜底,"被 mock 的原始接口"是组级概念
 
 
 class MockInstancePatch(BaseModel):
@@ -261,8 +260,6 @@ class MockInstancePatch(BaseModel):
     cors_enabled: bool | None = None
     default_status: int | None = Field(None, ge=100, le=599)
     default_body: str | None = None
-    passthrough_enabled: bool | None = None
-    upstream_base_url: str | None = None
 
 
 class MockInstanceOut(BaseModel):
@@ -275,8 +272,6 @@ class MockInstanceOut(BaseModel):
     cors_enabled: bool
     default_status: int
     default_body: str | None
-    passthrough_enabled: bool
-    upstream_base_url: str | None
     desired: str
     status: str
     error_message: str | None
@@ -332,6 +327,8 @@ class MockRuleGroupSave(BaseModel):
     path_template: str
     description: str | None = None
     enabled: bool = True
+    passthrough_enabled: bool = False   # 组级透传:组路由命中但组内规则全不中→转发该组上游
+    upstream_base_url: str | None = None
 
 
 class MockRuleGroupPatch(BaseModel):
@@ -339,6 +336,8 @@ class MockRuleGroupPatch(BaseModel):
     path_template: str | None = None
     description: str | None = None
     enabled: bool | None = None
+    passthrough_enabled: bool | None = None
+    upstream_base_url: str | None = None
 
 
 class MockRuleGroupOut(BaseModel):
@@ -349,6 +348,8 @@ class MockRuleGroupOut(BaseModel):
     path_template: str
     description: str | None
     enabled: bool
+    passthrough_enabled: bool
+    upstream_base_url: str | None
     sort_order: int
     rules: list[MockRuleOut] = []
     updated_at: datetime

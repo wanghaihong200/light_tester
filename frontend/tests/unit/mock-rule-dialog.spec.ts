@@ -15,7 +15,7 @@ import type { MockRule, MockRuleGroup } from '../../src/types'
 function mkGroup(over: Partial<MockRuleGroup> = {}): MockRuleGroup {
   return {
     id: 7, instance_id: 5, method: 'POST', path_template: '/orders/{id}',
-    description: null, enabled: true, sort_order: 0, rules: [],
+    description: null, enabled: true, passthrough_enabled: false, upstream_base_url: null, sort_order: 0, rules: [],
     updated_at: '2026-09-08T10:00:00',
     ...over,
   }

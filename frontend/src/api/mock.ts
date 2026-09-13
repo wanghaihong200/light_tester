@@ -7,7 +7,7 @@ import type {
 export type MockInstanceBody = {
   name: string; description?: string | null; port?: number | null
   cors_enabled?: boolean; default_status?: number; default_body?: string | null
-  passthrough_enabled?: boolean; upstream_base_url?: string | null
+  // 透传已移至规则组级(2026-09-13 验收调整),实例只余兜底配置
 }
 
 export const listMockInstances = (projectId: number) =>

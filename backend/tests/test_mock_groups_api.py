@@ -275,3 +275,65 @@ def test_group_permission_matrix(client, db_session, make_user):
     assert client.put(f"/api/mock-rule-groups/{gid}",
                       json={"enabled": False}, headers=oh).status_code == 404
     assert client.delete(f"/api/mock-rule-groups/{gid}", headers=oh).status_code == 404
+
+
+# ---------- 组级透传(2026-09-13 验收调整:由实例级移入组级) ----------
+
+def test_group_passthrough_create_and_defaults(client, db_session, make_user):
+    """create 带透传字段落库;不带字段默认关+空地址。"""
+    admin = make_user(db_session, "adm40", is_admin=True)
+    inst = _project_inst(db_session, "p-group-pt", 19081, owner=admin)
+    h = _login(client, admin.username)
+
+    g = _mk_group(client, h, inst.id, method="GET", path="/real",
+                  passthrough_enabled=True, upstream_base_url="http://real:8080")
+    assert g["passthrough_enabled"] is True
+    assert g["upstream_base_url"] == "http://real:8080"
+
+    plain = _mk_group(client, h, inst.id, method="GET", path="/plain")
+    assert plain["passthrough_enabled"] is False
+    assert plain["upstream_base_url"] is None
+
+
+def test_group_passthrough_validation_400(client, db_session, make_user):
+    """与旧实例级同款校验:开启必须非空 http(s) URL;坏 scheme 400。"""
+    admin = make_user(db_session, "adm41", is_admin=True)
+    inst = _project_inst(db_session, "p-group-pt2", 19082, owner=admin)
+    h = _login(client, admin.username)
+
+    r1 = client.post(f"/api/mock-instances/{inst.id}/rule-groups",
+                     json={"method": "GET", "path_template": "/a", "passthrough_enabled": True},
+                     headers=h)
+    assert r1.status_code == 400
+    assert r1.json()["detail"] == "开启透传必须填写上游 base_url"
+
+    r2 = client.post(f"/api/mock-instances/{inst.id}/rule-groups",
+                     json={"method": "GET", "path_template": "/a", "passthrough_enabled": True,
+                           "upstream_base_url": "ftp://x"}, headers=h)
+    assert r2.status_code == 400
+    assert r2.json()["detail"] == "上游 base_url 须以 http:// 或 https:// 开头"
+
+
+def test_group_passthrough_update_merge_semantics(client, db_session, make_user):
+    """PATCH 合并语义同旧实例级:只关开关保留地址;只给地址不改开关;显式 null 地址按未提供。"""
+    admin = make_user(db_session, "adm42", is_admin=True)
+    inst = _project_inst(db_session, "p-group-pt3", 19083, owner=admin)
+    h = _login(client, admin.username)
+    gid = _mk_group(client, h, inst.id, method="GET", path="/a",
+                    passthrough_enabled=True, upstream_base_url="http://real:8080")["id"]
+
+    r = client.put(f"/api/mock-rule-groups/{gid}", json={"passthrough_enabled": False}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["passthrough_enabled"] is False
+    assert r.json()["upstream_base_url"] == "http://real:8080"   # 关开关保留地址
+
+    r = client.put(f"/api/mock-rule-groups/{gid}", json={"upstream_base_url": "http://other:1"},
+                   headers=h)
+    assert r.json()["passthrough_enabled"] is False             # 只给地址不改开关
+    assert r.json()["upstream_base_url"] == "http://other:1"
+
+    r = client.put(f"/api/mock-rule-groups/{gid}",
+                   json={"passthrough_enabled": True, "upstream_base_url": None}, headers=h)
+    assert r.status_code == 200                                  # 显式 null 按未提供(与 enabled 同族)
+    assert r.json()["passthrough_enabled"] is True
+    assert r.json()["upstream_base_url"] == "http://other:1"     # 沿用现值地址

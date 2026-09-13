@@ -149,19 +149,20 @@ function statusTextOf(s: MockInstanceStatus): string { return STATUS_TEXT[s] ?? 
               <el-button link size="small" @click="copyUrl(row)">复制</el-button>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="250">
+          <!-- link 按钮防四钮换行(2026-09-13 验收反馈):占宽约为实心钮一半,240 单行足够 -->
+          <el-table-column label="操作" width="240">
             <template #default="{ row }">
               <el-button
-                size="small" type="primary" :data-test="`instance-detail-${row.port}`"
+                link size="small" type="primary" :data-test="`instance-detail-${row.port}`"
                 @click="openDetail(row)"
               >详情</el-button>
               <el-button
                 v-if="row.status === 'running' || row.status === 'starting'"
-                size="small" type="warning" @click="onStop(row)"
+                link size="small" type="warning" @click="onStop(row)"
               >停止</el-button>
-              <el-button v-else size="small" type="success" @click="onStart(row)">启动</el-button>
-              <el-button size="small" @click="openEdit(row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="onDelete(row)">删除</el-button>
+              <el-button v-else link size="small" type="success" @click="onStart(row)">启动</el-button>
+              <el-button link size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button link size="small" type="danger" @click="onDelete(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>

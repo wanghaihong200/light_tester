@@ -418,10 +418,6 @@ class MockInstance(Base):
     cors_enabled: Mapped[bool] = mapped_column(Boolean, default=False, comment="CORS 放行:* 头+OPTIONS 预检直放")
     default_status: Mapped[int] = mapped_column(Integer, default=404, comment="无命中兜底状态码")
     default_body: Mapped[str | None] = mapped_column(Text, nullable=True, comment="无命中兜底响应体(空则用内置 JSON)")
-    passthrough_enabled: Mapped[bool] = mapped_column(Boolean, default=False,
-        comment="透传开关:未命中时转发原始请求到上游真实服务(计划 15)")
-    upstream_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True,
-        comment="上游真实服务 base_url,如 http://real-api:8080;透传开启时必填")
     desired: Mapped[str] = mapped_column(String(16), default="stopped", comment="期望状态:running/stopped(声明式)")
     status: Mapped[str] = mapped_column(String(16), default="stopped", comment="实际状态:stopped/starting/running/error")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="error 态原因")
@@ -444,6 +440,10 @@ class MockRuleGroup(Base):
     path_template: Mapped[str] = mapped_column(String(500), comment="路径:精确或 /a/{var} 模板,组级")
     description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="规则组描述(可空)")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, comment="组级停用=整组不参与匹配")
+    passthrough_enabled: Mapped[bool] = mapped_column(Boolean, default=False,
+        comment="组级透传开关:组路由命中但组内规则全不中时,转发原始请求到该组对应的真实上游(2026-09-13 验收调整,由实例级移入组级)")
+    upstream_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True,
+        comment="组对应的被 mock 原始接口 base_url,如 http://real-api:8080;透传开启时必填")
     sort_order: Mapped[int] = mapped_column(Integer, default=0, comment="组间排序,小者先匹配")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(

@@ -348,13 +348,13 @@ curl -X POST http://127.0.0.1:8000/api/app-scripts/12/export \
 
 ## 接口Mock `/api`(mock.py)+ Mock 服务面(`mock_service/`,实例独立端口)
 
-每项目可建多个 **HTTP Mock 服务实例**(「接口Mock ▸ HTTP Mock」页),每实例 = 独立 Python 子进程(同 venv)监听独立端口,按规则返回 mock 响应,供被测系统直连(ADR-0009;规则组与透传见 ADR-0011)。规则按「method / path」实体化为**规则组**(组承载路由,组内规则=条件+响应);实例可开**透传**:未命中请求转发上游真实服务。管理面走 8000 主端口(要登录);**服务面(实例端口)无登录鉴权**——mock 本就是给被测系统裸调的,仅探活/关停两个内部端点须带实例令牌。
+每项目可建多个 **HTTP Mock 服务实例**(「接口Mock ▸ HTTP Mock」页),每实例 = 独立 Python 子进程(同 venv)监听独立端口,按规则返回 mock 响应,供被测系统直连(ADR-0009;规则组与透传见 ADR-0011)。规则按「method / path」实体化为**规则组**(组承载路由,组内规则=条件+响应);每个规则组可开**透传**(组即"被 mock 的原始接口"):组内规则全不中时请求转发该组上游真实服务。管理面走 8000 主端口(要登录);**服务面(实例端口)无登录鉴权**——mock 本就是给被测系统裸调的,仅探活/关停两个内部端点须带实例令牌。
 
 - **状态机**:`stopped / starting / running / error`(`desired` 存期望态);启动=起子进程后 5s 内探活,超时置 `error`+`error_message`;平台每 10s 巡检探活、重启后对账重启 `running` 实例;孤儿子进程双保险自退(父进程死亡监测 + 令牌关停兜底)。
 - **端口**:创建时 `port` 不填则在 `mock_port_range`(env,默认 `9001-9499`)内自动分配;手填则保存前做库内查重 + 试绑预检(冲突 400 `端口 x 已被实例占用`/`端口 x 被外部进程占用`);running/starting 锁端口不可改(409);**软删实例的端口行仍预留**,不回收复用。
 - **热更新**:子进程**每请求实时读库**——规则/默认响应的增删改、启停、排序保存即生效,无需重启实例。
-- **匹配**:两级遍历取**第一条命中**——先按**组间序**遍历规则组,再按**组内序**遍历组内规则;组=HTTP 方法精确 + 路径精确或 `{var}` 模板段(同实例内唯一,重路 400),规则=条件行(query/header/body 按 JSONPath,等于|正则)+响应;组或规则停用即跳过(组停用整组跳过);全不中:实例开了透传→原样转发上游(见「透传」),否则回实例默认响应(`default_status`/`default_body`)。存量迁移保序:组序=旧全局扁平序的最小 `sort_order`,迁移前后行为等价——前提:同路由变体在旧全局序中连续、各组模板不重叠同一路径(现网存量已核实;ADR-0011)。
-- **透传(ADR-0011)**:实例级 `passthrough_enabled` + `upstream_base_url`(须以 `http://`/`https://` 开头;开透传必须填地址,400 校验建/改同源)。未命中请求原样转发:请求剥 hop-by-hop 头、host/content-length 重算;**上游任何 HTTP 响应(含 4xx/5xx)照透**——真实依赖的 5xx 是被测系统要演练的现场;仅传输层失败(连接 5s/读 30s 超时、DNS、非法 URL)回落默认响应,命中记 `error=forward-failed`。响应侧 content-encoding 剔除(httpx 已透明解压)、set-cookie 多值保真;关开关即回纯 mock 语义。
+- **匹配**:两级遍历取**第一条命中**——先按**组间序**遍历规则组,再按**组内序**遍历组内规则;组=HTTP 方法精确 + 路径精确或 `{var}` 模板段(同实例内唯一,重路 400),规则=条件行(query/header/body 按 JSONPath,等于|正则)+响应;组或规则停用即跳过(组停用整组跳过);全不中:路由命中的组若开了透传→原样转发**该组**上游(见「透传」),否则回实例默认响应(`default_status`/`default_body`);请求不匹配任何组路由→直接实例兜底。存量迁移保序:组序=旧全局扁平序的最小 `sort_order`,迁移前后行为等价——前提:同路由变体在旧全局序中连续、各组模板不重叠同一路径(现网存量已核实;ADR-0011)。
+- **透传(ADR-0011;2026-09-13 验收调整由实例级移至组级)**:组级 `passthrough_enabled` + `upstream_base_url`(须以 `http://`/`https://` 开头;开透传必须填地址,400 校验建/改同源;PATCH 省略字段=沿用现值、显式 null 地址=未提供)。组内规则全不中时请求原样转发:请求剥 hop-by-hop 头、host/content-length 重算;**上游任何 HTTP 响应(含 4xx/5xx)照透**——真实依赖的 5xx 是被测系统要演练的现场;仅传输层失败(连接 5s/读 30s 超时、DNS、非法 URL)回落默认响应,命中记 `error=forward-failed`。转发客户端 `trust_env=False` 直连(不吃系统代理,防代理把上游不可达转成 502 响应骗过兜底判定)。响应侧 content-encoding 剔除(httpx 已透明解压)、set-cookie 多值保真;关开关即回纯 mock 语义。
 - **响应**:状态码(100-599)/响应头/响应体;`enable_template` 开 Jinja2 模板(可引用路径变量/query/header/请求体 JSON);`delay_ms` 延迟;模拟超时(挂住不回,等客户端超时自断,命中记 `error=timeout-simulated`);实例级 CORS(`OPTIONS` 预检直接 204,不耗规则不记命中)。
 - **命中记录**:每个业务请求落一条(方法/路径/请求头体/响应状态/**实收响应体 response_body**/耗时/**outcome 三态**:`matched` 命中|`fallback` 兜底|`forwarded` 透传),**每实例滚动保留 1000 条,请求/响应体截断 64KB**。
 - **权限**:实例/规则组/规则/命中读=viewer,写(建/改/删/启停/排序/清空)=editor;非项目成员一律 404(不泄漏存在性)。
@@ -363,10 +363,10 @@ curl -X POST http://127.0.0.1:8000/api/app-scripts/12/export \
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/projects/{id}/mock-instances` | 建实例 `{name, description?, port?, cors_enabled?, default_status?, default_body?, passthrough_enabled?, upstream_base_url?}`(201;`port` 空则范围内自动分配;名称空白 400;端口冲突 400;透传校验:开透传必须填上游地址、地址须 http(s):// 开头 400) |
+| POST | `/api/projects/{id}/mock-instances` | 建实例 `{name, description?, port?, cors_enabled?, default_status?, default_body?}`(201;`port` 空则范围内自动分配;名称空白 400;端口冲突 400) |
 | GET | `/api/projects/{id}/mock-instances` | 实例列表(id 倒序,软删不显) |
 | GET | `/api/mock-instances/{instance_id}` | 详情(`desired`/`status`/`error_message`/`port` 等;实例令牌不出网——仅平台内部用于探活/关停) |
-| PUT | `/api/mock-instances/{instance_id}` | 更新 `{name?, description?, port?, cors_enabled?, default_status?, default_body?, passthrough_enabled?, upstream_base_url?}`(字段给了才改;透传校验与建实例同源;运行中改端口 409 `实例运行中不能修改端口,请先停止`) |
+| PUT | `/api/mock-instances/{instance_id}` | 更新 `{name?, description?, port?, cors_enabled?, default_status?, default_body?}`(字段给了才改;运行中改端口 409 `实例运行中不能修改端口,请先停止`) |
 | DELETE | `/api/mock-instances/{instance_id}` | 删除(204,软删;running/starting 时 409 `先停止实例再删除`) |
 | POST | `/api/mock-instances/{instance_id}/start` | 启动实例(起子进程探活;失败/超时置 `error`,响应仍 200 带 `status=error`) |
 | POST | `/api/mock-instances/{instance_id}/stop` | 停止实例(令牌关停子进程) |
@@ -375,9 +375,9 @@ curl -X POST http://127.0.0.1:8000/api/app-scripts/12/export \
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/mock-instances/{instance_id}/rule-groups` | 建组 `{method, path_template, description?, enabled?}`(201,排到组间序末位;方法不支持/路径模板不合法/同实例重路 400) |
+| POST | `/api/mock-instances/{instance_id}/rule-groups` | 建组 `{method, path_template, description?, enabled?, passthrough_enabled?, upstream_base_url?}`(201,排到组间序末位;方法不支持/路径模板不合法/同实例重路 400;透传校验:开透传必须填上游地址、地址须 http(s):// 开头 400) |
 | GET | `/api/mock-instances/{instance_id}/rule-groups` | 组列表(组间序升序=匹配序;每行内嵌 `rules` 按组内序) |
-| PUT | `/api/mock-rule-groups/{group_id}` | 更新(字段给了才改;method/path_template 不接受 null 与空串 400,给了才整体查重;`description` 显式 null=清空) |
+| PUT | `/api/mock-rule-groups/{group_id}` | 更新(字段给了才改;method/path_template 不接受 null 与空串 400,给了才整体查重;`description` 显式 null=清空;透传两字段省略=沿用现值、显式 null 地址=未提供,校验同建组) |
 | DELETE | `/api/mock-rule-groups/{group_id}` | 删除(204,软删;**组亡规则亡**——组下规则连软删,历史命中 rule_id 仍可追溯) |
 | PUT | `/api/mock-instances/{instance_id}/rule-groups/reorder` | 调组间序 `{group_ids}`(**全量新序**——须恰为实例下全部未删组 id,缺/多/重复/跨实例 400) |
 | PUT | `/api/mock-rule-groups/{group_id}/rules/reorder` | 调组内序 `{rule_ids}`(全量新序——须恰为该组下全部未删规则 id,缺/多/重复 400) |
@@ -462,4 +462,4 @@ curl -X POST http://127.0.0.1:8000/api/projects/1/perf-records/import \
 | app 导出 400 errors | 用例含平台不翻译的动作(GESTURE/ASSERT_TOAST 等),按错误清单的步骤号改用例或拆步;有错不推送 |
 
 ---
-*最后更新:2026-09-12;对应代码基线:计划 15 HTTP Mock 规则组与透传(ADR-0011:`mock_rule_groups` 两级匹配 + 实例透传 + 命中 outcome/response_body,2026-09-11 执行);参数级精确校验以 /docs(Swagger)为准*
+*最后更新:2026-09-13;对应代码基线:计划 15 HTTP Mock 规则组与透传(ADR-0011:`mock_rule_groups` 两级匹配 + 组级透传 + 命中 outcome/response_body,2026-09-11 执行、2026-09-13 验收调整透传入组);参数级精确校验以 /docs(Swagger)为准*

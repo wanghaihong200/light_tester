@@ -98,16 +98,18 @@ def test_rule_group_defaults_and_rule_group_fk(db_session):
     assert not hasattr(r, "path_template")
 
 
-def test_instance_passthrough_defaults(db_session):
-    """透传字段默认关+空;显式赋值可落库。"""
+def test_group_passthrough_defaults(db_session):
+    """组级透传(2026-09-13 验收调整,由实例级移入):默认关+空;显式赋值可落库。"""
     inst = _mk_instance(db_session)
+    g = MockRuleGroup(instance_id=inst.id, method="GET", path_template="/a")
+    db_session.add(g)
     db_session.commit()
-    assert inst.passthrough_enabled is False
-    assert inst.upstream_base_url is None
-    inst.passthrough_enabled = True
-    inst.upstream_base_url = "http://real-api:8080"
+    assert g.passthrough_enabled is False
+    assert g.upstream_base_url is None
+    g.passthrough_enabled = True
+    g.upstream_base_url = "http://real-api:8080"
     db_session.commit()
-    assert inst.passthrough_enabled is True
+    assert g.passthrough_enabled is True
 
 
 def test_hit_outcome_and_response_body(db_session):

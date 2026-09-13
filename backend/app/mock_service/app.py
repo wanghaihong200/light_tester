@@ -102,8 +102,13 @@ def create_mock_app(instance_id: int, upstream_transport: httpx.AsyncBaseTranspo
                 rules_by_group.setdefault(r.group_id, []).append(r)
             if method == "OPTIONS" and instance.cors_enabled:
                 return Response(status_code=204, headers=_cors_headers())  # 预检不耗规则不记日志(位置不变)
-            rule, group, path_vars = matching.pick_rule(
-                [(g, rules_by_group.get(g.id, [])) for g in groups], method, path, query, headers, body)
+            pair = [(g, rules_by_group.get(g.id, [])) for g in groups]
+            rule, group, path_vars = matching.pick_rule(pair, method, path, query, headers, body)
+            # 组级透传(2026-09-13 验收调整,由实例级移入):路由命中但组内规则全不中时,
+            # 透传给"首个路由命中的启用组"对应的真实上游——组即被 mock 的原始接口;
+            # 请求连任何组路由都不匹配 → 直接实例兜底(没有任何组在 mock 它,无上游可转发)
+            route_group = next(
+                (g for g, _ in pair if g.enabled and matching.route_matches(g, method, path)), None)
             hold_error = None
             delay_ms = rule.delay_ms if rule else 0
             if rule is not None and rule.timeout_enabled:
@@ -125,7 +130,8 @@ def create_mock_app(instance_id: int, upstream_transport: httpx.AsyncBaseTranspo
                         body_json = None
                     payload = render_template(payload, path_vars=path_vars, query=query,
                                               headers=headers, body_json=body_json)
-            elif instance.passthrough_enabled and (instance.upstream_base_url or "").strip():
+            elif route_group is not None and route_group.passthrough_enabled \
+                    and (route_group.upstream_base_url or "").strip():
                 # trust_env=False:上游是显式配置的真实服务,必须直连。默认 True 时 httpx 会吃
                 # 系统代理(如本机 Clash),代理把"连不上上游"转成 502 响应,骗过传输层失败
                 # 判定,该回兜底的请求变成透传一个代理错误页(2026-09-12 冒烟实测)。
@@ -136,7 +142,7 @@ def create_mock_app(instance_id: int, upstream_transport: httpx.AsyncBaseTranspo
                     client_kwargs["transport"] = app.state.upstream_transport
                 async with httpx.AsyncClient(**client_kwargs) as client:
                     fwd = await passthrough.forward(
-                        client, instance.upstream_base_url, method, path,
+                        client, route_group.upstream_base_url, method, path,
                         request.url.query or None, dict(request.headers), body)
                 if fwd.ok:
                     outcome = "forwarded"

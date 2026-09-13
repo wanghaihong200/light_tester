@@ -9,7 +9,8 @@ from app.mock_service.app import HIT_KEEP_PER_INSTANCE, create_mock_app
 from app.models import MockHit, MockInstance, MockRule, MockRuleGroup, Project
 
 
-def _setup(db: Session, *, port=19011, cors=False, rule_kwargs=None, **inst_kw) -> MockInstance:
+def _setup(db: Session, *, port=19011, cors=False, rule_kwargs=None, group_kw=None,
+           **inst_kw) -> MockInstance:
     p = Project(name=f"p-child-{port}")
     db.add(p)
     db.commit()
@@ -17,17 +18,24 @@ def _setup(db: Session, *, port=19011, cors=False, rule_kwargs=None, **inst_kw) 
                         cors_enabled=cors, **inst_kw)
     db.add(inst)
     db.commit()
-    if rule_kwargs:
+    if rule_kwargs or group_kw:
         # T1 起 method/path_template 上移到组级:先建组,再把规则挂 group_id
-        g = MockRuleGroup(instance_id=inst.id, method=rule_kwargs.get("method", "GET"),
-                          path_template=rule_kwargs.get("path_template", "/x"), sort_order=0)
+        # group_kw=组级附加字段(透传等,2026-09-13 验收调整后透传配置在组上);
+        # 无 rule_kwargs 时路径可经 group_kw["path_template"] 指定(组内零规则=组路由命中但全不中)
+        g_kw = dict(group_kw or {})
+        g = MockRuleGroup(instance_id=inst.id,
+                          method=(rule_kwargs or {}).get("method", g_kw.pop("method", "GET")),
+                          path_template=(rule_kwargs or {}).get("path_template",
+                                                                g_kw.pop("path_template", "/x")),
+                          sort_order=0, **g_kw)
         db.add(g)
         db.flush()
-        # 组内 sort_order 允许被 rule_kwargs 覆盖(test_conditions 用例显式传 sort_order=0)
-        db.add(MockRule(instance_id=inst.id, group_id=g.id,
-                        **{"sort_order": 0,
-                           **{k: v for k, v in rule_kwargs.items()
-                              if k not in ("method", "path_template")}}))
+        if rule_kwargs:
+            # 组内 sort_order 允许被 rule_kwargs 覆盖(test_conditions 用例显式传 sort_order=0)
+            db.add(MockRule(instance_id=inst.id, group_id=g.id,
+                            **{"sort_order": 0,
+                               **{k: v for k, v in rule_kwargs.items()
+                                  if k not in ("method", "path_template")}}))
         db.commit()
     return inst
 
@@ -176,8 +184,11 @@ def test_real_subprocess_end_to_end(db_session):
 
 
 def test_miss_passthrough_forwards_upstream(db_session):
-    """未命中+透传开 → 转发上游:上游 200 原样回;hit 记 forwarded+响应体。"""
-    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1")
+    """组级透传(2026-09-13 验收调整):组路由命中但组内无规则+组透传开 → 转发该组上游,
+    上游 200 原样回;hit 记 forwarded+响应体。"""
+    inst = _setup(db_session, group_kw=dict(path_template="/no/rule",
+                                            passthrough_enabled=True,
+                                            upstream_base_url="http://up:1"))
 
     def handler(request):
         return httpx.Response(201, content=b'{"real":true}', headers={"x-from": "up"})
@@ -193,7 +204,9 @@ def test_miss_passthrough_forwards_upstream(db_session):
 
 
 def test_miss_passthrough_upstream_5xx_still_forwarded(db_session):
-    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1")
+    inst = _setup(db_session, group_kw=dict(path_template="/x",
+                                            passthrough_enabled=True,
+                                            upstream_base_url="http://up:1"))
     resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(
         lambda r: httpx.Response(500, text="boom")))).get("/x")
     assert resp.status_code == 500                      # 5xx 照透,不是兜底
@@ -202,7 +215,9 @@ def test_miss_passthrough_upstream_5xx_still_forwarded(db_session):
 
 
 def test_miss_passthrough_down_falls_back(db_session):
-    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1",
+    inst = _setup(db_session, group_kw=dict(path_template="/x",
+                                            passthrough_enabled=True,
+                                            upstream_base_url="http://up:1"),
                   default_status=404, default_body='{"fb":1}')
 
     def handler(request):
@@ -216,9 +231,22 @@ def test_miss_passthrough_down_falls_back(db_session):
     assert hit.response_body == '{"fb":1}'              # 兜底体也落 response_body
 
 
+def test_miss_unmatched_route_no_forward_even_with_group_passthrough(db_session):
+    """请求连组路由都不匹配 → 即使某组开了透传也不转发(没有组在 mock 它),直接实例兜底。"""
+    inst = _setup(db_session, group_kw=dict(path_template="/known",
+                                            passthrough_enabled=True,
+                                            upstream_base_url="http://up:1"),
+                  default_status=404, default_body='{"fb":1}')
+    resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, text="should-not-reach")))).get("/other")
+    assert resp.status_code == 404 and resp.json() == {"fb": 1}
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "fallback" and hit.error is None
+
+
 def test_miss_no_passthrough_falls_back(db_session):
-    """透传关(或未配上游)= 现行为:直接兜底,outcome=fallback,error 空。"""
-    inst = _setup(db_session)
+    """组路由命中但组透传关(或未配上游)= 直接兜底,outcome=fallback,error 空。"""
+    inst = _setup(db_session, group_kw=dict(path_template="/x"))   # 组透传默认关
     resp = TestClient(create_mock_app(inst.id)).get("/x")
     assert resp.status_code == 404
     assert resp.headers["content-type"] == "application/json"  # 兜底体恒 JSON
@@ -228,7 +256,9 @@ def test_miss_no_passthrough_falls_back(db_session):
 
 def test_miss_passthrough_large_body_truncated_in_hit(db_session):
     """透传 >64KB 大响应体:客户端拿全量,hit.response_body 截到 64KB 摘录落库。"""
-    inst = _setup(db_session, passthrough_enabled=True, upstream_base_url="http://up:1")
+    inst = _setup(db_session, group_kw=dict(path_template="/big",
+                                            passthrough_enabled=True,
+                                            upstream_base_url="http://up:1"))
     big = b'{"data":"' + b"x" * (100 * 1024) + b'"}'
     resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(
         lambda r: httpx.Response(200, content=big)))).get("/big")

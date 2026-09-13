@@ -57,7 +57,7 @@ function mkRule(over: Partial<MockRule> = {}): MockRule {
 function mkGroup(over: Partial<MockRuleGroup> = {}): MockRuleGroup {
   return {
     id: 1, instance_id: 5, method: 'GET', path_template: '/api/user/{id}',
-    description: '查用户', enabled: true, sort_order: 0, rules: [],
+    description: '查用户', enabled: true, passthrough_enabled: false, upstream_base_url: null, sort_order: 0, rules: [],
     updated_at: '2026-09-08T10:00:00',
     ...over,
   }
@@ -92,7 +92,7 @@ describe('RuleGroupPane', () => {
     document.body.innerHTML = ''
   })
 
-  it('组卡片渲染 method/path/描述,空描述显-', async () => {
+  it('组卡片渲染 method/path/描述,空描述不渲染占位;倒三角独占折叠控制(2026-09-13 验收反馈)', async () => {
     const w = mountPane()
     await flushPromises()
     expect(api.getMockInstance).toHaveBeenCalledWith(5)
@@ -103,9 +103,15 @@ describe('RuleGroupPane', () => {
     // 组路由 mono 文案按序渲染
     const routes = w.findAll('[data-test="group-route"]').map((n) => n.text())
     expect(routes).toEqual(['GET /api/user/{id}', 'POST /orders'])
-    // 描述有则显示,无则 '—' 占位
+    // 描述有则显示;无则整个元素不渲染(不再有 '—' 占位)
     const descs = w.findAll('[data-test="group-desc"]').map((n) => n.text())
-    expect(descs).toEqual(['查用户', '—'])
+    expect(descs).toEqual(['查用户'])
+    // 倒三角是唯一折叠入口:内容区点击不再切换折叠,点倒三角收起后再点展开
+    expect(w.find('[data-test="group-toggle"]').text()).toBe('▾') // 默认全展开
+    await w.find('[data-test="group-card-1"] [data-test="group-route"]').trigger('click')
+    expect(w.find('[data-test="group-toggle"]').text()).toBe('▾') // 点路由文本不折叠
+    await w.find('[data-test="group-card-1"] [data-test="group-toggle"]').trigger('click')
+    expect(w.find('[data-test="group-toggle"]:first-of-type').text()).toBe('▸') // 倒三角收起
     w.unmount()
   })
 

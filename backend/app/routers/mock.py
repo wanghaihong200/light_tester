@@ -69,8 +69,6 @@ def create_instance(project_id: int, payload: MockInstanceSave, db: Session = De
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "实例名称不能为空")
-    enabled, upstream = _validate_passthrough(payload.passthrough_enabled,
-                                              payload.upstream_base_url)
     port = payload.port
     if port is None:
         try:
@@ -82,7 +80,6 @@ def create_instance(project_id: int, payload: MockInstanceSave, db: Session = De
     inst = MockInstance(project_id=project_id, name=name, description=payload.description,
                         port=port, token=uuid4().hex, cors_enabled=payload.cors_enabled,
                         default_status=payload.default_status, default_body=payload.default_body,
-                        passthrough_enabled=enabled, upstream_base_url=upstream,
                         desired="stopped", status="stopped",
                         created_by=current.id, updated_by=current.id)
     db.add(inst)
@@ -126,13 +123,6 @@ def update_instance(instance_id: int, payload: MockInstancePatch, db: Session = 
         inst.default_status = payload.default_status
     if payload.default_body is not None:
         inst.default_body = payload.default_body
-    if payload.passthrough_enabled is not None or payload.upstream_base_url is not None:
-        new_enabled = (payload.passthrough_enabled if payload.passthrough_enabled is not None
-                       else inst.passthrough_enabled)
-        new_url = (payload.upstream_base_url if payload.upstream_base_url is not None
-                   else inst.upstream_base_url)
-        inst.passthrough_enabled, inst.upstream_base_url = _validate_passthrough(new_enabled,
-                                                                                 new_url)
     inst.updated_by = current.id
     db.commit()
     db.refresh(inst)
@@ -237,11 +227,14 @@ def create_group(instance_id: int, payload: MockRuleGroupSave, db: Session = Dep
     if not path_template:
         raise HTTPException(400, "路径不能为空")
     _validate_route(db, inst.id, method, path_template)
+    pt_enabled, pt_url = _validate_passthrough(payload.passthrough_enabled,
+                                               payload.upstream_base_url)
     # 含软删行一起取最大:实例内组 sort_order 不重号,匹配序稳定
     max_order = (db.query(func.max(MockRuleGroup.sort_order))
                  .filter(MockRuleGroup.instance_id == inst.id).scalar()) or 0
     g = MockRuleGroup(instance_id=inst.id, method=method, path_template=path_template,
                       description=payload.description, enabled=payload.enabled,
+                      passthrough_enabled=pt_enabled, upstream_base_url=pt_url,
                       sort_order=max_order + 1, created_by=current.id, updated_by=current.id)
     db.add(g)
     db.commit()
@@ -280,6 +273,13 @@ def update_group(group_id: int, payload: MockRuleGroupPatch, db: Session = Depen
         g.description = changed["description"]  # 仅 description 保留"显式 null=清空"
     if changed.get("enabled") is not None:
         g.enabled = changed["enabled"]  # enabled 为非空布尔列,null 按未提供处理
+    if "passthrough_enabled" in changed or "upstream_base_url" in changed:
+        # 合并语义同旧实例级:字段省略=沿用现值(关开关保留地址,临时切回纯 mock 不必重填)
+        new_enabled = (changed["passthrough_enabled"] if changed.get("passthrough_enabled") is not None
+                       else g.passthrough_enabled)
+        new_url = (changed["upstream_base_url"] if changed.get("upstream_base_url") is not None
+                   else g.upstream_base_url)
+        g.passthrough_enabled, g.upstream_base_url = _validate_passthrough(new_enabled, new_url)
     g.updated_by = current.id
     db.commit()
     db.refresh(g)

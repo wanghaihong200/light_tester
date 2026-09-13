@@ -85,6 +85,15 @@ async function onDeleteGroup(g: MockRuleGroup) {
   }
 }
 
+// 折叠/展开只由组头「倒三角」控制(2026-09-13 验收反馈):标题内容区 @click.stop 拦掉
+// el-collapse 的整行点击切换,这里手工增删 expanded 里的组 id
+function isOpen(g: MockRuleGroup) { return expanded.value.includes(g.id) }
+function toggleExpand(g: MockRuleGroup) {
+  expanded.value = isOpen(g)
+    ? expanded.value.filter((id) => id !== g.id)
+    : [...expanded.value, g.id]
+}
+
 // ── 组内规则操作 ──
 async function moveRule(g: MockRuleGroup, index: number, delta: -1 | 1) {
   const next = g.rules.slice()
@@ -171,25 +180,30 @@ async function onRuleSaved() {
       </el-button>
     </div>
 
-    <!-- 组卡片:头部=组路由 mono + 组启停 + 描述 + 工具区(命中记录/编辑组/↑↓/删除组/新建规则) -->
+    <!-- 组卡片:头部单行=倒三角(独占折叠控制)+组路由 mono+透传标记+组启停+描述+工具区;
+         标题内容区 @click.stop 拦掉 el-collapse 整行点击,折叠只听倒三角的(2026-09-13 验收反馈) -->
     <el-collapse v-model="expanded" class="rgp-groups">
       <el-collapse-item v-for="(g, gi) in groups" :key="g.id" :name="g.id" :data-test="`group-card-${g.id}`">
         <template #title>
-          <span class="g-route" data-test="group-route">{{ g.method }} {{ g.path_template }}</span>
-          <!-- @click.stop 防点开关时收起/展开折叠 -->
-          <el-switch
-            :model-value="g.enabled" class="g-switch" :data-test="`group-switch-${g.id}`"
-            @click.stop @change="onToggleGroup(g, $event)"
-          />
-          <span class="g-desc" data-test="group-desc">{{ g.description || '—' }}</span>
-          <span class="g-tools" @click.stop>
-            <el-button link size="small" data-test="group-hits" @click="openHits(g)">命中记录详情</el-button>
-            <el-button link size="small" @click="openGroupEdit(g)">编辑组</el-button>
-            <el-button link size="small" :disabled="gi === 0" @click="moveGroup(gi, -1)">↑</el-button>
-            <el-button link size="small" :disabled="gi === groups.length - 1" @click="moveGroup(gi, 1)">↓</el-button>
-            <el-button link size="small" type="danger" @click="onDeleteGroup(g)">删除组</el-button>
-            <el-button link size="small" type="primary" @click="openRuleCreate(g)">新建规则</el-button>
-          </span>
+          <div class="g-head" @click.stop>
+            <button class="g-arrow" data-test="group-toggle" :title="isOpen(g) ? '收起' : '展开'"
+              @click="toggleExpand(g)">{{ isOpen(g) ? '▾' : '▸' }}</button>
+            <span class="g-route" data-test="group-route">{{ g.method }} {{ g.path_template }}</span>
+            <el-tag v-if="g.passthrough_enabled" size="small" type="warning" class="g-pt">透传</el-tag>
+            <el-switch
+              :model-value="g.enabled" class="g-switch" :data-test="`group-switch-${g.id}`"
+              @change="onToggleGroup(g, $event)"
+            />
+            <span v-if="g.description" class="g-desc" data-test="group-desc">{{ g.description }}</span>
+            <span class="g-tools">
+              <el-button link size="small" data-test="group-hits" @click="openHits(g)">命中记录详情</el-button>
+              <el-button link size="small" @click="openGroupEdit(g)">编辑组</el-button>
+              <el-button link size="small" :disabled="gi === 0" @click="moveGroup(gi, -1)">↑</el-button>
+              <el-button link size="small" :disabled="gi === groups.length - 1" @click="moveGroup(gi, 1)">↓</el-button>
+              <el-button link size="small" type="danger" @click="onDeleteGroup(g)">删除组</el-button>
+              <el-button link size="small" type="primary" @click="openRuleCreate(g)">新建规则</el-button>
+            </span>
+          </div>
         </template>
         <!-- 组内规则表:method/path 由组决定,列只余 排序/条件数/状态码/启用/延迟/超时/操作 -->
         <el-table :data="g.rules" row-key="id" border size="small" class="g-rules" :data-test="`rules-of-${g.id}`">
@@ -264,16 +278,52 @@ async function onRuleSaved() {
 .rgp-new {
   margin-left: auto;
 }
+/* EP 自带的整行点击切换+右侧箭头关闭:折叠只由组头左侧倒三角控制(2026-09-13 验收反馈) */
+.rgp-groups :deep(.el-collapse-item__arrow) {
+  display: none;
+}
+/* 组头单行:倒三角+路由+透传标记+启停+描述+工具区,整行不换行(2026-09-13 验收反馈) */
+.g-head {
+  align-items: center;
+  display: flex;
+  min-width: 0;
+  width: 100%;
+}
+/* 倒三角是折叠/展开的唯一入口;按钮化以获得清晰的可点击感 */
+.g-arrow {
+  background: none;
+  border: none;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  flex: none;
+  font-size: 13px;
+  padding: 0 8px 0 0;
+}
+.g-arrow:hover {
+  color: var(--el-color-primary);
+}
 /* 组路由用等宽字体,与后端模板路由直观对应 */
 .g-route {
   color: var(--el-text-color-primary);
+  flex: none;
   font-family: Consolas, Menlo, monospace;
   font-size: 13px;
 }
+.g-pt {
+  flex: none;
+  margin-left: 8px;
+}
+/* 启停开关与组路由之间拉开一档距离 */
+.g-switch {
+  flex: none;
+  margin-left: 20px;
+}
 .g-desc {
   color: var(--el-text-color-secondary);
+  flex: none;
   font-size: 12px;
   margin-left: 12px;
+  max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
