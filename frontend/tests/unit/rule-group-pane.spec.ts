@@ -214,6 +214,24 @@ describe('RuleGroupPane', () => {
     w.unmount()
   })
 
+  it('复制规则(2026-09-13 验收新增):全字段照搬走创建端点,挂同组不带 id/sort_order,复制后 reload', async () => {
+    const w = mountPane()
+    await flushPromises()
+    await w.find('[data-test="rules-of-1"] [data-test="rule-copy-11"]').trigger('click')
+    await flushPromises()
+    expect(api.createMockRule).toHaveBeenCalledTimes(1)
+    const [iid, body] = api.createMockRule.mock.calls[0] as [number, Record<string, unknown>]
+    expect(iid).toBe(5)                       // 挂同实例
+    expect(body.group_id).toBe(1)             // 挂同组
+    expect(body.conditions).toEqual([{ scope: 'query', key: 'id', match: 'eq', value: '42' }])
+    expect(body.response_status).toBe(200)
+    expect(body.enabled).toBe(true)
+    expect('id' in body).toBe(false)          // 新建语义:id/sort_order 不随模板带过去
+    expect('sort_order' in body).toBe(false)
+    expect(api.listMockRuleGroups).toHaveBeenCalledTimes(2) // 复制后 reload 回贴组内末位
+    w.unmount()
+  })
+
   it('保存组/保存规则后的刷新失败:ElMessage.error 透出不静默(计划15 T11 顺手项)', async () => {
     const errSpy = vi.spyOn(ElMessage, 'error')
     const w = mountPane()

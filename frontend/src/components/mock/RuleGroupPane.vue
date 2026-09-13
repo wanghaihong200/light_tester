@@ -5,7 +5,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  deleteMockRule, deleteMockRuleGroup, getMockInstance, listMockRuleGroups,
+  createMockRule, deleteMockRule, deleteMockRuleGroup, getMockInstance, listMockRuleGroups,
   reorderMockGroupRules, reorderMockGroups, updateMockRule, updateMockRuleGroup,
 } from '../../api/mock'
 import type { MockInstance, MockRule, MockRuleGroup } from '../../types'
@@ -122,6 +122,29 @@ async function onToggleRule(g: MockRuleGroup, row: MockRule, val: string | numbe
   }
 }
 
+// 复制规则(2026-09-13 验收新增):以该规则为模板走创建端点,挂同组、组内末位,
+// 全字段照搬(条件/响应/模板/延迟/超时/启用);id/sort_order 不带(新建语义自动分配)
+async function onCopyRule(g: MockRuleGroup, row: MockRule) {
+  try {
+    await createMockRule(g.instance_id, {
+      group_id: g.id,
+      conditions: row.conditions.map((c) => ({ ...c })),
+      enabled: row.enabled,
+      response_status: row.response_status,
+      response_headers: { ...row.response_headers },
+      response_body: row.response_body,
+      enable_template: row.enable_template,
+      delay_ms: row.delay_ms,
+      timeout_enabled: row.timeout_enabled,
+      timeout_seconds: row.timeout_seconds,
+    })
+    ElMessage.success('已复制,新规则在组内末位')
+    await reload()
+  } catch (e) {
+    ElMessage.error(`复制规则失败:${(e as Error).message}`)
+  }
+}
+
 async function onDeleteRule(g: MockRuleGroup, row: MockRule) {
   try {
     await ElMessageBox.confirm(
@@ -231,8 +254,9 @@ async function onRuleSaved() {
               <span v-else>-</span>
             </template>
           </el-table-column>
-          <el-table-column label="操作" min-width="110">
+          <el-table-column label="操作" width="150">
             <template #default="{ row }">
+              <el-button link size="small" :data-test="`rule-copy-${row.id}`" @click="onCopyRule(g, row)">复制</el-button>
               <el-button link size="small" @click="openRuleEdit(g, row)">编辑</el-button>
               <el-button link size="small" type="danger" @click="onDeleteRule(g, row)">删除</el-button>
             </template>
