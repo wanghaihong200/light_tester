@@ -231,6 +231,8 @@ async function onRuleSaved() {
         <!-- 组内规则表:method/path 由组决定,列只余 排序/条件数/状态码/启用/延迟/超时/操作;
              全列 min-width(2026-09-13 验收反馈):宽屏下按比例铺满整行,不留固定宽死区 -->
         <el-table :data="g.rules" row-key="id" border size="small" class="g-rules" :data-test="`rules-of-${g.id}`">
+          <!-- id 列(2026-09-13 验收新增):展示 mock_rules.id,便于核对命中记录 rule_id 与接口调试定位 -->
+          <el-table-column prop="id" label="id" min-width="80" align="center" />
           <el-table-column label="排序" min-width="90" align="center">
             <template #default="{ $index }">
               <el-button link size="small" data-test="rule-up" :disabled="$index === 0" @click="moveRule(g, $index, -1)">↑</el-button>
