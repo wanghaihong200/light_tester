@@ -88,3 +88,17 @@ async def test_forward_drops_content_encoding_after_decompression():
     out = await passthrough.forward(_client(handler), "http://up:1", "GET", "/x", None, {}, b"")
     assert out.ok and out.content == raw                       # 拿到的是解压后原始字节
     assert "content-encoding" not in out.headers               # 头已剔除,体/头一致
+
+
+@pytest.mark.asyncio
+async def test_forward_ipv6_literal_host_keeps_brackets():
+    """上游 [::1]:9999 → Host 头恰为 [::1]:9999(裸 ::1:9999 非法,DEFER #110)。
+    httpx.URL.host 解析时规范化掉方括号,Host 头语法要求保留——解析器与序列化器规范不同。"""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["host"] = request.headers["host"]
+        return httpx.Response(200)
+
+    await passthrough.forward(_client(handler), "http://[::1]:9999/pfx", "GET", "/x", None, {}, b"")
+    assert seen["host"] == "[::1]:9999"

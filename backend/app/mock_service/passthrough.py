@@ -49,6 +49,8 @@ async def forward(client: httpx.AsyncClient, base_url: str, method: str, path: s
         url = f"{base_url.rstrip('/')}{path}" + (f"?{query}" if query else "")
         up_url = httpx.URL(base_url)
         up_host = up_url.host
+        if up_host and ":" in up_host:  # IPv6 字面量:解析时方括号被规范化掉,Host 头语法须带回(#110)
+            up_host = f"[{up_host}]"
         if up_url.port:
             up_host = f"{up_host}:{up_url.port}"
         resp = await client.request(method, url,
