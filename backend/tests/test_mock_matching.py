@@ -78,3 +78,41 @@ def test_route_matches():
     assert matching.route_matches(_group(), "GET", "/a/9") is True
     assert matching.route_matches(_group(), "POST", "/a/9") is False
     assert matching.route_matches(_group(), "GET", "/b/9") is False
+
+
+# ---------- DEFER 演进批次:#108 _cond_ok 分支回归锚(计划15 重构时随旧用例遗失) ----------
+
+def test_cond_ok_header_name_case_insensitive():
+    """锚1:header 名大小写不敏感(引擎内部 headers.get(key.lower()))。"""
+    cond = {"scope": "header", "key": "X-Trace", "match": "eq", "value": "t1"}
+    assert matching._cond_ok(cond, {}, {"x-trace": ["t1"]}, b"") is True
+    assert matching._cond_ok(cond, {}, {"x-other": ["t1"]}, b"") is False
+
+
+def test_cond_ok_body_jsonpath_typed_match():
+    """锚2:JSONPath 期望值按 JSON 字面解析,类型必须一致(数字 1 ≠ 字符串 "1")。"""
+    doc = b'{"flag": true, "n": 1}'
+    assert matching._cond_ok({"scope": "body", "key": "$.flag", "match": "eq", "value": "true"}, {}, {}, doc)
+    assert matching._cond_ok({"scope": "body", "key": "$.n", "match": "eq", "value": "1"}, {}, {}, doc)
+    # 类型锚:number 1 不匹配 JSON 引号串 "1"
+    assert not matching._cond_ok({"scope": "body", "key": "$.n", "match": "eq", "value": '"1"'}, {}, {}, doc)
+
+
+def test_cond_ok_bad_regex_is_false_not_raise():
+    """锚3:非法正则=条件不成立(False),不抛 500。"""
+    cond = {"scope": "query", "key": "v", "match": "regex", "value": "([bad"}
+    assert matching._cond_ok(cond, {"v": ["x"]}, {}, b"") is False
+
+
+# ---------- DEFER 演进批次:#109 组内全不中→续看下一组(用户拍板钉现语义,2026-09-14) ----------
+
+def test_pick_rule_group_route_hit_but_rules_all_miss_continues_to_next_group():
+    """组路由命中但组内规则全不中时,外层循环不终止,续看下一个路由命中的组。
+    仅模板重叠场景可观测:GET /a/{id} 与 GET /a/special 对 /a/special 请求双命中
+    (重路校验只挡完全相同 method+path_template,挡不住模板重叠)。"""
+    g_a = _group(path="/a/{id}")            # 组序在前,规则条件全不中
+    g_b = _group(path="/a/special")
+    r_a = _rule([{"scope": "query", "key": "v", "match": "eq", "value": "x"}])
+    r_b = _rule()
+    rule, group, captured = _pick([(g_a, [r_a]), (g_b, [r_b])], path="/a/special")
+    assert rule is r_b and group is g_b and captured == {}
