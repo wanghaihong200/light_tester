@@ -147,8 +147,12 @@ def create_mock_app(instance_id: int, upstream_transport: httpx.AsyncBaseTranspo
                 if fwd.ok:
                     outcome = "forwarded"
                     status_code = fwd.status_code
-                    headers_out = fwd.headers
-                    content_type = fwd.content_type
+                    headers_out = dict(fwd.headers)
+                    if fwd.content_type:
+                        # content-type 走 raw headers 直传(#111):media_type= 会被 starlette
+                        # 对 text/* 追加 charset,违背透传「原样带回」口径
+                        headers_out["content-type"] = fwd.content_type
+                    content_type = None
                     payload = fwd.content
                 else:
                     error = f"forward-failed: {fwd.error}"

@@ -268,6 +268,22 @@ def test_miss_passthrough_large_body_truncated_in_hit(db_session):
     assert len(hit.response_body.encode("utf-8")) <= 65535     # TEXT 容量(65,535 字节)内
 
 
+def test_miss_passthrough_content_type_verbatim_no_charset(db_session):
+    """DEFER #111:上游 text/* 无 charset → 转发响应 content-type 逐字带回。
+    media_type= 会被 starlette 对 text/* 追加 '; charset=utf-8',违背「原样带回」口径;
+    修复=content-type 走 raw headers 直传(headers dict 已含 content-type 时 starlette 不再加工)。"""
+    inst = _setup(db_session, group_kw=dict(path_template="/x",
+                                            passthrough_enabled=True,
+                                            upstream_base_url="http://up:1"))
+    resp = TestClient(create_mock_app(inst.id, upstream_transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, content=b"hi",
+                                 headers={"content-type": "text/plain"})))).get("/x")
+    assert resp.status_code == 200 and resp.text == "hi"
+    assert resp.headers["content-type"] == "text/plain"        # 无追加 charset
+    hit = db_session.query(MockHit).filter_by(instance_id=inst.id).one()
+    assert hit.outcome == "forwarded"
+
+
 def test_matched_rule_records_outcome_and_body(db_session):
     """规则命中:outcome=matched,response_body=模板渲染后的实际响应。"""
     inst = _setup(db_session)  # 透传关
