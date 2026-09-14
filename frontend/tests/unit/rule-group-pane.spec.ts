@@ -250,4 +250,24 @@ describe('RuleGroupPane', () => {
     expect(errSpy).toHaveBeenLastCalledWith('刷新规则组失败:再抖')
     w.unmount()
   })
+
+  it('规则级启停走 updateMockRule({enabled}) 且失败回原态(DEFER #116 补测)', async () => {
+    api.updateMockRule.mockRejectedValueOnce(new Error('后端不可用'))
+    const w = mountPane()
+    await flushPromises()
+    // 规则行 switch 无 data-test:取组 1 规则表容器内唯一 el-switch(该组仅 1 条规则)
+    const sw = () => w.find('[data-test="rules-of-1"] .el-switch')
+    expect(sw().classes()).toContain('is-checked') // 初始 enabled=true
+    await sw().find('.el-switch__core').trigger('click')
+    await flushPromises()
+    expect(api.updateMockRule).toHaveBeenCalledWith(11, { enabled: false })
+    expect(document.querySelector('.el-message')?.textContent).toContain('更新规则失败')
+    expect(sw().classes()).toContain('is-checked') // 受控开关:失败留在原态
+    // 成功:后端回贴 saved 整行(onToggleRule 用 saved 替换该行),开关翻面
+    api.updateMockRule.mockResolvedValue(mkRule({ id: 11, group_id: 1, enabled: false }))
+    await sw().find('.el-switch__core').trigger('click')
+    await flushPromises()
+    expect(sw().classes()).not.toContain('is-checked')
+    w.unmount()
+  })
 })

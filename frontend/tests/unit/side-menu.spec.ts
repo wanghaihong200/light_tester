@@ -119,4 +119,12 @@ describe('SideMenu', () => {
     expect(w.emitted('navigate')![0]).toEqual(['/projects/3/ai/jobs'])
     w.unmount()
   })
+
+  it('高亮反例(DEFER #116):非命中叶子项一律不带 active,恰一项高亮', () => {
+    const w = mount(SideMenu, { props: { activeKey: 'project-3:knowledge', collapsed: false, projectId: 3 } })
+    const active = w.findAll('.menu-item').filter((i) => i.classes().includes('active'))
+    expect(active).toHaveLength(1) // 全树恰一项高亮(其余叶子/组头全部反例)
+    expect(active[0]!.find('.menu-name').text()).toBe('知识库')
+    w.unmount()
+  })
 })
