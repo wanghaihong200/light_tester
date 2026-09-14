@@ -360,3 +360,39 @@ def test_reorder_groups_empty_instance_returns_empty_list(client, db_session, ma
     r = client.put(f"/api/mock-instances/{inst.id}/rule-groups/reorder",
                    json={"group_ids": []}, headers=h)
     assert r.status_code == 200 and r.json() == []
+
+
+def test_list_groups_constant_query_count(client, db_session, make_user):
+    """DEFER #112:list 端点的 SQL 查询数与组数无关(消每规则组一查的 N+1)。
+    相对断言:1 组与 5 组两场景总查询数相等——鉴权等固定开销两侧一致,不依赖绝对数。
+    (reorder 端点同享 _group_out 预取修复,但其写侧 onupdate 取回随脏组数线性,
+    无法用跨组数相等断言钉住——计划 erratum 2026-09-14,结构覆盖靠 list 用例+评审)"""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    admin = make_user(db_session, "adm45", is_admin=True)
+    inst = _project_inst(db_session, "p-group-14", 19086)
+    h = _login(client, admin.username)
+    for i in range(5):
+        _mk_group(client, h, inst.id, method="GET", path=f"/g{i}")
+
+    def _count(run):
+        counter = {"n": 0}
+
+        def _incr(*args, **kwargs):
+            counter["n"] += 1
+
+        event.listen(Engine, "before_cursor_execute", _incr)
+        try:
+            run()
+            return counter["n"]
+        finally:
+            event.remove(Engine, "before_cursor_execute", _incr)
+
+    list_url = f"/api/mock-instances/{inst.id}/rule-groups"
+    list_5 = _count(lambda: client.get(list_url, headers=h))
+    ids = [g["id"] for g in client.get(list_url, headers=h).json()]
+    for gid in ids[1:]:   # 删到 1 组
+        client.delete(f"/api/mock-rule-groups/{gid}", headers=h)
+    list_1 = _count(lambda: client.get(list_url, headers=h))
+    assert list_1 == list_5, f"list 查询数随组数增长:{list_1} vs {list_5}(N+1 未消)"

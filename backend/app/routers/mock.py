@@ -207,11 +207,13 @@ def _groups_with_rules(db: Session, instance_id: int) -> list[tuple[MockRuleGrou
     return [(g, rules_by_group.get(g.id, [])) for g in groups]
 
 
-def _group_out(db: Session, g: MockRuleGroup) -> MockRuleGroupOut:
-    """组 Out 带 rules 内嵌(pydantic 无 from_attributes 嵌套来源,手工组)。"""
-    rules = (db.query(MockRule)
-             .filter(MockRule.group_id == g.id, MockRule.is_deleted.is_(False))
-             .order_by(MockRule.sort_order.asc(), MockRule.id.asc()).all())
+def _group_out(db: Session, g: MockRuleGroup, rules: list | None = None) -> MockRuleGroupOut:
+    """组 Out 带 rules 内嵌(pydantic 无 from_attributes 嵌套来源,手工组)。
+    rules=None 逐组查(单组端点);列表/reorder 端点传预取结果消 N+1(#112)。"""
+    if rules is None:
+        rules = (db.query(MockRule)
+                 .filter(MockRule.group_id == g.id, MockRule.is_deleted.is_(False))
+                 .order_by(MockRule.sort_order.asc(), MockRule.id.asc()).all())
     base = MockRuleGroupOut.model_validate(g)
     return base.model_copy(update={"rules": [MockRuleOut.model_validate(r) for r in rules]})
 
@@ -246,7 +248,7 @@ def create_group(instance_id: int, payload: MockRuleGroupSave, db: Session = Dep
 def list_groups(instance_id: int, db: Session = Depends(get_db),
                 current: User = Depends(get_current_user)):
     inst = _get_instance(db, current, instance_id, "viewer")
-    return [_group_out(db, g) for g, _ in _groups_with_rules(db, inst.id)]
+    return [_group_out(db, g, rules) for g, rules in _groups_with_rules(db, inst.id)]
 
 
 @router.put("/mock-rule-groups/{group_id}", response_model=MockRuleGroupOut)
@@ -304,17 +306,15 @@ def delete_group(group_id: int, db: Session = Depends(get_db),
 def reorder_groups(instance_id: int, payload: MockGroupReorderBody,
                    db: Session = Depends(get_db), current: User = Depends(get_current_user)):
     inst = _get_instance(db, current, instance_id, "editor")
-    groups = (db.query(MockRuleGroup)
-              .filter(MockRuleGroup.instance_id == inst.id, MockRuleGroup.is_deleted.is_(False)).all())
-    by_id = {g.id: g for g in groups}
+    by_id = {g.id: (g, rules) for g, rules in _groups_with_rules(db, inst.id)}
     # group_ids=全量新序:集合不等(缺/多/跨实例 id)或入参含重复 → 400
     if len(payload.group_ids) != len(set(payload.group_ids)) or set(payload.group_ids) != set(by_id):
         raise HTTPException(400, "group_ids 必须恰好是实例下全部规则组的 id 全量新序")
     for idx, gid in enumerate(payload.group_ids):
-        by_id[gid].sort_order = idx
-        by_id[gid].updated_by = current.id
+        by_id[gid][0].sort_order = idx
+        by_id[gid][0].updated_by = current.id
     db.commit()
-    return [_group_out(db, by_id[gid]) for gid in payload.group_ids]
+    return [_group_out(db, by_id[gid][0], by_id[gid][1]) for gid in payload.group_ids]
 
 
 @router.put("/mock-rule-groups/{group_id}/rules/reorder", response_model=list[MockRuleOut])
