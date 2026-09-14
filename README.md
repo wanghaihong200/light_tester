@@ -121,7 +121,9 @@ Web / Android / 鸿蒙三端脚本与执行历史:新建脚本 → AI 按步骤�
 上例:实例「天气查询」(9001) 的规则组 `GET /v1/forecast` 配条件 `$.latitude` 等,即可对天气接口做确定性模拟;
 该组若开启透传并指向真实天气服务,把组内规则全部停用,被测系统拿到的就是真实天气——用来对比 mock 与真实表现的差异。
 
-![HTTP Mock](docs/images/mock-http.png)
+![HTTP Mock](docs/images/accept-ops-one-line.png)
+
+![HTTP Mock](docs/images/mock-http-detail.png)
 
 ## 性能测试 ▸ APP 性能测试
 
