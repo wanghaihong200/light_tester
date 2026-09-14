@@ -337,3 +337,26 @@ def test_group_passthrough_update_merge_semantics(client, db_session, make_user)
     assert r.status_code == 200                                  # 显式 null 按未提供(与 enabled 同族)
     assert r.json()["passthrough_enabled"] is True
     assert r.json()["upstream_base_url"] == "http://other:1"     # 沿用现值地址
+
+
+# ---------- DEFER 演进批次:#113 组端点覆盖缺口(viewer reorder 403 已由 test_group_permission_matrix 覆盖) ----------
+
+def test_recreate_same_route_after_group_soft_delete(client, db_session, make_user):
+    """软删组后同 method+path_template 可重建:唯一校验只对未删组生效(应用层约束)。"""
+    admin = make_user(db_session, "adm43", is_admin=True)
+    inst = _project_inst(db_session, "p-group-12", 19084)
+    h = _login(client, admin.username)
+    old = _mk_group(client, h, inst.id, method="GET", path="/again")
+    assert client.delete(f"/api/mock-rule-groups/{old['id']}", headers=h).status_code == 204
+    fresh = _mk_group(client, h, inst.id, method="GET", path="/again")   # 201 而非 400
+    assert fresh["id"] != old["id"]
+
+
+def test_reorder_groups_empty_instance_returns_empty_list(client, db_session, make_user):
+    """空实例 reorder 传全量空序:集合相等([]==[])通过,零循环 → 200 []。"""
+    admin = make_user(db_session, "adm44", is_admin=True)
+    inst = _project_inst(db_session, "p-group-13", 19085)
+    h = _login(client, admin.username)
+    r = client.put(f"/api/mock-instances/{inst.id}/rule-groups/reorder",
+                   json={"group_ids": []}, headers=h)
+    assert r.status_code == 200 and r.json() == []
