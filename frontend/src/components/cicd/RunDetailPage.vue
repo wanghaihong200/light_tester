@@ -95,6 +95,7 @@ async function load(): Promise<void> {
 }
 
 function openStream(): void {
+  if (es) es.close()  // 守卫:旧 run 流未关时重开(如 rerun 后)会把旧日志串进新 run
   es = new EventSource(withSseToken(ciRunEventsUrl(run.value!.id)))
   es.addEventListener('log', (e: MessageEvent) => {
     const d = JSON.parse(e.data) as { text: string }
@@ -123,7 +124,9 @@ async function doStop(): Promise<void> {
 async function doRerun(): Promise<void> {
   const fresh = await rerunCiRun(run.value!.id)
   ElMessage.success('已重新触发')
-  void router.replace({ name: 'project-cicd-run-detail', params: { runId: String(fresh.id) } })
+  es?.close()  // 先关旧流:旧 run 仍活跃时其 log 事件不得串入新 run 的 logText
+  es = null
+  await router.replace({ name: 'project-cicd-run-detail', params: { runId: String(fresh.id) } })  // 等路由生效,load 才拉到新 runId
   logText.value = ''
   await load()
 }
