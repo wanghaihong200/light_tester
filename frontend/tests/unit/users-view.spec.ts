@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), update: vi.fn(
 vi.mock('../../src/api/users', () => ({ usersApi: { list: mocks.list, create: mocks.create, update: mocks.update, projects: mocks.projects } }))
 vi.mock('../../src/api/auth', () => ({ authApi: { login: vi.fn(), me: mocks.me } }))
 vi.mock('../../src/api/projects', () => ({ listProjects: mocks.listProjects }))
+// 页尾挂着 JenkinsConfigCard(admin 配置卡),其 onMounted 拉 /jenkins/connection;mock 掉避免真 fetch 产生未处理 rejection
+vi.mock('../../src/api/cicd', () => ({
+  getJenkinsConnection: vi.fn(async () => ({
+    configured: false, base_url: '', api_user: '', api_token: '', gitlab_exposed_base: '', credential_id: '',
+  })),
+}))
 
 const USERS = [
   { id: 1, username: 'admin', display_name: '管理员', is_admin: true, is_active: true },

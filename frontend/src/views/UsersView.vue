@@ -68,6 +68,8 @@
       @update:visible="permVisible = $event"
       @changed="() => {}"
     />
+
+    <JenkinsConfigCard />
   </div>
 </template>
 
@@ -79,6 +81,7 @@ import type { UserInfo } from '../api/auth'
 import { usersApi, type UserUpdateInput } from '../api/users'
 import { useAuth } from '../composables/useAuth'
 import UserProjectsDialog from '../components/UserProjectsDialog.vue'
+import JenkinsConfigCard from '../components/cicd/JenkinsConfigCard.vue'
 
 const router = useRouter()
 const { user, isAdmin, fetchMe } = useAuth()
