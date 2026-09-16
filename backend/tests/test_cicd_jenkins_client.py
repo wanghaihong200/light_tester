@@ -100,3 +100,74 @@ def test_job_exists_and_create():
         assert c.job_exists("light_tester_p1_ui") is False
         c.create_pipeline_job("light_tester_p1_ui", "<flow-definition/>")
         assert c.job_exists("light_tester_p1_ui") is True
+
+
+def test_trigger_build_resolves_queue():
+    fk = FakeJenkins()
+    with fk.client() as c:
+        fk.jobs.add("j1")
+        n, url = c.trigger_build("j1", {"BRANCH": "master"})
+        assert n == 1 and url.endswith("/job/j1/1/")
+        assert fk.params_log == [{"BRANCH": "master"}]
+
+
+def test_get_build_and_console_and_stop():
+    fk = FakeJenkins()
+    fk.jobs.add("j1")
+    n = fk.trigger("j1")
+    fk.logs[( "j1", n)] = b"line1\nline2\n"
+    with fk.client() as c:
+        b = c.get_build("j1", n)
+        assert b == {"building": True, "result": None, "url": f"http://jk/job/j1/{n}/"}
+        chunk, offset = c.read_console_chunk("j1", n, 0)
+        assert chunk == "line1\nline2\n" and offset == 12
+        chunk2, _ = c.read_console_chunk("j1", n, 6)
+        assert chunk2 == "line2\n"
+        c.stop_build("j1", n)
+        assert fk.stopped == [("j1", n)]
+        assert c.get_build("j1", n)["result"] == "ABORTED"
+
+
+def test_get_build_missing_returns_none():
+    fk = FakeJenkins()
+    with fk.client() as c:
+        assert c.get_build("j1", 99) is None
+
+
+def test_artifacts_roundtrip():
+    fk = FakeJenkins()
+    fk.jobs.add("j1")
+    n = fk.trigger("j1")
+    fk.artifacts[("j1", n)] = {"ci-results/junit.xml": b"<testsuites/>"}
+    with fk.client() as c:
+        assert c.list_artifacts("j1", n) == ["ci-results/junit.xml"]
+        assert c.get_artifact("j1", n, "ci-results/junit.xml") == b"<testsuites/>"
+        with pytest.raises(JenkinsError):
+            c.get_artifact("j1", n, "nope.xml")
+
+
+def test_trigger_queue_timeout_raises():
+    fk = FakeJenkins()
+    fk.jobs.add("j1")
+
+    class NoSchedule(FakeJenkins):
+        def handler(self, request):
+            if "/queue/item/" in request.url.path:
+                return httpx.Response(200, json={})  # 永不给出 executable
+            return super().handler(request)
+
+    ns = NoSchedule()
+    ns.jobs = fk.jobs
+    with ns.client() as c:
+        with pytest.raises(JenkinsError, match="排队超时"):
+            c.trigger_build("j1", {}, queue_timeout=1.5)
+
+
+def test_transport_error_wrapped_as_jenkins_error():
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom")
+
+    with JenkinsClient("http://never", "a", "t",
+                       transport=httpx.MockTransport(unreachable)) as c:
+        with pytest.raises(JenkinsError, match="Jenkins 不可达"):
+            c.get_build("j1", 1)
