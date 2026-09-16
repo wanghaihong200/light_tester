@@ -3,11 +3,12 @@ import path from 'node:path'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig, type Plugin } from 'vitest/config'
 
-// 计划16(任务16)兜底:PlansPane 引用的 PlanDialog/TriggerDialog 由任务 17/18 才落盘,
-// 而 vitest 转换期要求 import 可解析(spec 里的 vi.mock 只在运行时接管,救不了 import-analysis)。
-// 仅当「处于测试进程 且 目标 SFC 尚不存在」时把这两个固定路径重定向到虚拟空组件;
-// 真实文件落盘后本兜底自动失效(build/dev 均不受影响),届时可整体删除本函数。
-const PENDING_CICD_SFCS = ['src/components/cicd/PlanDialog.vue', 'src/components/cicd/TriggerDialog.vue']
+// 计划16(任务16,fix1)兜底:T15 懒加载路由与 PlansPane 引用的 CI/CD SFC 分属任务 17-20 落盘
+// (PlanDialog/TriggerDialog/RunsPane/RunDetailPage),而 vitest 转换期要求 import 可解析
+// (spec 里的 vi.mock 只在运行时接管,救不了 import-analysis)。
+// 仅当「处于测试进程 且 目标 SFC 尚不存在」时把白名单路径重定向到虚拟空组件;
+// 真实文件落盘后本兜底自动失效(build/dev 均不受影响),全部落盘后可整体删除本函数。
+const PENDING_CICD_SFCS = ['src/components/cicd/PlanDialog.vue', 'src/components/cicd/TriggerDialog.vue', 'src/components/cicd/RunsPane.vue', 'src/components/cicd/RunDetailPage.vue']
 
 function pendingCicdSfcStub(): Plugin {
   return {
