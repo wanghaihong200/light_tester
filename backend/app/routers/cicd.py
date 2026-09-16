@@ -322,3 +322,65 @@ def rerun_run(run_id: int, db: Session = Depends(get_db),
     if plan is None or plan.is_deleted:
         raise HTTPException(400, "原计划已删除,无法重跑")
     return executor.trigger_plan(db, current, plan, confirm_stale=True)
+
+
+class JenkinsConnectionIn(BaseModel):
+    base_url: str = Field(min_length=1, max_length=500, pattern=r"^https?://")
+    api_user: str = Field(min_length=1, max_length=200)
+    api_token: str = Field(min_length=1, max_length=500)
+    gitlab_exposed_base: str = Field(default="http://host.docker.internal:8090", max_length=500)
+    credential_id: str = Field(default="gitlab-creds", max_length=200)
+
+
+def _conn_out(conn: JenkinsConnection | None) -> dict:
+    if conn is None:
+        return {"configured": False, "base_url": "", "api_user": "", "api_token": "",
+                "gitlab_exposed_base": "http://host.docker.internal:8090",
+                "credential_id": "gitlab-creds"}
+    return {"configured": True, "base_url": conn.base_url, "api_user": conn.api_user,
+            "api_token": conn.api_token, "gitlab_exposed_base": conn.gitlab_exposed_base,
+            "credential_id": conn.credential_id}
+
+
+def _require_admin(current: User) -> None:
+    if not current.is_admin:
+        raise HTTPException(403, "仅管理员可配置 Jenkins 连接")
+
+
+@router.get("/jenkins/connection")
+def get_jenkins_connection(db: Session = Depends(get_db),
+                           current: User = Depends(get_current_user)):
+    _require_admin(current)
+    return _conn_out(db.query(JenkinsConnection).first())
+
+
+@router.put("/jenkins/connection")
+def put_jenkins_connection(payload: JenkinsConnectionIn, db: Session = Depends(get_db),
+                           current: User = Depends(get_current_user)):
+    _require_admin(current)
+    conn = db.query(JenkinsConnection).first()
+    if conn is None:
+        conn = JenkinsConnection(id=1)
+        db.add(conn)
+    conn.base_url = payload.base_url.rstrip("/")
+    conn.api_user = payload.api_user
+    conn.api_token = payload.api_token
+    conn.gitlab_exposed_base = payload.gitlab_exposed_base
+    conn.credential_id = payload.credential_id
+    conn.updated_by = current.id
+    db.commit()
+    return _conn_out(conn)
+
+
+@router.post("/jenkins/connection/test")
+def test_jenkins_connection(db: Session = Depends(get_db),
+                            current: User = Depends(get_current_user)):
+    _require_admin(current)
+    conn = db.query(JenkinsConnection).first()
+    if conn is None:
+        raise HTTPException(400, "尚未配置 Jenkins 连接")
+    try:
+        with executor.client_from(conn) as client:
+            return client.test_connection()
+    except jenkins_client.JenkinsError as e:
+        raise HTTPException(400, str(e)) from e
