@@ -33,6 +33,8 @@ async def lifespan(app: FastAPI):
     from app.ui_automation.loopref import set_ui_loop
     set_ui_loop(asyncio.get_running_loop())
     supervisor.start_probe_task()  # Mock 实例探活循环(10s 一轮,异常吞掉绝不炸平台)
+    from app.cicd import poller
+    poller.start_poll_task()  # CI 执行记录轮询(2s 一轮:状态/日志增量/终态产物,异常吞掉绝不炸平台)
     workers: list[asyncio.Task] = []
     if settings.anthropic_api_key:  # 无 key 的环境(测试/离线)不启动 worker
         from app.jobs.pipeline import worker_loop
@@ -40,6 +42,7 @@ async def lifespan(app: FastAPI):
         workers = [asyncio.create_task(worker_loop()) for _ in range(3)]
     yield
     supervisor.stop_probe_task()
+    poller.stop_poll_task()
     supervisor.shutdown_all()  # 平台停机:全部 mock 子进程关停
     for w in workers:
         w.cancel()
