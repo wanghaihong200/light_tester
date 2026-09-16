@@ -38,6 +38,21 @@ def _seed_repo(tmp_path):
     return origin
 
 
+def _seed_web_repo(tmp_path):
+    """file:// 裸仓(master,含一个已导出的 pytest 文件 test_x.py)→ 返回 origin 路径。"""
+    origin = tmp_path / "web.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "master", str(origin)], check=True)
+    src = tmp_path / "web_seed"
+    src.mkdir()
+    (src / "test_x.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+    for args in (["init", "-q", "-b", "master"], ["add", "."]):
+        subprocess.run(["git", "-C", str(src), *args], check=True)
+    subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "init"], check=True)
+    subprocess.run(["git", "-C", str(src), "push", "-q", str(origin), "master"], check=True)
+    return origin
+
+
 @pytest.fixture()
 def env(tmp_path, monkeypatch, db_session, fake_jenkins, monkeypatched_client):
     """项目 + api 仓 + JenkinsConnection + 注册表(active: loginOk)+ 接口计划。"""
@@ -56,6 +71,25 @@ def env(tmp_path, monkeypatch, db_session, fake_jenkins, monkeypatched_client):
     plan = ExecutionPlan(project_id=proj.id, name="接口回归", kind="api", branch="master",
                          selection=[{"ref": "com.x.AuthApiTest#loginOk",
                                      "class_name": "com.x.AuthApiTest", "method": "loginOk"}])
+    db_session.add(plan)
+    db_session.commit()
+    return {"project_id": proj.id, "plan_id": plan.id, "origin": origin}
+
+
+@pytest.fixture()
+def env_ui(tmp_path, monkeypatch, db_session, fake_jenkins, monkeypatched_client):
+    """项目 + web 仓(含 test_x.py 导出文件)+ JenkinsConnection + ui 计划(selection 直灌,不经 enrich)。"""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "repos_dir", tmp_path / "repos")
+    origin = _seed_web_repo(tmp_path)
+    proj = Project(name="runs_ui")
+    db_session.add(proj)
+    db_session.commit()
+    db_session.add(AutomationRepo(project_id=proj.id, kind="web", repo_url=origin.as_uri()))
+    db_session.add(JenkinsConnection(id=1, base_url="http://jk", api_user="a", api_token="t"))
+    plan = ExecutionPlan(project_id=proj.id, name="UI 冒烟", kind="ui", branch="master",
+                         selection=[{"script_id": 7, "name": "x", "file": "test_x.py"}])
     db_session.add(plan)
     db_session.commit()
     return {"project_id": proj.id, "plan_id": plan.id, "origin": origin}
@@ -151,3 +185,38 @@ def test_preflight_branch_missing_reports_error(client, db_session, make_user, e
                     json={"plan_ids": [plan_id]}, headers=h)
     item = r.json()[0]
     assert item["error"] and "分支" in item["error"]
+
+
+def test_trigger_ui_selection_contains_exported_file(client, db_session, make_user, env_ui,
+                                                     fake_jenkins):
+    pid, plan_id = env_ui["project_id"], env_ui["plan_id"]
+    h = _auth(client, db_session, make_user, "runner7", project_ids=[pid])
+    r = client.post(f"/api/projects/{pid}/ci-runs",
+                    json={"plan_ids": [plan_id], "confirm_stale": False}, headers=h)
+    assert r.status_code == 200
+    run = r.json()["runs"][0]
+    assert run["status"] == "queued"
+    assert all(s.get("skipped") is not True for s in run["selection"])
+    sent = fake_jenkins.params_log[0]
+    assert sent["KIND"] == "ui" and sent["SELECTION"] == "test_x.py"
+
+
+def test_trigger_ui_traversal_file_skipped(client, db_session, make_user, env_ui, fake_jenkins):
+    """DB 直灌越界 file(selection 不经 enrich):触发走通,越界项标 skipped/file_missing,SELECTION 不含它。"""
+    pid = env_ui["project_id"]
+    bad = ExecutionPlan(project_id=pid, name="越界计划", kind="ui", branch="master",
+                        selection=[{"script_id": 7, "name": "x", "file": "test_x.py"},
+                                   {"script_id": 8, "name": "evil", "file": "../../evil.py"}])
+    db_session.add(bad)
+    db_session.commit()
+    h = _auth(client, db_session, make_user, "runner8", project_ids=[pid])
+    r = client.post(f"/api/projects/{pid}/ci-runs",
+                    json={"plan_ids": [bad.id], "confirm_stale": False}, headers=h)
+    assert r.status_code == 200
+    run = r.json()["runs"][0]
+    by_file = {s["file"]: s for s in run["selection"]}
+    assert by_file["../../evil.py"]["skipped"] is True
+    assert by_file["../../evil.py"]["skip_reason"] == "file_missing"
+    assert by_file["test_x.py"]["skipped"] is False
+    assert fake_jenkins.params_log[0]["SELECTION"] == "test_x.py"
+    assert "../../evil.py" not in fake_jenkins.params_log[0]["SELECTION"]

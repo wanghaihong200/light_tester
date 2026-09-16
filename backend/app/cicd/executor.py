@@ -34,7 +34,7 @@ def _resolve_selection(db: Session, plan: ExecutionPlan, ws) -> tuple[list[dict]
     valid_api: list[tuple[str, str]] = []
     if plan.kind == "ui":
         for it in plan.selection or []:
-            file_ok = bool(it.get("file")) and (ws / it["file"]).exists()
+            file_ok = bool(it.get("file")) and (ws / it["file"]).resolve().is_relative_to(ws.resolve()) and (ws / it["file"]).exists()
             entry = {**it, "skipped": not file_ok}
             if not file_ok:
                 entry["skip_reason"] = "file_missing"
