@@ -44,11 +44,15 @@ async def _poll_loop() -> None:
 
 
 async def _poll_once(client: jenkins_client.JenkinsClient | None = None) -> None:
-    # 单轮全是同步 HTTP/DB 调用,挪进工作线程执行,避免 Jenkins 慢/不可达时冻住事件循环
-    await asyncio.to_thread(_poll_round, client)
+    # 单轮全是同步 HTTP/DB 调用,挪进工作线程执行,避免 Jenkins 慢/不可达时冻住事件循环;
+    # 主线 loop 带过去:总线事件必须回主线发布(asyncio.Queue 非线程安全)
+    loop = asyncio.get_running_loop()
+    await asyncio.to_thread(_poll_round, client, loop)
 
 
-def _poll_round(client: jenkins_client.JenkinsClient | None = None) -> None:
+def _poll_round(client: jenkins_client.JenkinsClient | None = None,
+                loop: asyncio.AbstractEventLoop | None = None) -> None:
+    assert loop is not None, "轮询单轮必须携带主线事件循环(事件经 call_soon_threadsafe 回主线发布)"
     from app.database import SessionLocal
     from app.models import CiRun, JenkinsConnection
 
@@ -64,7 +68,7 @@ def _poll_round(client: jenkins_client.JenkinsClient | None = None) -> None:
         try:
             for run in rows:
                 try:
-                    _poll_run(db, own, run)
+                    _poll_run(db, own, run, loop)
                 except jenkins_client.JenkinsError:
                     raise
                 except Exception:
@@ -74,43 +78,49 @@ def _poll_round(client: jenkins_client.JenkinsClient | None = None) -> None:
                 own.close()
 
 
-def _emit(run: CiRun, event: dict) -> None:
-    bus.publish_nowait(f"ci_{run.id}", event)
+def _emit(run: CiRun, event: dict, loop: asyncio.AbstractEventLoop) -> None:
+    try:
+        loop.call_soon_threadsafe(bus.publish_nowait, f"ci_{run.id}", event)
+    except RuntimeError:
+        pass  # 停机窗口事件循环已关闭:事件丢弃,与吞异常纪律一致
 
 
-def _append_log(run: CiRun, chunk: str, new_offset: int) -> None:
+def _append_log(run: CiRun, chunk: str, new_offset: int,
+                loop: asyncio.AbstractEventLoop | None) -> None:
     d = settings.ci_data_dir / "runs" / str(run.id)
     d.mkdir(parents=True, exist_ok=True)
     with open(d / "console.log", "a", encoding="utf-8") as f:
         f.write(chunk)
     run.console_bytes = new_offset
-    _emit(run, {"type": "log", "text": chunk})
+    _emit(run, {"type": "log", "text": chunk}, loop)
 
 
-def _poll_run(db, client: jenkins_client.JenkinsClient, run: CiRun) -> None:
+def _poll_run(db, client: jenkins_client.JenkinsClient, run: CiRun,
+              loop: asyncio.AbstractEventLoop | None) -> None:
     build = client.get_build(run.jenkins_job, run.build_number)
     if build is None:
         run.status = "error"
         run.error = "Jenkins 侧构建不存在(可能已被删除)"
         run.finished_at = datetime.now()
         db.commit()
-        _emit(run, {"type": "done", "status": "error"})
+        _emit(run, {"type": "done", "status": "error"}, loop)
         return
     if run.status == "queued" and build["building"]:
         run.status = "running"
         run.started_at = datetime.now()
         db.commit()
-        _emit(run, {"type": "status", "status": "running"})
+        _emit(run, {"type": "status", "status": "running"}, loop)
     chunk, new_offset = client.read_console_chunk(run.jenkins_job, run.build_number,
                                                   run.console_bytes)
     if chunk:
-        _append_log(run, chunk, new_offset)
+        _append_log(run, chunk, new_offset, loop)
         db.commit()
     if not build["building"]:
-        _finalize(db, client, run, build["result"] or "ABORTED")
+        _finalize(db, client, run, build["result"] or "ABORTED", loop)
 
 
-def _finalize(db, client: jenkins_client.JenkinsClient, run: CiRun, result: str) -> None:
+def _finalize(db, client: jenkins_client.JenkinsClient, run: CiRun, result: str,
+              loop: asyncio.AbstractEventLoop | None) -> None:
     run.status = _VERDICT.get(result, "error")
     run.finished_at = datetime.now()
     if run.status in ("success", "failure"):
@@ -131,4 +141,4 @@ def _finalize(db, client: jenkins_client.JenkinsClient, run: CiRun, result: str)
         run.failed = sum(1 for c in cases if c["status"] == "failed")
         run.skipped = sum(1 for c in cases if c["status"] == "skipped")
     db.commit()
-    _emit(run, {"type": "done", "status": run.status})
+    _emit(run, {"type": "done", "status": run.status}, loop)
