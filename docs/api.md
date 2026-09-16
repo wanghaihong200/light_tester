@@ -9,7 +9,7 @@
 - **鉴权(计划 9 起)**:除 `GET /api/health` 与 `POST /api/auth/login` 外,**所有端点都要登录**——带
   `Authorization: Bearer <jwt>`(HS256,`jwt_exp_days`=7 天;无 refresh、无服务端吊销)。
   未带/无效 → `401 {"detail":"未登录或登录已过期"}`;账号已禁用 → `403 {"detail":"账号已禁用"}`。
-  四个 SSE 端点(jobs / ui_runs / ui_recordings / app_runs 的 events)额外支持 `?token=` query(裸 EventSource 带不了自定义头)。
+  五个 SSE 端点(jobs / ui_runs / ui_recordings / app_runs / ci_runs 的 events)额外支持 `?token=` query(裸 EventSource 带不了自定义头)。
 - **项目级权限**:owner / editor / viewer 三角色,admin 全局直通(任何项目按 owner 处理)。
   无成员关系的项目对非 admin **一律 404(不可见,不泄露存在性)**;已可见但角色不足 → `403 {"detail":"无项目操作权限"}`。
   各域最低角色见下方「角色矩阵」。
@@ -61,6 +61,7 @@ token 即 JWT(`sub`=user_id,HS256,7 天)。首次启动自动创建 admin/admin1
 | APP 执行 | 历史/详情/对比/perf 曲线=viewer | 发起/强制结束=editor;**执行事件流=editor** | — |
 | 接口Mock | 实例/规则/命中读=viewer | 建/改/删/启停/排序/清空=editor | 服务面(实例端口)无鉴权(探活/关停须实例令牌) |
 | 性能测试 | 记录/曲线/对比/趋势=viewer;设备历史列表=登录即可(设备无项目归属) | 删/导入=editor | — |
+| 持续集成 CI/CD | 计划/接口用例注册表/执行记录读=viewer | 计划增删改/扫描=editor | 触发/停止/重跑=editor;Jenkins 连接三端点=**仅 admin** |
 | 项目成员 | viewer | 增/改角色/移除=owner(末位 owner 不可动) | — |
 | 用户管理 | admin(**例外**:search 端点登录即可) | admin | — |
 
@@ -443,6 +444,71 @@ curl -X POST http://127.0.0.1:8000/api/projects/1/perf-records/import \
   -d '{"serial":"emulator-5554","history_id":"1718000000000","name":"冷启动基线"}'
 ```
 
+## 持续集成(CI/CD)`/api`(cicd.py,计划 16 / ADR-0012)
+
+第四条执行域(与生成任务/UI 执行/APP 执行并列互不隶属,ADR-0012 决策 6):把「勾选一批用例 → 独立环境跑 → 日志直播 → 出报告」落在 **Jenkins** 上——每 项目×kind 一个**常驻参数化 pipeline job**(job 名 `light_tester_p{id}_{kind}`,首次触发时 REST 自动查建,内联平台生成 Jenkinsfile,双 docker agent:UI=`playwright/python:v1.60` / api=`maven:3.9-eclipse-temurin-8`),一次执行 = 触发一次 build。平台**纯出站轮询**集成(~2s 拉 build 状态+`progressiveText` 增量日志,不开任何入站通道),日志经 SSE 总线中继直播并落盘回放,后端重启按 mock supervisor 先例对账收口。报告自研:UI 侧 pytest `--junitxml`、api 侧 surefire 原生 XML,平台单解析器入 `ci_runs`。
+
+- **三实体**:执行计划(单类型 `kind=ui|api` + 分支前置 + 选择集合)、接口用例注册表(仓×分支×类×方法,TestNG 主,仓是唯一事实源、平台只存引用)、执行记录(**触发时快照 selection 进 run**,计划事后编辑不溯及历史)。
+- **状态机**:`queued / running / success / failure / aborted / error`(`aborted`=停止;`error`=环境级失败,如排队 60s 未解析、Jenkins 不可达)。
+- **新鲜度门(只提示不阻塞,ADR-0012 决策 4)**:触发先 `sync_repo`(切计划分支 + reset --hard)再比对工作区 vs 远端——reset 后 ahead 恒 0,**dirty 信号实际来自未推送产物(untracked)**。检测 stale 且未确认 → **整单 409**,前端弹确认,勾后按**远端现状(老代码)**执行;定时执行(未来)语义已钉=直接跑远端现状、不检测。
+- **409 stale 响应结构**(dict detail,前端据此渲染确认弹窗):
+
+```json
+{"detail": {"message": "仓里有新代码未同步到远端,是否仍按远端现状(老代码)执行?",
+            "freshness": {"on_branch": true, "dirty_files": 1, "ahead": 0, "stale": true}}}
+```
+
+- **快照缺失标注**:触发时对勾选项逐一核对仓内物料,已不存在的标 `skipped:true` + `skip_reason`(`stale`=注册表已无此方法 / `file_missing`=ui 脚本导出文件不在工作区)——警告列出、可继续、报告页标注「未执行」。
+- **SSE 事件流** `GET /api/ci-runs/{run_id}/events`(鉴权同 jobs 事件流,Bearer 或 `?token=`):连上先 `status`(当前状态);活跃 run 补发日志尾部回放(≤8KB)一条 `log`,再持续转发轮询增量(`log` 文本块 / `status`→running),收到 `done`(带终态 status)或 `error` 后断流;**已终态连上即收 `status`+`snapshot`(status/total/passed/failed/skipped/results/error)后关流**。
+- **权限**:计划/注册表/执行记录读=viewer;扫描、计划增删改、触发/停止/重跑=editor;Jenkins 连接三端点=**仅 admin**(403 `仅管理员可配置 Jenkins 连接`)。
+
+**执行计划**(editor 写 / viewer 读;选择集合 ui 项=`{script_id, name}`(落库补 `file=test_{slug}.py`)/ api 项=`{class_name, method}`(落库补 `ref={class}#{method}`))
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/projects/{id}/ci-plans` | 计划列表(id 倒序,软删不显) |
+| POST | `/api/projects/{id}/ci-plans` | 建计划 `{name(1-200), description?, kind(ui\|api), branch(1-200), selection[]}`(201;空 selection 可建,触发时 400 `空计划不可触发`;ui 项需 int script_id+非空 name / api 项需非空 class_name+method,400) |
+| PUT | `/api/ci-plans/{plan_id}` | 更新(字段给了才改;selection 给了按计划 kind 整体重校验+补全) |
+| DELETE | `/api/ci-plans/{plan_id}` | 删除(204,**软删**;历史 run 保留快照不受影响) |
+
+**接口用例注册表**(editor 扫描 / viewer 读)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/projects/{id}/interface-cases/scan` | 扫描同步 `{branch}`:sync_repo → 扫工作区(方法级正则解析)→ 注册表同步(扫到置 `active` 刷 framework/file_path/last_commit,未扫到置 `stale`)→ `{total, active, stale, added}`;项目 404 / 未配 api 仓 400 / 分支同步失败 400 |
+| GET | `/api/projects/{id}/interface-cases?branch=` | 用例列表(class_name,method 升序,上限 2000;`{id, branch, class_name, method, status[active\|stale], framework, file_path}`) |
+
+**执行**(preflight/触发/停止/重跑=editor;记录读=viewer)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/projects/{id}/ci-runs/preflight` | 触发前预检 `{plan_ids}`(≥1)→ 逐计划 `{plan_id, name, kind, branch, freshness, valid, missing, error}`(valid/missing=快照可执行/缺失数;同步失败等记入该行 `error`,不中断其余计划);计划不存在/跨项目 400 |
+| POST | `/api/projects/{id}/ci-runs` | 批量触发 `{plan_ids, confirm_stale?}` → `{runs:[CiRunOut], failures:[{plan_id, error}]}`;**stale 且未确认整单 409**(结构见上,已触发 run 不在响应,重 GET 可见);单计划失败(Jenkins 未配/物料全缺等)进 `failures` 行,唯 409 原样上抛;Jenkins 调用失败 502 |
+| GET | `/api/projects/{id}/ci-runs` | 执行记录列表(id 倒序,近 100 条) |
+| GET | `/api/ci-runs/{run_id}` | 执行详情(CiRunOut:id/project_id/plan_id/plan_name/kind/branch/selection 快照/status/jenkins_job/build_number/jenkins_url/total/passed/failed/skipped/results(逐用例含 skip_reason)/console_bytes/freshness/error/started_at/finished_at/created_at/created_by) |
+| GET | `/api/ci-runs/{run_id}/events` | **SSE 直播**(事件类型与断流语义见上) |
+| POST | `/api/ci-runs/{run_id}/stop` | 停止:Jenkins 侧 abort build(已落 build_number 时)+ 平台置 `aborted` 广播 done;非 queued/running 400 `该执行已结束,无需停止`;未配连接 400;Jenkins 停止失败 502 |
+| POST | `/api/ci-runs/{run_id}/rerun` | 重跑(201,新 CiRun):按原计划再触发,**confirm_stale=True(不过新鲜度门)**;原计划已删 400 `原计划已删除,无法重跑` |
+
+**Jenkins 连接**(全局单例,**仅 admin**;「用户管理」页 Jenkins 连接卡)
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/jenkins/connection` | 读连接 `{configured, base_url, api_user, api_token, gitlab_exposed_base, credential_id}`(未配置时 `configured=false` 带默认值;token 明文回显,单机 MVP 口径同 git_token) |
+| PUT | `/api/jenkins/connection` | 保存 `{base_url(须 http/s://), api_user, api_token, gitlab_exposed_base?(默认 http://host.docker.internal:8090), credential_id?(默认 gitlab-creds)}`(base_url 尾 `/` 归一;首存落 id=1 单例行) |
+| POST | `/api/jenkins/connection/test` | 连通测试(未配置 400 `尚未配置 Jenkins 连接`;失败 400;成功 `{ok:true}`) |
+
+```bash
+# 触发(stale 时先收 409,确认后带 confirm_stale 重发)
+curl -X POST http://127.0.0.1:8000/api/projects/1/ci-runs \
+  -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+  -d '{"plan_ids":[3]}'
+
+curl -X POST http://127.0.0.1:8000/api/projects/1/ci-runs \
+  -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+  -d '{"plan_ids":[3],"confirm_stale":true}'
+```
+
 ## 排障(接口视角)
 
 | 现象 | 说明 |
@@ -462,4 +528,4 @@ curl -X POST http://127.0.0.1:8000/api/projects/1/perf-records/import \
 | app 导出 400 errors | 用例含平台不翻译的动作(GESTURE/ASSERT_TOAST 等),按错误清单的步骤号改用例或拆步;有错不推送 |
 
 ---
-*最后更新:2026-09-13;对应代码基线:计划 15 HTTP Mock 规则组与透传(ADR-0011:`mock_rule_groups` 两级匹配 + 组级透传 + 命中 outcome/response_body,2026-09-11 执行、2026-09-13 验收调整透传入组);参数级精确校验以 /docs(Swagger)为准*
+*最后更新:2026-09-16;对应代码基线:计划 16 CI/CD 模块(ADR-0012:Jenkins 常驻参数化 job×项目×kind + 双 docker agent + 纯出站轮询 + JUnit XML 自研报告,执行计划/接口用例注册表/执行记录/Jenkins 连接四组端点);参数级精确校验以 /docs(Swagger)为准*
