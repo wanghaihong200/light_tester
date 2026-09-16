@@ -17,12 +17,12 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.main import create_app
 from app.models import (
-    Case, Document, FeaturePoint, GenerationJob, MockHit, MockInstance, MockRule,
-    MockRuleGroup, Module, Project, ProjectMember, StagedCase, Step, UiAuthState, UiRun,
-    UiScript, User,
+    Case, CiRun, Document, ExecutionPlan, FeaturePoint, GenerationJob, InterfaceCase,
+    JenkinsConnection, MockHit, MockInstance, MockRule, MockRuleGroup, Module, Project,
+    ProjectMember, StagedCase, Step, UiAuthState, UiRun, UiScript, User,
 )
 
-_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState, User, MockHit, MockInstance, MockRule, MockRuleGroup, ProjectMember)
+_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState, User, MockHit, MockInstance, MockRule, MockRuleGroup, ProjectMember, CiRun, ExecutionPlan, InterfaceCase, JenkinsConnection)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -41,6 +41,16 @@ def _isolate_app_data(tmp_path_factory):
     settings.app_data_dir = tmp_path_factory.mktemp("app_data")
     yield
     settings.app_data_dir = real
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ci_data(tmp_path_factory):
+    """同 _isolate_app_data:ci_data_dir 指向临时目录——真实 data/ci 永不被测试读写
+    (计划 16 T11 会写 runs/{run_id}/console.log,不隔离会污染真实目录)。"""
+    real = settings.ci_data_dir
+    settings.ci_data_dir = tmp_path_factory.mktemp("ci_data")
+    yield
+    settings.ci_data_dir = real
 
 
 @pytest.fixture(autouse=True)

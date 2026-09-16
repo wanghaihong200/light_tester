@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     app_data_dir: Path = Path("../data/app")  # APP自动化(计划 12):runs/{run_id}/(case.json/artifacts/perf)、imports/
     mock_port_range: str = "9001-9499"          # 实例端口自动分配范围 "lo-hi"
     mock_data_dir: Path = Path("../data/mock")  # mock/logs/{instance_id}.log 子进程日志
+    ci_data_dir: Path = Path("../data/ci")   # CI/CD(计划 16):runs/{run_id}/console.log
 
 
 settings = Settings()
@@ -32,3 +33,4 @@ settings.uploads_dir.mkdir(parents=True, exist_ok=True)
 settings.ui_data_dir.mkdir(parents=True, exist_ok=True)
 settings.app_data_dir.mkdir(parents=True, exist_ok=True)
 settings.mock_data_dir.mkdir(parents=True, exist_ok=True)
+settings.ci_data_dir.mkdir(parents=True, exist_ok=True)

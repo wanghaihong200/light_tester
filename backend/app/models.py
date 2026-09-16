@@ -527,3 +527,104 @@ class PerfRecord(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="采集结束时间")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+
+
+class JenkinsConnection(Base):
+    __tablename__ = "jenkins_connection"
+    __table_args__ = {"comment": "Jenkins 连接配置(全局单行,id=1)"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="固定为 1(单行配置)")
+    base_url: Mapped[str] = mapped_column(String(500), comment="Jenkins 根地址,如 http://localhost:8081")
+    api_user: Mapped[str] = mapped_column(String(200), comment="API token 所属 Jenkins 用户名")
+    api_token: Mapped[str] = mapped_column(String(500), comment="Jenkins API token(明文,与 automation_repos.repo_token 同口径)")
+    gitlab_exposed_base: Mapped[str] = mapped_column(
+        String(500), default="http://host.docker.internal:8090",
+        comment="GitLab 对 Jenkins 容器暴露的根地址(checkout URL 改写目标)")
+    credential_id: Mapped[str] = mapped_column(String(200), default="gitlab-creds",
+                                               comment="Jenkins 侧 GitLab 凭据 ID(pipeline 引用)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+
+
+class ExecutionPlan(Base):
+    __tablename__ = "execution_plans"
+    __table_args__ = {"comment": "执行计划:单类型可复用用例选择集合,绑定分支(ADR-0012)"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="计划主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    name: Mapped[str] = mapped_column(String(200), comment="计划名称")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="计划描述")
+    kind: Mapped[str] = mapped_column(String(16), comment="计划类型:ui(勾Web自动化脚本)/api(勾接口用例)")
+    branch: Mapped[str] = mapped_column(String(200), comment="绑定的仓分支(建/编计划先定分支、再勾用例)")
+    # 选择集合。ui 项:{script_id:int, name:str, file:str(导出文件名,后端按 slugify 计算)};
+    # api 项:{ref:str("类#方法"), class_name:str, method:str}。仓是接口用例唯一事实源,这里只存引用。
+    selection: Mapped[list] = mapped_column(JSON, default=list, comment="用例选择集合")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="创建人 users.id")
+    updated_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="最后修改人 users.id")
+
+
+class InterfaceCase(Base):
+    __tablename__ = "interface_cases"
+    __table_args__ = (
+        UniqueConstraint("project_id", "branch", "class_name", "method",
+                         name="uq_iface_case_proj_branch_class_method"),
+        {"comment": "接口用例注册表:api 仓测试方法引用(仓×分支×类×方法,扫到方法级)"},
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="注册主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    branch: Mapped[str] = mapped_column(String(200), comment="所在分支(各分支独立增量合并)")
+    class_name: Mapped[str] = mapped_column(String(255),
+                                            comment="测试类全限定名(键长受限 255:utf8mb4 唯一键不超 InnoDB 3072B 上限)")
+    method: Mapped[str] = mapped_column(String(200), comment="测试方法名")
+    status: Mapped[str] = mapped_column(String(16), default="active",
+                                        comment="存活状态:active(最近扫描存在)/stale(已消失)")
+    framework: Mapped[str] = mapped_column(String(16), default="testng",
+                                           comment="测试框架:testng/junit4/junit5")
+    file_path: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="仓内相对路径")
+    last_commit: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="最近见到的短 commit")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否已删除(软删除标记)")
+
+
+class CiRun(Base):
+    __tablename__ = "ci_runs"
+    __table_args__ = {"comment": "执行记录(CI Run):一次执行计划的 Jenkins build 落地(ADR-0012)"}
+
+    id: Mapped[int] = mapped_column(primary_key=True, comment="执行记录主键ID")
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
+    plan_id: Mapped[int] = mapped_column(ForeignKey("execution_plans.id"), comment="来源计划ID(计划删除不影响本记录)")
+    plan_name: Mapped[str] = mapped_column(String(200), default="", comment="计划名快照")
+    kind: Mapped[str] = mapped_column(String(16), comment="类型快照:ui/api")
+    branch: Mapped[str] = mapped_column(String(200), comment="分支快照")
+    # 快照项 = 计划选择项 + skipped/skip_reason(触发时物料校验结果,报告页据此标注未执行行)
+    selection: Mapped[list] = mapped_column(JSON, default=list, comment="分支+选择集合快照(含 skipped 标记)")
+    status: Mapped[str] = mapped_column(String(20), default="queued",
+                                        comment="状态:queued/running/success/failure/aborted/error")
+    jenkins_job: Mapped[str] = mapped_column(String(200), default="", comment="Jenkins job 名(light_tester_p{id}_{kind})")
+    build_number: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="Jenkins build 号")
+    jenkins_url: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="Jenkins build 页外链")
+    total: Mapped[int] = mapped_column(Integer, default=0, comment="用例总数")
+    passed: Mapped[int] = mapped_column(Integer, default=0, comment="通过数")
+    failed: Mapped[int] = mapped_column(Integer, default=0, comment="失败数(failure+error)")
+    skipped: Mapped[int] = mapped_column(Integer, default=0, comment="跳过数")
+    results: Mapped[list | None] = mapped_column(JSON, nullable=True,
+                                                 comment="用例行列表 [{class_name,name,status,time_s,message}](≤500 行,message≤2000 字)")
+    console_bytes: Mapped[int] = mapped_column(Integer, default=0, comment="console 日志已拉取字节偏移(progressiveText 游标)")
+    freshness: Mapped[dict | None] = mapped_column(JSON, nullable=True,
+                                                   comment="触发时新鲜度快照 {on_branch,dirty_files,ahead,stale}")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True, comment="平台侧失败原因(触发/轮询异常,非用例失败)")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="build 开始时间")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="终态时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
+    created_by: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="触发人 users.id")
