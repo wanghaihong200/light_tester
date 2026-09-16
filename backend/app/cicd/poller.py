@@ -44,6 +44,11 @@ async def _poll_loop() -> None:
 
 
 async def _poll_once(client: jenkins_client.JenkinsClient | None = None) -> None:
+    # 单轮全是同步 HTTP/DB 调用,挪进工作线程执行,避免 Jenkins 慢/不可达时冻住事件循环
+    await asyncio.to_thread(_poll_round, client)
+
+
+def _poll_round(client: jenkins_client.JenkinsClient | None = None) -> None:
     from app.database import SessionLocal
     from app.models import CiRun, JenkinsConnection
 
