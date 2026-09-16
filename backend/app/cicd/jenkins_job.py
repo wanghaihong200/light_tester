@@ -28,7 +28,10 @@ PIPELINE_SCRIPT = """pipeline {
       }
     }
     stage('run-ui') {
-      when { equals expected: 'ui', actual: params.KIND }
+      when {
+        beforeAgent true
+        equals expected: 'ui', actual: params.KIND
+      }
       agent { docker { image 'mcr.microsoft.com/playwright/python:v1.60.0-jammy' } }
       steps {
         sh 'python -m pip install -q pytest'
@@ -42,7 +45,10 @@ PIPELINE_SCRIPT = """pipeline {
       }
     }
     stage('run-api') {
-      when { equals expected: 'api', actual: params.KIND }
+      when {
+        beforeAgent true
+        equals expected: 'api', actual: params.KIND
+      }
       agent { docker { image 'maven:3.9-eclipse-temurin-8' } }
       steps {
         sh 'mvn -B -q test -Dtest="${SELECTION}" -DfailIfNoTests=false'

@@ -1,4 +1,5 @@
 """持续集成执行域 API:执行计划 / 接口用例注册表 / 执行记录 / Jenkins 连接(ADR-0012)。"""
+import asyncio
 import json as _json
 from datetime import datetime
 
@@ -309,7 +310,13 @@ def stop_run(run_id: int, db: Session = Depends(get_db),
     if run.started_at is None:
         run.started_at = run.finished_at
     db.commit()
-    bus.publish_nowait(f"ci_{run.id}", {"type": "done", "status": "aborted"})
+    # 本端点是 sync def,跑在线程池线程:asyncio.Queue.put_nowait 跨线程直调不安全(同 T11 R2)。
+    # 与 runner._notify_bus 同法,经 loopref 主循环引用 threadsafe 投递;无主循环时容忍丢事件。
+    from app.ui_automation.loopref import ui_loop
+    loop = ui_loop()
+    if loop is not None and not loop.is_closed():
+        asyncio.run_coroutine_threadsafe(
+            bus.publish(f"ci_{run.id}", {"type": "done", "status": "aborted"}), loop)
     return run
 
 
