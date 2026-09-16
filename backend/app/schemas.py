@@ -384,3 +384,15 @@ class MockHitDetailOut(MockHitOut):
     request_headers: dict | None
     request_body: str | None
     response_body: str | None
+
+
+class InterfaceCaseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    branch: str
+    class_name: str
+    method: str
+    status: str
+    framework: str
+    file_path: str | None
