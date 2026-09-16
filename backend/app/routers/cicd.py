@@ -5,12 +5,12 @@ from sqlalchemy.orm import Session
 
 from app import git_service
 from app.auth import get_current_user
-from app.cicd import api_scan, registry
+from app.cicd import api_scan, executor, freshness, registry
 from app.cicd.jenkins_job import job_name  # noqa: F401(后续任务用)
 from app.database import get_db
-from app.models import AutomationRepo, ExecutionPlan, Project, User
+from app.models import AutomationRepo, CiRun, ExecutionPlan, Project, User
 from app.permissions import ensure_project_access
-from app.schemas import ExecutionPlanOut, InterfaceCaseOut
+from app.schemas import CiRunOut, ExecutionPlanOut, InterfaceCaseOut
 from app.ui_automation.playwright_export import slugify
 
 router = APIRouter(prefix="/api", tags=["cicd"])
@@ -152,3 +152,92 @@ def delete_plan(plan_id: int, db: Session = Depends(get_db),
     plan.is_deleted = True
     plan.updated_by = current.id
     db.commit()
+
+
+def _detail_str(e: HTTPException) -> str:
+    """HTTPException.detail 转批量失败行文案(dict detail 转 JSON 文本)。"""
+    import json
+
+    if isinstance(e.detail, str):
+        return e.detail
+    return json.dumps(e.detail, ensure_ascii=False)
+
+
+class PreflightIn(BaseModel):
+    plan_ids: list[int] = Field(min_length=1)
+
+
+class TriggerIn(BaseModel):
+    plan_ids: list[int] = Field(min_length=1)
+    confirm_stale: bool = False
+
+
+@router.post("/projects/{project_id}/ci-runs/preflight")
+def preflight(project_id: int, payload: PreflightIn, db: Session = Depends(get_db),
+              current: User = Depends(get_current_user)):
+    ensure_project_access(db, current, project_id, "editor")
+    out = []
+    for pid in payload.plan_ids:
+        plan = db.get(ExecutionPlan, pid)
+        if plan is None or plan.is_deleted or plan.project_id != project_id:
+            raise HTTPException(400, f"计划 {pid} 不存在")
+        item = {"plan_id": plan.id, "name": plan.name, "kind": plan.kind,
+                "branch": plan.branch, "freshness": None, "valid": 0, "missing": 0,
+                "error": None}
+        try:
+            repo = executor.repo_for(db, project_id, plan.kind)
+            git_service.sync_repo(repo, plan.branch)
+            item["freshness"] = freshness.check_freshness(repo, plan.branch)
+            snap, _ = executor._resolve_selection(db, plan, git_service.working_copy_path(repo))
+            item["valid"] = sum(1 for s in snap if not s.get("skipped"))
+            item["missing"] = len(snap) - item["valid"]
+        except git_service.GitError as e:
+            item["error"] = f"分支/仓不可用: {e}"
+        except HTTPException as e:
+            item["error"] = _detail_str(e)
+        out.append(item)
+    return out
+
+
+@router.post("/projects/{project_id}/ci-runs")
+def trigger_runs(project_id: int, payload: TriggerIn, db: Session = Depends(get_db),
+                 current: User = Depends(get_current_user)):
+    ensure_project_access(db, current, project_id, "editor")
+    runs: list[CiRun] = []
+    failures: list[dict] = []
+    for pid in payload.plan_ids:
+        plan = db.get(ExecutionPlan, pid)
+        if plan is None or plan.is_deleted or plan.project_id != project_id:
+            failures.append({"plan_id": pid, "error": "计划不存在"})
+            continue
+        try:
+            runs.append(executor.trigger_plan(db, current, plan,
+                                              confirm_stale=payload.confirm_stale))
+        except HTTPException as e:
+            if e.status_code == 409:  # 确认新鲜度门:原样上抛(dict detail 由前端弹确认)
+                raise
+            failures.append({"plan_id": pid, "error": _detail_str(e)})
+    return {"runs": [CiRunOut.model_validate(r) for r in runs],
+            "failures": failures}
+
+
+@router.get("/projects/{project_id}/ci-runs", response_model=list[CiRunOut])
+def list_runs(project_id: int, db: Session = Depends(get_db),
+              current: User = Depends(get_current_user)):
+    ensure_project_access(db, current, project_id, "viewer")
+    return db.query(CiRun).filter_by(project_id=project_id) \
+        .order_by(CiRun.id.desc()).limit(100).all()
+
+
+def _get_run(db: Session, run_id: int, current: User) -> CiRun:
+    run = db.get(CiRun, run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    ensure_project_access(db, current, run.project_id, "viewer")
+    return run
+
+
+@router.get("/ci-runs/{run_id}", response_model=CiRunOut)
+def get_run(run_id: int, db: Session = Depends(get_db),
+            current: User = Depends(get_current_user)):
+    return _get_run(db, run_id, current)

@@ -409,3 +409,32 @@ class ExecutionPlanOut(BaseModel):
     branch: str
     selection: list
     updated_at: datetime
+
+
+# CI执行记录:一次执行计划的 Jenkins build 落地(计划 16 / ADR-0012)
+class CiRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    plan_id: int
+    plan_name: str
+    kind: str
+    branch: str
+    selection: list
+    status: str
+    jenkins_job: str
+    build_number: int | None
+    jenkins_url: str | None
+    total: int
+    passed: int
+    failed: int
+    skipped: int
+    results: list | None
+    console_bytes: int
+    freshness: dict | None
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
+    created_by: int | None

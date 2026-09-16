@@ -105,3 +105,22 @@ def make_user():
         return u
 
     return _make
+
+
+@pytest.fixture()
+def fake_jenkins():
+    from tests.test_cicd_jenkins_client import FakeJenkins
+
+    return FakeJenkins()
+
+
+@pytest.fixture()
+def monkeypatched_client(monkeypatch, fake_jenkins):
+    """把 executor.client_from 指向 FakeJenkins 客户端;返回 fake 供断言。"""
+    from app.cicd import executor
+
+    def _fake_client_from(conn):
+        return fake_jenkins.client()
+
+    monkeypatch.setattr(executor, "client_from", _fake_client_from)
+    return fake_jenkins
