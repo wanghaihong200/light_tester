@@ -81,6 +81,15 @@ class JenkinsClient:
                 if exe.get("number"):
                     url = exe.get("url") or f"{self._base}/job/{name}/{exe['number']}/"
                     return int(exe["number"]), url
+            elif q.status_code == 404:
+                # 真实例调度完成后 queue item 即被清除:按 queueId 回退匹配 job 的 builds
+                r = self._get(f"/job/{name}/api.json",
+                              params={"tree": "builds[number,url,queueId]{0,10}"})
+                if r.status_code == 200:
+                    for b in r.json().get("builds") or []:
+                        if b.get("queueId") == int(qid):
+                            url = b.get("url") or f"{self._base}/job/{name}/{b['number']}/"
+                            return int(b["number"]), url
             time.sleep(0.5)
         raise JenkinsError("排队超时:Jenkins 队列未在时限内调度该构建")
 

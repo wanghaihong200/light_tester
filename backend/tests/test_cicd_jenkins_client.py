@@ -24,8 +24,12 @@ class FakeJenkins:
         n = self._next_build
         self._next_build += 1
         self.builds[(job, n)] = {"building": True, "result": None,
-                                 "url": f"http://jk/job/{job}/{n}/"}
+                                 "url": f"http://jk/job/{job}/{n}/", "queue_id": n}
         return n
+
+    def drop_queue_item(self, qid: str) -> None:
+        """测试控制:模拟真实例调度后 queue item 被清除。"""
+        self._queue.pop(str(qid), None)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
@@ -38,11 +42,15 @@ class FakeJenkins:
         if len(parts) >= 3 and parts[0] == "job":
             job = parts[1]
             if len(parts) == 3 and parts[2] == "api.json" and method == "GET":
-                return httpx.Response(200 if job in self.jobs else 404, json={})
+                if job not in self.jobs:
+                    return httpx.Response(404, json={})
+                builds = [{"number": n, "url": b["url"], "queueId": b.get("queue_id")}
+                          for (j, n), b in sorted(self.builds.items()) if j == job]
+                return httpx.Response(200, json={"builds": builds})
             if len(parts) == 3 and parts[2] == "buildWithParameters" and method == "POST":
                 self.params_log.append(dict(request.url.params))
                 n = self.trigger(job)
-                qid = f"q{n}"
+                qid = str(n)  # 真实例 queue id 为整数
                 self._queue[qid] = n
                 return httpx.Response(201, headers={"Location": f"http://jk/queue/item/{qid}/"})
             if len(parts) >= 3 and parts[2].isdigit():
@@ -171,3 +179,39 @@ def test_transport_error_wrapped_as_jenkins_error():
                        transport=httpx.MockTransport(unreachable)) as c:
         with pytest.raises(JenkinsError, match="Jenkins 不可达"):
             c.get_build("j1", 1)
+
+
+def test_trigger_build_queue_item_dropped_falls_back_by_queue_id():
+    class DropAfterTrigger(FakeJenkins):
+        def handler(self, request):
+            if request.url.path.endswith("/buildWithParameters"):
+                resp = super().handler(request)
+                qid = resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1]
+                self.drop_queue_item(qid)  # 模拟:调度后 queue item 被清除,下次轮询即 404
+                return resp
+            return super().handler(request)
+
+    fk = DropAfterTrigger()
+    fk.jobs.add("j1")
+    with fk.client() as c:
+        n, url = c.trigger_build("j1", {})
+        assert n == 1 and url.endswith("/job/j1/1/")
+
+
+def test_trigger_build_queue_item_dropped_without_match_times_out():
+    class DropAndUnmatch(FakeJenkins):
+        def handler(self, request):
+            if request.url.path.endswith("/buildWithParameters"):
+                resp = super().handler(request)
+                qid = resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1]
+                self.drop_queue_item(qid)
+                for b in self.builds.values():  # build 在跑但 queueId 对不上
+                    b.pop("queue_id", None)
+                return resp
+            return super().handler(request)
+
+    fk = DropAndUnmatch()
+    fk.jobs.add("j1")
+    with fk.client() as c:
+        with pytest.raises(JenkinsError, match="排队超时"):
+            c.trigger_build("j1", {}, queue_timeout=1.5)
