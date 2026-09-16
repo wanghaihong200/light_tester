@@ -106,6 +106,16 @@ const PROJECT_MENU: (MenuLeaf | MenuGroup)[] = [
       { key: 'perf-app', label: 'APP性能测试', path: 'perf/app' },
     ],
   },
+  // 持续集成(计划 16):跨 UI+接口两资源的执行域,开第四条分组轴「交付集成」(ADR-0012)
+  {
+    key: 'cicd',
+    label: '持续集成',
+    icon: '⚙️',
+    children: [
+      { key: 'cicd-plans', label: '执行计划', path: 'cicd/plans' },
+      { key: 'cicd-runs', label: '执行记录', path: 'cicd/runs' },
+    ],
+  },
 ]
 
 const props = defineProps<{ activeKey: string; collapsed: boolean; projectId: number | null }>()

@@ -43,6 +43,14 @@ const router = createRouter({
               component: () => import('../components/mock/HitsPage.vue'),
             },
             { path: 'perf/app', name: 'project-perf-app', component: () => import('../components/perf/PerfRecordPane.vue') },
+            // 持续集成(计划 16):执行计划/执行记录/执行详情
+            { path: 'cicd/plans', name: 'project-cicd-plans', component: () => import('../components/cicd/PlansPane.vue') },
+            { path: 'cicd/runs', name: 'project-cicd-runs', component: () => import('../components/cicd/RunsPane.vue') },
+            // 正则参数防 'runs' 等段被吞进 runId(仿计划15 mock 下钻路由)
+            {
+              path: 'cicd/runs/:runId(\\d+)', name: 'project-cicd-run-detail',
+              component: () => import('../components/cicd/RunDetailPage.vue'),
+            },
           ],
         },
         {
