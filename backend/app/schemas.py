@@ -396,3 +396,16 @@ class InterfaceCaseOut(BaseModel):
     status: str
     framework: str
     file_path: str | None
+
+
+class ExecutionPlanOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    name: str
+    description: str | None
+    kind: str
+    branch: str
+    selection: list
+    updated_at: datetime
