@@ -65,6 +65,8 @@ def _resolve_selection(db: Session, plan: ExecutionPlan, ws) -> tuple[list[dict]
 
 def trigger_plan(db: Session, user: User, plan: ExecutionPlan, *, confirm_stale: bool,
                  client: jenkins_client.JenkinsClient | None = None) -> CiRun:
+    if not plan.selection:
+        raise HTTPException(400, "空计划不可触发,请先勾选用例")
     conn = db.query(JenkinsConnection).first()
     if conn is None:
         raise HTTPException(400, "Jenkins 连接未配置,请联系管理员")

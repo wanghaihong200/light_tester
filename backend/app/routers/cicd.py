@@ -1,14 +1,21 @@
 """持续集成执行域 API:执行计划 / 接口用例注册表 / 执行记录 / Jenkins 连接(ADR-0012)。"""
+import json as _json
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import git_service
-from app.auth import get_current_user
-from app.cicd import api_scan, executor, freshness, registry
+from app.auth import get_current_user, get_current_user_sse
+from app.cicd import api_scan, executor, freshness, jenkins_client, registry
 from app.cicd.jenkins_job import job_name  # noqa: F401(后续任务用)
+from app.config import settings
 from app.database import get_db
-from app.models import AutomationRepo, CiRun, ExecutionPlan, Project, User
+from app.jobs.bus import bus
+from app.models import (AutomationRepo, CiRun, ExecutionPlan, JenkinsConnection,
+                        Project, User)
 from app.permissions import ensure_project_access
 from app.schemas import CiRunOut, ExecutionPlanOut, InterfaceCaseOut
 from app.ui_automation.playwright_export import slugify
@@ -241,3 +248,77 @@ def _get_run(db: Session, run_id: int, current: User) -> CiRun:
 def get_run(run_id: int, db: Session = Depends(get_db),
             current: User = Depends(get_current_user)):
     return _get_run(db, run_id, current)
+
+
+def _sse(event: dict) -> str:
+    return f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+@router.get("/ci-runs/{run_id}/events")
+async def run_events(run_id: int, db: Session = Depends(get_db),
+                     current: User = Depends(get_current_user_sse)):
+    """SSE 直播:先 status 快照 + 日志尾部回放(≤8KB),再持续推增量到 done/error 断流。"""
+    run = _get_run(db, run_id, current)
+    key = f"ci_{run.id}"
+    queue = bus.subscribe(key)
+    snapshot = {"status": run.status, "total": run.total, "passed": run.passed,
+                "failed": run.failed, "skipped": run.skipped, "results": run.results,
+                "error": run.error}
+
+    async def stream():
+        try:
+            yield _sse({"type": "status", "status": run.status})
+            if run.status in ("success", "failure", "aborted", "error"):
+                yield _sse({"type": "snapshot", **snapshot})
+                return
+            log_path = settings.ci_data_dir / "runs" / str(run.id) / "console.log"
+            if log_path.exists():
+                tail = log_path.read_bytes()[-8192:]
+                if tail:
+                    yield _sse({"type": "log", "text": tail.decode("utf-8", "replace")})
+            while True:
+                event = await queue.get()
+                yield _sse(event)
+                if event.get("type") in ("done", "error"):
+                    return
+        finally:
+            bus.unsubscribe(key, queue)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/ci-runs/{run_id}/stop", response_model=CiRunOut)
+def stop_run(run_id: int, db: Session = Depends(get_db),
+             current: User = Depends(get_current_user)):
+    run = _get_run(db, run_id, current)
+    ensure_project_access(db, current, run.project_id, "editor")
+    if run.status not in ("queued", "running"):
+        raise HTTPException(400, "该执行已结束,无需停止")
+    conn = db.query(JenkinsConnection).first()
+    if conn is None:
+        raise HTTPException(400, "Jenkins 连接未配置")
+    if run.build_number is not None:
+        try:
+            with executor.client_from(conn) as client:
+                client.stop_build(run.jenkins_job, run.build_number)
+        except jenkins_client.JenkinsError as e:
+            raise HTTPException(502, f"Jenkins 停止失败: {e}") from e
+    run.status = "aborted"
+    run.finished_at = datetime.now()
+    if run.started_at is None:
+        run.started_at = run.finished_at
+    db.commit()
+    bus.publish_nowait(f"ci_{run.id}", {"type": "done", "status": "aborted"})
+    return run
+
+
+@router.post("/ci-runs/{run_id}/rerun", response_model=CiRunOut, status_code=201)
+def rerun_run(run_id: int, db: Session = Depends(get_db),
+              current: User = Depends(get_current_user)):
+    run = _get_run(db, run_id, current)
+    ensure_project_access(db, current, run.project_id, "editor")
+    plan = db.get(ExecutionPlan, run.plan_id)
+    if plan is None or plan.is_deleted:
+        raise HTTPException(400, "原计划已删除,无法重跑")
+    return executor.trigger_plan(db, current, plan, confirm_stale=True)
