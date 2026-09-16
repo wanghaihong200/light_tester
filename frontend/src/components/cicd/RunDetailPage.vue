@@ -97,22 +97,22 @@ async function load(): Promise<void> {
 function openStream(): void {
   if (es) es.close()  // 守卫:旧 run 流未关时重开(如 rerun 后)会把旧日志串进新 run
   es = new EventSource(withSseToken(ciRunEventsUrl(run.value!.id)))
-  es.addEventListener('log', (e: MessageEvent) => {
-    const d = JSON.parse(e.data) as { text: string }
-    logText.value += d.text
-    scrollBottom()
-  })
-  es.addEventListener('status', (e: MessageEvent) => {
-    const d = JSON.parse(e.data) as { status: CiRun['status'] }
-    if (run.value) run.value.status = d.status
-  })
-  es.addEventListener('done', async (e: MessageEvent) => {
-    const d = JSON.parse(e.data) as { status: CiRun['status'] }
-    es?.close()
-    es = null
-    if (run.value) run.value.status = d.status
-    await load()  // done 后整跑重拉:results/统计就位
-  })
+  // 后端 _sse 只发 data-only 帧(事件名默认 message),addEventListener('log'…) 永不触发;
+  // 须像 api/jobs.ts 一样用 onmessage 收,再按帧内 type 分发。
+  es.onmessage = (e: MessageEvent) => {
+    const d = JSON.parse(e.data) as { type: string; text?: string; status?: CiRun['status'] }
+    if (d.type === 'log') {
+      logText.value += d.text ?? ''
+      scrollBottom()
+    } else if (d.type === 'status') {
+      if (run.value && d.status) run.value.status = d.status
+    } else if (d.type === 'done') {
+      es?.close()
+      es = null
+      if (run.value && d.status) run.value.status = d.status
+      void load()  // done 后整跑重拉:results/统计就位
+    }
+  }
 }
 
 async function doStop(): Promise<void> {

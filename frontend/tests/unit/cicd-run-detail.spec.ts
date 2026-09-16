@@ -21,10 +21,9 @@ import RunDetailPage from '../../src/components/cicd/RunDetailPage.vue'
 
 class FakeEventSource {
   static last: FakeEventSource | null = null
-  handlers: Record<string, (e: { data: string }) => void> = {}
+  onmessage: ((e: { data: string }) => void) | null = null
   closed = false
   constructor(public url: string) { FakeEventSource.last = this }
-  addEventListener(t: string, h: (e: { data: string }) => void): void { this.handlers[t] = h }
   close(): void { this.closed = true }
 }
 vi.stubGlobal('EventSource', FakeEventSource)
@@ -61,11 +60,10 @@ describe('RunDetailPage', () => {
     const w = mount(RunDetailPage, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     expect(FakeEventSource.last).not.toBeNull()
-    const es = FakeEventSource.last!
-    es.handlers.log?.({ data: JSON.stringify({ type: 'log', text: 'hello build' }) })
+    FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'log', text: 'hello build' }) })
     await flushPromises()
     expect(w.find('.console').text()).toContain('hello build')
-    es.handlers.done?.({ data: JSON.stringify({ type: 'done', status: 'success' }) })
+    FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'done', status: 'success' }) })
     await flushPromises()
     expect(api.getCiRun).toHaveBeenCalledTimes(2)
     expect((w.vm as unknown as { run: { status: string } }).run.status).toBe('success')
