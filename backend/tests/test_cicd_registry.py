@@ -76,9 +76,6 @@ def api_repo(tmp_path, monkeypatch, db_session):
     proj = Project(name="rp")
     db_session.add(proj)
     db_session.commit()
-    # automation_repos 不在 conftest._TABLES 清理列,跨用例残留行会撞 (project_id, kind) 唯一键
-    db_session.query(AutomationRepo).delete()
-    db_session.commit()
     repo = AutomationRepo(project_id=proj.id, kind="api", repo_url=origin.as_uri())
     db_session.add(repo)
     db_session.commit()

@@ -17,12 +17,12 @@ from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.main import create_app
 from app.models import (
-    Case, CiRun, Document, ExecutionPlan, FeaturePoint, GenerationJob, InterfaceCase,
-    JenkinsConnection, MockHit, MockInstance, MockRule, MockRuleGroup, Module, Project,
-    ProjectMember, StagedCase, Step, UiAuthState, UiRun, UiScript, User,
+    AutomationRepo, Case, CiRun, Document, ExecutionPlan, FeaturePoint, GenerationJob,
+    InterfaceCase, JenkinsConnection, MockHit, MockInstance, MockRule, MockRuleGroup, Module,
+    Project, ProjectMember, StagedCase, Step, UiAuthState, UiRun, UiScript, User,
 )
 
-_TABLES = (StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState, User, MockHit, MockInstance, MockRule, MockRuleGroup, ProjectMember, CiRun, ExecutionPlan, InterfaceCase, JenkinsConnection)
+_TABLES = (AutomationRepo, StagedCase, GenerationJob, Step, Case, FeaturePoint, Module, Document, Project, UiRun, UiScript, UiAuthState, User, MockHit, MockInstance, MockRule, MockRuleGroup, ProjectMember, CiRun, ExecutionPlan, InterfaceCase, JenkinsConnection)
 
 
 @pytest.fixture(scope="session", autouse=True)
