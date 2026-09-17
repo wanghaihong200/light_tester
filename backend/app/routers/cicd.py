@@ -135,15 +135,14 @@ class PlanUpdate(BaseModel):
 
 
 def _enrich_selection(kind: str, items: list[dict]) -> list[dict]:
-    """ui 项补 file(与 playwright_export 导出文件名规则严格一致);api 项补 ref。"""
+    """ui 项存 {file_path, function}(nodeid 语义,ADR-0013;旧 script_id 引用已作废,400 拒绝);api 项补 ref。"""
     out: list[dict] = []
     for it in items:
         if kind == "ui":
-            sid, name = it.get("script_id"), (it.get("name") or "").strip()
-            if not isinstance(sid, int) or isinstance(sid, bool) or not name:
-                raise HTTPException(400, "ui 选择项需要 int script_id 与非空 name")
-            out.append({"script_id": sid, "name": name,
-                        "file": f"test_{slugify(sid, name)}.py"})
+            fp, fn = (it.get("file_path") or "").strip(), (it.get("function") or "").strip()
+            if not fp or not fn:
+                raise HTTPException(400, "ui 选择项需要非空 file_path 与 function(旧脚本引用已作废,请重新扫描勾选)")
+            out.append({"file_path": fp, "function": fn})
         else:
             cls, method = (it.get("class_name") or "").strip(), (it.get("method") or "").strip()
             if not cls or not method:

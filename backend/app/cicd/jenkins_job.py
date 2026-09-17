@@ -14,7 +14,7 @@ JOB_PARAMETERS = [
     ("REPO_URL", "自动化仓地址(Jenkins 容器视角)", ""),
     ("BRANCH", "分支", "master"),
     ("KIND", "ui/api", "ui"),
-    ("SELECTION", "ui=空格分隔 pytest 文件;api=逗号分隔 类#方法", ""),
+    ("SELECTION", "ui=空格分隔 pytest nodeid(文件::函数);api=逗号分隔 类#方法", ""),
     ("CREDENTIALS_ID", "GitLab 凭据 ID", "gitlab-creds"),
 ]
 

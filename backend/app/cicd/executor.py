@@ -27,20 +27,28 @@ def repo_for(db: Session, project_id: int, kind: str) -> AutomationRepo:
 
 
 def _resolve_selection(db: Session, plan: ExecutionPlan, ws) -> tuple[list[dict], str]:
-    """物料校验:ui 项查仓内导出文件存在性;api 项查注册表 active。
+    """物料校验:ui 项查 Web用例注册表 active + 文件存在兜底(ADR-0013);api 项查注册表 active。
     返回 (快照项(缺失项标 skipped/skip_reason), 可执行 SELECTION 串)。"""
     snap: list[dict] = []
-    valid_files: list[str] = []
+    valid_ui: list[str] = []
     valid_api: list[tuple[str, str]] = []
     if plan.kind == "ui":
+        rows = {(c.class_name, c.method): c for c in db.query(InterfaceCase).filter_by(
+            project_id=plan.project_id, branch=plan.branch, case_type="web", is_deleted=False)}
         for it in plan.selection or []:
-            file_ok = bool(it.get("file")) and (ws / it["file"]).resolve().is_relative_to(ws.resolve()) and (ws / it["file"]).exists()
-            entry = {**it, "skipped": not file_ok}
-            if not file_ok:
-                entry["skip_reason"] = "file_missing"
+            fp, fn = it.get("file_path"), it.get("function")
+            row = rows.get((fp, fn))
+            if row is None or row.status != "active":
+                entry = {**it, "skipped": True, "skip_reason": "stale"}
+            else:
+                file_ok = bool(fp) and (ws / fp).resolve().is_relative_to(ws.resolve()) \
+                    and (ws / fp).exists()
+                entry = {**it, "skipped": not file_ok}
+                if not file_ok:
+                    entry["skip_reason"] = "file_missing"
             snap.append(entry)
-            if file_ok:
-                valid_files.append(it["file"])
+            if not entry["skipped"]:
+                valid_ui.append(f"{fp}::{fn}")
     else:
         rows = {(c.class_name, c.method): c for c in db.query(InterfaceCase).filter_by(
             project_id=plan.project_id, branch=plan.branch, is_deleted=False)}
@@ -54,7 +62,7 @@ def _resolve_selection(db: Session, plan: ExecutionPlan, ws) -> tuple[list[dict]
             if ok:
                 valid_api.append((it["class_name"], it["method"]))
     if plan.kind == "ui":
-        selection_arg = " ".join(valid_files)
+        selection_arg = " ".join(valid_ui)
     else:
         grouped: dict[str, list[str]] = {}
         for cls, method in valid_api:
@@ -82,7 +90,7 @@ def trigger_plan(db: Session, user: User, plan: ExecutionPlan, *, confirm_stale:
     ws = git_service.working_copy_path(repo)
     snap, selection_arg = _resolve_selection(db, plan, ws)
     if not selection_arg:
-        hint = ("请先导出脚本到该分支,或编辑计划改选脚本所在分支" if plan.kind == "ui"
+        hint = ("请先扫描该分支,或编辑计划改选用例所在分支" if plan.kind == "ui"
                 else "请先导出脚本/扫描注册表到该分支")
         raise HTTPException(400, f"计划分支「{plan.branch}」上无所选用例的任何物料,{hint}")
     own = client or client_from(conn)
