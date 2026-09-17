@@ -1,4 +1,6 @@
 """计划 16 Task 4:job 命名/checkout URL 改写/config.xml 组装。"""
+import defusedxml.minidom
+
 from app.cicd.jenkins_job import PIPELINE_SCRIPT, build_job_config, job_name, rewrite_gitlab_url
 
 
@@ -29,3 +31,35 @@ def test_build_job_config_escapes_xml():
     assert xml.startswith("<?xml")
     assert "&lt;a &amp; b&gt;" in xml  # script 已转义,config 仍是合法 XML
     assert 'class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition"' in xml
+
+
+def test_build_job_config_is_parameterized():
+    """真 Jenkins 陷阱:buildWithParameters 只认 config.xml properties 里的参数定义,
+    脚本内 parameters {} 指令要等首次构建才回写 job 属性——REST 刚建的 job
+    立即触发会 400 "not parameterized"(2026-09-17 冒烟缺陷)。"""
+    doc = defusedxml.minidom.parseString(build_job_config("echo hi"))
+    assert len(doc.getElementsByTagName("hudson.model.ParametersDefinitionProperty")) == 1
+    params = doc.getElementsByTagName("hudson.model.StringParameterDefinition")
+    names = [p.getElementsByTagName("name")[0].firstChild.data for p in params]
+    assert names == ["REPO_URL", "BRANCH", "KIND", "SELECTION", "CREDENTIALS_ID"]
+    defaults = {p.getElementsByTagName("name")[0].firstChild.data:
+                (p.getElementsByTagName("defaultValue")[0].firstChild.data
+                 if p.getElementsByTagName("defaultValue")[0].firstChild else "")
+                for p in params}
+    assert defaults["BRANCH"] == "master" and defaults["KIND"] == "ui"
+    assert defaults["CREDENTIALS_ID"] == "gitlab-creds"
+    assert defaults["REPO_URL"] == "" and defaults["SELECTION"] == ""
+
+
+def test_pipeline_checkout_runs_on_builtin():
+    """alpine/git 镜像 ENTRYPOINT=[git] 会吞 docker-workflow 的保活 cat(变成 git cat 秒退,
+    docker top 报 container not running)——checkout 改在 built-in 节点跑(控制器自带 git)。
+    2026-09-17 冒烟缺陷。"""
+    assert "alpine/git" not in PIPELINE_SCRIPT
+    assert "agent { label 'built-in' }" in PIPELINE_SCRIPT
+
+
+def test_pipeline_script_has_no_parameters_directive():
+    """参数定义单一来源=config.xml properties;脚本内 parameters {} 指令会造成双源漂移。"""
+    assert "parameters {" not in PIPELINE_SCRIPT
+    assert "params.KIND" in PIPELINE_SCRIPT  # 脚本仍消费参数,只是不再声明

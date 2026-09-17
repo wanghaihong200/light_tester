@@ -8,19 +8,23 @@ from xml.sax.saxutils import escape
 
 JOB_PREFIX = "light_tester"
 
+# 参数定义单一来源(config.xml properties):buildWithParameters 只认 job 属性,
+# 脚本内 parameters {} 指令要等首次构建才回写,REST 刚建的 job 立即触发会 400。
+JOB_PARAMETERS = [
+    ("REPO_URL", "自动化仓地址(Jenkins 容器视角)", ""),
+    ("BRANCH", "分支", "master"),
+    ("KIND", "ui/api", "ui"),
+    ("SELECTION", "ui=空格分隔 pytest 文件;api=逗号分隔 类#方法", ""),
+    ("CREDENTIALS_ID", "GitLab 凭据 ID", "gitlab-creds"),
+]
+
 PIPELINE_SCRIPT = """pipeline {
   agent none
   options { timestamps() }
-  parameters {
-    string(name: 'REPO_URL', defaultValue: '', description: '自动化仓地址(Jenkins 容器视角)')
-    string(name: 'BRANCH', defaultValue: 'master', description: '分支')
-    string(name: 'KIND', defaultValue: 'ui', description: 'ui/api')
-    string(name: 'SELECTION', defaultValue: '', description: 'ui=空格分隔 pytest 文件;api=逗号分隔 类#方法')
-    string(name: 'CREDENTIALS_ID', defaultValue: 'gitlab-creds', description: 'GitLab 凭据 ID')
-  }
   stages {
     stage('checkout') {
-      agent { docker { image 'alpine/git:2.45.2' } }
+      // built-in 节点自带 git;勿用带 ENTRYPOINT 的 git 客户端镜像——会吞 docker agent 的保活 cat,容器秒退
+      agent { label 'built-in' }
       steps {
         checkout([$class: 'GitSCM',
           branches: [[name: "${params.BRANCH}"]],
@@ -81,13 +85,36 @@ def rewrite_gitlab_url(repo_url: str, exposed_base: str) -> str:
     return urlunparse((exp.scheme, exp.netloc, src.path, "", "", ""))
 
 
+def _parameters_xml() -> str:
+    defs = []
+    for name, desc, default in JOB_PARAMETERS:
+        defs.append(
+            "            <hudson.model.StringParameterDefinition>\n"
+            f"              <name>{escape(name)}</name>\n"
+            f"              <description>{escape(desc)}</description>\n"
+            f"              <defaultValue>{escape(default)}</defaultValue>\n"
+            "              <trim>false</trim>\n"
+            "            </hudson.model.StringParameterDefinition>"
+        )
+    return (
+        "  <properties>\n"
+        "    <hudson.model.ParametersDefinitionProperty>\n"
+        "      <parameterDefinitions>\n"
+        + "\n".join(defs) + "\n"
+        "      </parameterDefinitions>\n"
+        "    </hudson.model.ParametersDefinitionProperty>\n"
+        "  </properties>\n"
+    )
+
+
 def build_job_config(pipeline_script: str) -> str:
     return (
         "<?xml version='1.1' encoding='UTF-8'?>\n"
         '<flow-definition plugin="workflow-job">\n'
         "  <description>created by light_tester (CI/CD module)</description>\n"
         "  <keepDependencies>false</keepDependencies>\n"
-        '  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">\n'
+        + _parameters_xml()
+        + '  <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps">\n'
         f"    <script>{escape(pipeline_script)}</script>\n"
         "    <sandbox>true</sandbox>\n"
         "  </definition>\n"
