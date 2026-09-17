@@ -36,7 +36,12 @@ PIPELINE_SCRIPT = """pipeline {
         beforeAgent true
         equals expected: 'ui', actual: params.KIND
       }
-      agent { docker { image 'mcr.microsoft.com/playwright/python:v1.60.0-jammy' } }
+      agent {
+        docker {
+          image 'mcr.microsoft.com/playwright/python:v1.60.0-jammy'
+          args '-v light-tester-pip:/root/.cache/pip'
+        }
+      }
       steps {
         sh 'python -m pip install -q pytest'
         sh 'python -m pytest ${SELECTION} --junitxml=ci-results/junit.xml -q'
@@ -53,7 +58,12 @@ PIPELINE_SCRIPT = """pipeline {
         beforeAgent true
         equals expected: 'api', actual: params.KIND
       }
-      agent { docker { image 'maven:3.9-eclipse-temurin-8' } }
+      agent {
+        docker {
+          image 'maven:3.9-eclipse-temurin-8'
+          args '-v light-tester-m2:/root/.m2'
+        }
+      }
       steps {
         sh 'mvn -B -q test -Dtest="${SELECTION}" -DfailIfNoTests=false'
       }

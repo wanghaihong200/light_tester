@@ -59,6 +59,13 @@ def test_pipeline_checkout_runs_on_builtin():
     assert "agent { label 'built-in' }" in PIPELINE_SCRIPT
 
 
+def test_pipeline_agent_cache_volumes():
+    """docker agent 容器每次构建环境全新:maven 空 ~/.m2 全量重下依赖、pip 重装 pytest——
+    挂命名卷跨 build 复用缓存(2026-09-17 冒烟用户拍板)。"""
+    assert "args '-v light-tester-m2:/root/.m2'" in PIPELINE_SCRIPT
+    assert "args '-v light-tester-pip:/root/.cache/pip'" in PIPELINE_SCRIPT
+
+
 def test_pipeline_script_has_no_parameters_directive():
     """参数定义单一来源=config.xml properties;脚本内 parameters {} 指令会造成双源漂移。"""
     assert "parameters {" not in PIPELINE_SCRIPT
