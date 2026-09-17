@@ -556,7 +556,7 @@ class ExecutionPlan(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), comment="所属项目ID")
     name: Mapped[str] = mapped_column(String(200), comment="计划名称")
     description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="计划描述")
-    kind: Mapped[str] = mapped_column(String(16), comment="计划类型:ui(勾Web自动化脚本)/api(勾接口用例)")
+    kind: Mapped[str] = mapped_column(String(16), comment="计划类型:ui(勾Web用例)/api(勾接口用例)")
     branch: Mapped[str] = mapped_column(String(200), comment="绑定的仓分支(建/编计划先定分支、再勾用例)")
     # 选择集合。ui 项:{script_id:int, name:str, file:str(导出文件名,后端按 slugify 计算)};
     # api 项:{ref:str("类#方法"), class_name:str, method:str}。仓是接口用例唯一事实源,这里只存引用。
@@ -574,7 +574,7 @@ class InterfaceCase(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "branch", "class_name", "method",
                          name="uq_iface_case_proj_branch_class_method"),
-        {"comment": "接口用例注册表:api 仓测试方法引用(仓×分支×类×方法,扫到方法级)"},
+        {"comment": "用例注册表:api 仓测试方法 / web 仓 pytest 函数的引用(ADR-0012/0013,case_type 区分域)"},
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, comment="注册主键ID")
@@ -583,11 +583,17 @@ class InterfaceCase(Base):
     class_name: Mapped[str] = mapped_column(String(255),
                                             comment="测试类全限定名(键长受限 255:utf8mb4 唯一键不超 InnoDB 3072B 上限)")
     method: Mapped[str] = mapped_column(String(200), comment="测试方法名")
+    case_type: Mapped[str] = mapped_column(String(8), default="api",
+                                           comment="用例域:api(接口方法)/web(pytest 函数)")
     status: Mapped[str] = mapped_column(String(16), default="active",
                                         comment="存活状态:active(最近扫描存在)/stale(已消失)")
     framework: Mapped[str] = mapped_column(String(16), default="testng",
                                            comment="测试框架:testng/junit4/junit5")
     file_path: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="仓内相对路径")
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True,
+                                              comment="用例标题快照(web=docstring 首行;api 为空)")
+    markers: Mapped[list] = mapped_column(JSON, default=list,
+                                          comment="仓侧标记只读快照(web=@pytest.mark 展示串;api 为空)")
     last_commit: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="最近见到的短 commit")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(

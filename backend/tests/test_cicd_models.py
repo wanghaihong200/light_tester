@@ -58,3 +58,27 @@ def test_jenkins_connection_singleton(db_session):
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
+
+
+def test_interface_case_web_columns(db_session):
+    """计划 17:注册表扩列承载 web 域(case_type/title/markers),api 行默认值不变。"""
+    from app.models import InterfaceCase, Project
+
+    db_session.add(Project(id=99, name="plan17"))
+    db_session.commit()
+    row = InterfaceCase(project_id=99, branch="main", class_name="tests/test_smoke.py",
+                        method="test_a", status="active", framework="pytest",
+                        case_type="web", title="链路 1:登录态缓存", markers=["account:standard"])
+    db_session.add(row)
+    db_session.commit()
+    db_session.expire_all()
+    got = db_session.get(InterfaceCase, row.id)
+    assert got.case_type == "web" and got.title == "链路 1:登录态缓存"
+    assert got.markers == ["account:standard"]
+    # api 侧缺省:不传即 'api'/None/[]
+    api_row = InterfaceCase(project_id=99, branch="main", class_name="com.x.A", method="m")
+    db_session.add(api_row)
+    db_session.commit()
+    db_session.expire_all()
+    got = db_session.get(InterfaceCase, api_row.id)
+    assert got.case_type == "api" and got.title is None and (got.markers or []) == []

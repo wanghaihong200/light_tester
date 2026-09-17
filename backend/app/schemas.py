@@ -393,6 +393,9 @@ class InterfaceCaseOut(BaseModel):
     branch: str
     class_name: str
     method: str
+    case_type: str = "api"
+    title: str | None = None
+    markers: list[str] = []
     status: str
     framework: str
     file_path: str | None
