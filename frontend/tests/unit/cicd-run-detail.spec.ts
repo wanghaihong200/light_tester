@@ -42,7 +42,7 @@ const TERMINAL = {
 }
 
 describe('RunDetailPage', () => {
-  it('终态:渲染汇总/用例行/快照 skipped 标注/外链,不开 SSE', async () => {
+  it('终态:渲染汇总/用例行/快照 skipped 标注/外链,开 SSE 回放日志尾部', async () => {
     api.getCiRun.mockResolvedValue(TERMINAL)
     const w = mount(RunDetailPage, { global: { plugins: [ElementPlus] } })
     await flushPromises()
@@ -50,7 +50,10 @@ describe('RunDetailPage', () => {
     expect(w.text()).toContain('assert 1 == 2')
     expect(w.text()).toContain('未执行');  // skipped 快照行
     expect(w.text()).toContain('com.x.A#dead')
-    expect(FakeEventSource.last).toBeNull()
+    expect(FakeEventSource.last).not.toBeNull()  // 终态也开流:后端回放 console 尾部+快照即关(2026-09-17 冒烟缺陷)
+    FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'log', text: 'ERROR: auth failed for origin' }) })
+    await flushPromises()
+    expect(w.find('.console').text()).toContain('ERROR: auth failed for origin')
   })
 
   it('活跃:开 SSE,log 事件追加日志,done 重拉结果', async () => {

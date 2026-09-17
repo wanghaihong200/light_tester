@@ -269,14 +269,15 @@ async def run_events(run_id: int, db: Session = Depends(get_db),
     async def stream():
         try:
             yield _sse({"type": "status", "status": run.status})
-            if run.status in ("success", "failure", "aborted", "error"):
-                yield _sse({"type": "snapshot", **snapshot})
-                return
+            # 尾部回放对终态同样生效:console 已落盘,事后打开详情不能是空白(2026-09-17 冒烟缺陷)
             log_path = settings.ci_data_dir / "runs" / str(run.id) / "console.log"
             if log_path.exists():
                 tail = log_path.read_bytes()[-8192:]
                 if tail:
                     yield _sse({"type": "log", "text": tail.decode("utf-8", "replace")})
+            if run.status in ("success", "failure", "aborted", "error"):
+                yield _sse({"type": "snapshot", **snapshot})
+                return
             while True:
                 event = await queue.get()
                 yield _sse(event)

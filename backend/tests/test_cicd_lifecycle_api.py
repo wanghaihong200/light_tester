@@ -55,11 +55,18 @@ def env16(tmp_path, monkeypatch, db_session):
     return {"project_id": proj.id, "plan_id": plan.id, "run": run}
 
 
-def test_sse_terminal_snapshot(client, db_session, make_user):
+def test_sse_terminal_snapshot(client, db_session, make_user, monkeypatch):
+    from app.config import settings
+
     proj = Project(name="sse")
     db_session.add(proj)
     db_session.commit()
     run = _mk_run(db_session, project_id=proj.id)
+    # 完成态也必须回放 console 尾部:数据已在盘上,详情页打开不能是空白(2026-09-17 冒烟缺陷)
+    d = settings.ci_data_dir / "runs" / str(run.id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "console.log").write_text("Started by user hi\nERROR: auth failed for origin\n",
+                                   encoding="utf-8")
     h = _auth(client, db_session, make_user, "ssev", project_ids=[proj.id], role="viewer")
     token = h["Authorization"].split(" ")[1]
     with client.stream("GET", f"/api/ci-runs/{run.id}/events?token={token}") as r:
@@ -67,6 +74,8 @@ def test_sse_terminal_snapshot(client, db_session, make_user):
         body = b"".join(r.iter_bytes()).decode()
     assert '"type": "status"' in body or '"type":"status"' in body
     assert '"type": "snapshot"' in body or '"type":"snapshot"' in body
+    assert "auth failed for origin" in body  # 日志尾部已回放
+    assert body.index('"type": "log"') < body.index('"type": "snapshot"')  # 尾部在快照前
 
 
 def test_stop_running_run(client, db_session, make_user, fake_jenkins, monkeypatched_client):

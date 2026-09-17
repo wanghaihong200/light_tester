@@ -91,7 +91,7 @@ function scrollBottom(): void {
 
 async function load(): Promise<void> {
   run.value = await getCiRun(Number(route.params.runId))
-  if (isActive.value) openStream()
+  openStream()  // 终态也开:后端回放 console 尾部+快照后即断流,事后打开详情不空白
 }
 
 function openStream(): void {
