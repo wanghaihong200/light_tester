@@ -78,7 +78,7 @@ def env(tmp_path, monkeypatch, db_session, fake_jenkins, monkeypatched_client):
 
 @pytest.fixture()
 def env_ui(tmp_path, monkeypatch, db_session, fake_jenkins, monkeypatched_client):
-    """项目 + web 仓(含 test_x.py 导出文件)+ JenkinsConnection + ui 计划(selection 直灌,不经 enrich)。"""
+    """项目 + web 仓(含 test_x.py)+ JenkinsConnection + web 注册表(active: test_x)+ ui 计划(nodeid 选择)。"""
     from app.config import settings
 
     monkeypatch.setattr(settings, "repos_dir", tmp_path / "repos")
@@ -88,8 +88,11 @@ def env_ui(tmp_path, monkeypatch, db_session, fake_jenkins, monkeypatched_client
     db_session.commit()
     db_session.add(AutomationRepo(project_id=proj.id, kind="web", repo_url=origin.as_uri()))
     db_session.add(JenkinsConnection(id=1, base_url="http://jk", api_user="a", api_token="t"))
+    db_session.add(InterfaceCase(project_id=proj.id, branch="master", case_type="web",
+                                 class_name="test_x.py", method="test_x", status="active",
+                                 framework="pytest"))
     plan = ExecutionPlan(project_id=proj.id, name="UI 冒烟", kind="ui", branch="master",
-                         selection=[{"script_id": 7, "name": "x", "file": "test_x.py"}])
+                         selection=[{"file_path": "test_x.py", "function": "test_x"}])
     db_session.add(plan)
     db_session.commit()
     return {"project_id": proj.id, "plan_id": plan.id, "origin": origin}
@@ -187,8 +190,8 @@ def test_preflight_branch_missing_reports_error(client, db_session, make_user, e
     assert item["error"] and "分支" in item["error"]
 
 
-def test_trigger_ui_selection_contains_exported_file(client, db_session, make_user, env_ui,
-                                                     fake_jenkins):
+def test_trigger_ui_selection_sends_nodeid(client, db_session, make_user, env_ui, fake_jenkins):
+    """计划 17 T5:ui 触发 SELECTION 为空格分隔 pytest nodeid(文件::函数)。"""
     pid, plan_id = env_ui["project_id"], env_ui["plan_id"]
     h = _auth(client, db_session, make_user, "runner7", project_ids=[pid])
     r = client.post(f"/api/projects/{pid}/ci-runs",
@@ -198,15 +201,19 @@ def test_trigger_ui_selection_contains_exported_file(client, db_session, make_us
     assert run["status"] == "queued"
     assert all(s.get("skipped") is not True for s in run["selection"])
     sent = fake_jenkins.params_log[0]
-    assert sent["KIND"] == "ui" and sent["SELECTION"] == "test_x.py"
+    assert sent["KIND"] == "ui" and sent["SELECTION"] == "test_x.py::test_x"
 
 
 def test_trigger_ui_traversal_file_skipped(client, db_session, make_user, env_ui, fake_jenkins):
-    """DB 直灌越界 file(selection 不经 enrich):触发走通,越界项标 skipped/file_missing,SELECTION 不含它。"""
+    """DB 直灌越界 file_path(selection 不经 enrich):注册表 active 但文件越界 → 标
+    skipped/file_missing,SELECTION 不含它(ADR-0013 nodeid 语义)。"""
     pid = env_ui["project_id"]
+    db_session.add(InterfaceCase(project_id=pid, branch="master", case_type="web",
+                                 class_name="../../evil.py", method="evil", status="active",
+                                 framework="pytest"))
     bad = ExecutionPlan(project_id=pid, name="越界计划", kind="ui", branch="master",
-                        selection=[{"script_id": 7, "name": "x", "file": "test_x.py"},
-                                   {"script_id": 8, "name": "evil", "file": "../../evil.py"}])
+                        selection=[{"file_path": "test_x.py", "function": "test_x"},
+                                   {"file_path": "../../evil.py", "function": "evil"}])
     db_session.add(bad)
     db_session.commit()
     h = _auth(client, db_session, make_user, "runner8", project_ids=[pid])
@@ -214,9 +221,9 @@ def test_trigger_ui_traversal_file_skipped(client, db_session, make_user, env_ui
                     json={"plan_ids": [bad.id], "confirm_stale": False}, headers=h)
     assert r.status_code == 200
     run = r.json()["runs"][0]
-    by_file = {s["file"]: s for s in run["selection"]}
-    assert by_file["../../evil.py"]["skipped"] is True
-    assert by_file["../../evil.py"]["skip_reason"] == "file_missing"
-    assert by_file["test_x.py"]["skipped"] is False
-    assert fake_jenkins.params_log[0]["SELECTION"] == "test_x.py"
+    by_fp = {s["file_path"]: s for s in run["selection"]}
+    assert by_fp["../../evil.py"]["skipped"] is True
+    assert by_fp["../../evil.py"]["skip_reason"] == "file_missing"
+    assert by_fp["test_x.py"]["skipped"] is False
+    assert fake_jenkins.params_log[0]["SELECTION"] == "test_x.py::test_x"
     assert "../../evil.py" not in fake_jenkins.params_log[0]["SELECTION"]

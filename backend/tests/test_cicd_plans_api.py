@@ -23,7 +23,7 @@ UI_BODY = {
     "name": "UI 冒烟",
     "kind": "ui",
     "branch": "master",
-    "selection": [{"script_id": 7, "name": "登录流程"}],
+    "selection": [{"file_path": "tests/test_smoke.py", "function": "test_login"}],
 }
 API_BODY = {
     "name": "接口回归",
@@ -33,14 +33,14 @@ API_BODY = {
 }
 
 
-def test_create_ui_plan_enriches_file(client, db_session, make_user):
+def test_create_ui_plan_stores_nodeid_selection(client, db_session, make_user):
+    """计划 17 T5:ui 选择项按 nodeid 语义原样存 {file_path, function}(不再富化 file)。"""
     pid = _mk_project(db_session)
     h = _auth(client, db_session, make_user, "planner", project_ids=[pid])
     r = client.post(f"/api/projects/{pid}/ci-plans", json=UI_BODY, headers=h)
     assert r.status_code == 201
-    sel = r.json()["selection"]
-    assert sel[0]["script_id"] == 7 and sel[0]["file"].startswith("test_7_")
-    assert sel[0]["file"].endswith(".py")
+    assert r.json()["selection"] == [{"file_path": "tests/test_smoke.py",
+                                      "function": "test_login"}]
 
 
 def test_create_api_plan_enriches_ref(client, db_session, make_user):
