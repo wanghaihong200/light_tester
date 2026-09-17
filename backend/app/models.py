@@ -558,7 +558,7 @@ class ExecutionPlan(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True, comment="计划描述")
     kind: Mapped[str] = mapped_column(String(16), comment="计划类型:ui(勾Web用例)/api(勾接口用例)")
     branch: Mapped[str] = mapped_column(String(200), comment="绑定的仓分支(建/编计划先定分支、再勾用例)")
-    # 选择集合。ui 项:{script_id:int, name:str, file:str(导出文件名,后端按 slugify 计算)};
+    # 选择集合。ui 项:{file_path:str(仓内相对路径), function:str(pytest 函数名)}(ADR-0013,nodeid 寻址);
     # api 项:{ref:str("类#方法"), class_name:str, method:str}。仓是接口用例唯一事实源,这里只存引用。
     selection: Mapped[list] = mapped_column(JSON, default=list, comment="用例选择集合")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), comment="创建时间")
