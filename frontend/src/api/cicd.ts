@@ -3,8 +3,8 @@ import { http, getText } from './client'
 
 export type PlanKind = 'ui' | 'api'
 
-// 计划选择集合项(存储形态);ui.file / api.ref 由后端富化,前端提交时可不带
-export interface PlanSelectionUi { script_id: number; name: string; file?: string }
+// 计划选择集合项(存储形态);ui 项 = web 仓 pytest 用例引用(ADR-0013),api.file/ref 由后端富化
+export interface PlanSelectionUi { file_path: string; function: string }
 export interface PlanSelectionApi { ref?: string; class_name: string; method: string }
 export type PlanSelectionItem = PlanSelectionUi | PlanSelectionApi
 
@@ -27,6 +27,9 @@ export interface InterfaceCase {
   status: 'active' | 'stale'
   framework: string
   file_path: string | null
+  case_type?: 'api' | 'web'
+  title?: string | null
+  markers?: string[]
 }
 
 // 新鲜度检测结果(与后端 freshness.check_freshness 同构)
@@ -107,6 +110,14 @@ export const scanInterfaceCases = (projectId: number, branch: string) =>
 export const listInterfaceCases = (projectId: number, branch: string) =>
   http.get<InterfaceCase[]>(`/projects/${projectId}/interface-cases?branch=${encodeURIComponent(branch)}`)
 
+// Web用例注册表(ADR-0013):web 仓 pytest 函数级,先扫描再勾选
+export const scanUiCases = (projectId: number, branch: string) =>
+  http.post<{ total: number; active: number; stale: number; added: number }>(
+    `/projects/${projectId}/ui-cases/scan`, { branch })
+export const listUiCases = (projectId: number, branch: string) =>
+  http.get<InterfaceCase[]>(`/projects/${projectId}/ui-cases?branch=${encodeURIComponent(branch)}`)
+
+// @deprecated 计划 17 起 ui 计划不再使用,ADR-0013
 // ui 物料感知(分支即事实源):每个 web 脚本的导出文件在该分支上是否存在
 export interface UiScriptMaterial { script_id: number; name: string; file: string; exists: boolean }
 export const listUiScriptMaterials = (projectId: number, branch: string) =>

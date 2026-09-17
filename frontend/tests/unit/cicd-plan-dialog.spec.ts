@@ -3,19 +3,20 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { describe, expect, it, vi } from 'vitest'
 
+import type { InterfaceCase } from '../../src/api/cicd'
+
 const api = vi.hoisted(() => ({
   createPlan: vi.fn(),
   updatePlan: vi.fn(),
   listInterfaceCases: vi.fn(),
   scanInterfaceCases: vi.fn(),
-  listUiScriptMaterials: vi.fn(),
+  listUiCases: vi.fn(),
+  scanUiCases: vi.fn(),
 }))
 const repoApi = vi.hoisted(() => ({ listBranches: vi.fn(), listAutomationRepos: vi.fn() }))
-const uiApi = vi.hoisted(() => ({ listUiScripts: vi.fn() }))
 vi.mock('../../src/api/cicd', () => api)
 // 展开真实模块:repoDisplayName(纯函数)走实现,仅网络调用 mock
 vi.mock('../../src/api/repo', async (importOriginal) => ({ ...(await importOriginal()), ...repoApi }))
-vi.mock('../../src/api/uiAutomation', () => uiApi)
 
 import PlanDialog from '../../src/components/cicd/PlanDialog.vue'
 
@@ -29,41 +30,66 @@ describe('PlanDialog', () => {
     { id: 2, kind: 'web', repo_url: 'http://localhost:8090/haihai/light_web_ui_autotest_demo', repo_token: null },
   ]
 
-  it('未选分支时用例区禁用;ui 模式选分支后按分支物料过滤脚本', async () => {
-    repoApi.listAutomationRepos.mockResolvedValue(REPOS)
-    repoApi.listBranches.mockResolvedValue({ branches: ['master', 'release'] })
-    uiApi.listUiScripts.mockResolvedValue([
-      { id: 7, name: '登录流程', driver_target: 'web' },
-      { id: 8, name: '下单流程', driver_target: 'web' },
-    ])
-    api.listUiScriptMaterials.mockResolvedValue([
-      { script_id: 7, name: '登录流程', file: 'test_7_login.py', exists: true },
-      { script_id: 8, name: '下单流程', file: 'test_8_order.py', exists: false },
-    ])
-    const w = mountDialog()
-    await flushPromises()
-    expect((w.find('.cases-area').element as HTMLDivElement).classList.contains('is-disabled')).toBe(true)
-    // 唯一 web 仓自动选中(显示名 = repo_url 末段)
-    expect(w.text()).toContain('light_web_ui_autotest_demo')
-    // 选分支(el-select 渲染在下拉 teleport;直接设值触发 watch)
-    ;(w.vm as unknown as { form: { branch: string } }).form.branch = 'master'
-    await flushPromises()
-    expect(uiApi.listUiScripts).toHaveBeenCalledWith(3)
-    expect(api.listUiScriptMaterials).toHaveBeenCalledWith(3, 'master')
-    expect(w.text()).toContain('登录流程') // 已导出 → 可见可勾
-    expect(w.text()).not.toContain('下单流程') // 未导出 → 分支即事实源,不显示
-  })
+  const UI_CASES: InterfaceCase[] = [
+    { id: 1, branch: 'master', class_name: 'tests/test_smoke.py', method: 'test_login', status: 'active',
+      framework: 'pytest', file_path: 'tests/test_smoke.py', case_type: 'web',
+      title: '登录态直达', markers: ['account:standard'] },
+    { id: 2, branch: 'master', class_name: 'tests/test_smoke.py', method: 'test_gone', status: 'stale',
+      framework: 'pytest', file_path: 'tests/test_smoke.py', case_type: 'web', title: null, markers: [] },
+  ]
 
-  it('分支上无任何已导出脚本时展示空态指引', async () => {
+  it('ui 模式选分支后拉注册表;扫描按钮刷新;标题/标记/状态列可见', async () => {
     repoApi.listAutomationRepos.mockResolvedValue(REPOS)
     repoApi.listBranches.mockResolvedValue({ branches: ['master'] })
-    uiApi.listUiScripts.mockResolvedValue([{ id: 7, name: '登录流程', driver_target: 'web' }])
-    api.listUiScriptMaterials.mockResolvedValue([])
+    api.listUiCases.mockResolvedValue(UI_CASES)
+    api.scanUiCases.mockResolvedValue({ total: 2, added: 1, stale: 1, active: 1 })
+    const w = mountDialog() // 默认 kind='ui'
+    await flushPromises()
+    ;(w.vm as unknown as { form: { branch: string } }).form.branch = 'master'
+    await flushPromises()
+    expect(api.listUiCases).toHaveBeenCalledWith(3, 'master')
+    expect(w.text()).toContain('登录态直达')
+    expect(w.text()).toContain('account:standard')
+    expect(w.text()).toContain('stale')
+    // 扫描按钮(两分支同款):ui 分支也能扫
+    const btn = w.findAll('button').find((b) => b.text().includes('扫描 master'))
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+    expect(api.scanUiCases).toHaveBeenCalledWith(3, 'master')
+    expect(api.listUiCases).toHaveBeenCalledTimes(2)
+  })
+
+  it('ui 模式保存 payload 为 {file_path, function}', async () => {
+    repoApi.listAutomationRepos.mockResolvedValue(REPOS)
+    repoApi.listBranches.mockResolvedValue({ branches: ['master'] })
+    api.listUiCases.mockResolvedValue(UI_CASES)
+    api.createPlan.mockResolvedValue({})
     const w = mountDialog()
     await flushPromises()
     ;(w.vm as unknown as { form: { branch: string } }).form.branch = 'master'
     await flushPromises()
-    expect(w.text()).toContain('该分支暂无已导出脚本')
+    const vm = w.vm as unknown as { form: { name: string }; uiSel: InterfaceCase[]; save: () => Promise<void> }
+    vm.form.name = 'ui计划'
+    // 编程式勾选 active 行(uiSel 经 defineExpose 暴露;save 内校验仅查名称非空与 selection 非空,可直通)
+    vm.uiSel = [UI_CASES[0]]
+    await vm.save()
+    await flushPromises()
+    expect(api.createPlan).toHaveBeenCalledWith(3, expect.objectContaining({
+      kind: 'ui',
+      selection: [{ file_path: 'tests/test_smoke.py', function: 'test_login' }],
+    }))
+  })
+
+  it('ui 分支注册表为空时展示扫描空态指引', async () => {
+    repoApi.listAutomationRepos.mockResolvedValue(REPOS)
+    repoApi.listBranches.mockResolvedValue({ branches: ['master'] })
+    api.listUiCases.mockResolvedValue([])
+    const w = mountDialog()
+    await flushPromises()
+    ;(w.vm as unknown as { form: { branch: string } }).form.branch = 'master'
+    await flushPromises()
+    expect(w.text()).toContain('尚未扫描到用例')
   })
 
   it('项目未配置此类型仓时给出提示,分支下拉禁用', async () => {

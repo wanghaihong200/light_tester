@@ -11,7 +11,7 @@
       </el-form-item>
       <el-form-item label="类型" required>
         <el-radio-group v-model="form.kind" :disabled="!!plan" @change="onKindChange">
-          <el-radio value="ui">UI(Web自动化脚本)</el-radio>
+          <el-radio value="ui">UI(Web用例)</el-radio>
           <el-radio value="api">接口(测试方法)</el-radio>
         </el-radio-group>
       </el-form-item>
@@ -51,14 +51,28 @@
       </template>
       <template v-else>
         <div class="cases-toolbar">
-          <span>Web自动化脚本(分支即事实源:仅列当前分支已导出的)</span>
-          <span v-if="materialError" class="branch-error">{{ materialError }}</span>
+          <span>Web用例(仓是事实源,先扫描再勾选)</span>
+          <el-button class="scan-btn" size="small" :disabled="!form.branch || scanning" :loading="scanning"
+                     @click="doScan">扫描 {{ form.branch }}</el-button>
         </div>
-        <el-table :data="branchUiScripts" max-height="320" size="small" @selection-change="onUiSelChange"
-                  empty-text="该分支暂无已导出脚本,请先在「Web自动化」导出到此分支">
+        <el-table :data="uiCases" max-height="320" size="small" @selection-change="onUiSelChange"
+                  empty-text="该分支尚未扫描到用例,请点击「扫描」解析当前分支代码">
           <el-table-column type="selection" width="40" />
-          <el-table-column prop="name" label="脚本" min-width="200" />
-          <el-table-column prop="driver_target" label="端" width="90" />
+          <el-table-column prop="class_name" label="文件" min-width="170" show-overflow-tooltip />
+          <el-table-column prop="method" label="函数" min-width="150" show-overflow-tooltip />
+          <el-table-column label="标题" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.title || row.method }}</template>
+          </el-table-column>
+          <el-table-column label="标记" min-width="110">
+            <template #default="{ row }">
+              <el-tag v-for="m in row.markers || []" :key="m" size="small" class="marker-tag">{{ m }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.status === 'active' ? 'success' : 'info'">{{ row.status }}</el-tag>
+            </template>
+          </el-table-column>
         </el-table>
       </template>
     </div>
@@ -73,13 +87,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { createPlan, listInterfaceCases, listUiScriptMaterials, scanInterfaceCases, updatePlan } from '../../api/cicd'
+import { createPlan, listInterfaceCases, listUiCases, scanInterfaceCases, scanUiCases, updatePlan } from '../../api/cicd'
 import type { ExecutionPlan, InterfaceCase, PlanKind } from '../../api/cicd'
 import { listAutomationRepos, listBranches, repoDisplayName } from '../../api/repo'
-import { listUiScripts } from '../../api/uiAutomation'
 
-// driver_target 可选:api/ui-scripts 的 UiScript 类型不携带该字段(平台库行),仅测试/展示语境提供
-interface UiScriptRow { id: number; name: string; driver_target?: string }
 interface CaseRow { class_name: string; method: string }
 
 const props = defineProps<{ projectId: number; plan: ExecutionPlan | null; modelValue: boolean }>()
@@ -95,14 +106,10 @@ const branchError = ref('')
 const allRepos = ref<Awaited<ReturnType<typeof listAutomationRepos>>>([])
 const repoUrl = ref('')
 const repoError = ref('')
-const uiScripts = ref<UiScriptRow[]>([])
 const apiCases = ref<InterfaceCase[]>([])
-// 分支即事实源:只展示导出文件在当前分支存在的脚本(script_id → exists)
-const materials = ref<Record<number, boolean>>({})
-const materialError = ref('')
-const branchUiScripts = computed(() => uiScripts.value.filter((s) => materials.value[s.id]))
+const uiCases = ref<InterfaceCase[]>([])
 const scanning = ref(false)
-const uiSel = ref<UiScriptRow[]>([])
+const uiSel = ref<InterfaceCase[]>([])
 const apiSel = ref<InterfaceCase[]>([])
 
 const repoKind = computed(() => (form.value.kind === 'ui' ? 'web' : 'api') as 'web' | 'api')
@@ -161,15 +168,18 @@ async function doScan(): Promise<void> {
   if (!form.value.branch) return
   scanning.value = true
   try {
-    const stat = await scanInterfaceCases(props.projectId, form.value.branch)
+    const isUi = form.value.kind === 'ui'
+    const stat = await (isUi ? scanUiCases : scanInterfaceCases)(props.projectId, form.value.branch)
     ElMessage.success(`扫描完成:新增 ${stat.added},失效 ${stat.stale},存活 ${stat.active}`)
-    apiCases.value = await listInterfaceCases(props.projectId, form.value.branch)
+    const rows = await (isUi ? listUiCases : listInterfaceCases)(props.projectId, form.value.branch)
+    if (isUi) uiCases.value = rows
+    else apiCases.value = rows
   } finally {
     scanning.value = false
   }
 }
 
-function onUiSelChange(rows: UiScriptRow[]): void { uiSel.value = rows }
+function onUiSelChange(rows: InterfaceCase[]): void { uiSel.value = rows }
 function onApiSelChange(rows: InterfaceCase[]): void { apiSel.value = rows }
 
 // 供测试与表格编程式勾选:按 class_name+method 匹配 api 行
@@ -181,7 +191,7 @@ function toggleCase(row: CaseRow, on: boolean): void {
 async function save(): Promise<void> {
   if (!form.value.name.trim()) { ElMessage.warning('请填写计划名称'); return }
   const selection = form.value.kind === 'ui'
-    ? uiSel.value.map((s) => ({ script_id: s.id, name: s.name }))
+    ? uiSel.value.map((c) => ({ file_path: c.class_name, function: c.method }))
     : apiSel.value.map((c) => ({ class_name: c.class_name, method: c.method }))
   if (!selection.length) { ElMessage.warning('请至少勾选一个用例'); return }
   const payload = { name: form.value.name.trim(), description: form.value.description,
@@ -198,24 +208,15 @@ onMounted(() => {
 })
 
 // 分支前置(ADR-0012):分支变化(用户选择或编程式赋值)即清空已勾用例;
-// api 按分支拉注册表;ui 拉平台脚本库后按「分支已导出物料」过滤(分支即事实源)。
+// api/ui 各按分支拉注册表(ADR-0013:ui 用 web 仓 pytest 用例注册表,与 api 对称,空注册表=空表格兜底)。
 // 用 watch 而非 el-select @change:编程式赋值不触发 @change;immediate 覆盖编辑回填首帧
 // (form.branch 初始化即带值,非 immediate 不会再触发)。
 watch(() => form.value.branch, async (branch) => {
   uiSel.value = []
   apiSel.value = []
-  materials.value = {}
-  materialError.value = ''
   if (!branch) return
   if (form.value.kind === 'ui') {
-    const all = await listUiScripts(props.projectId)
-    uiScripts.value = all.filter((s: UiScriptRow) => s.driver_target === 'web')
-    try {
-      const mats = await listUiScriptMaterials(props.projectId, branch)
-      materials.value = Object.fromEntries(mats.filter((m) => m.exists).map((m) => [m.script_id, true]))
-    } catch (e) {
-      materialError.value = '读取分支物料失败:请检查自动化工程配置'
-    }
+    uiCases.value = await listUiCases(props.projectId, branch)
   } else {
     apiCases.value = await listInterfaceCases(props.projectId, branch)
   }
@@ -223,7 +224,7 @@ watch(() => form.value.branch, async (branch) => {
 
 watch(() => props.plan, (p) => { if (p) form.value.branch = p.branch })
 
-defineExpose({ form, toggleCase, save })
+defineExpose({ form, toggleCase, save, uiSel })
 </script>
 
 <style scoped>
@@ -232,4 +233,5 @@ defineExpose({ form, toggleCase, save })
 .cases-area.is-disabled { cursor: not-allowed; opacity: 0.45; pointer-events: none; }
 .cases-toolbar { align-items: center; display: flex; justify-content: space-between; margin: 4px 0 8px; }
 .branch-error { color: var(--el-color-danger); font-size: 12px; margin-left: 8px; }
+.marker-tag { margin-right: 4px; }
 </style>

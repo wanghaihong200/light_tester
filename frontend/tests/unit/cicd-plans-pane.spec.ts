@@ -10,7 +10,6 @@ const repoApi = vi.hoisted(() => ({
 vi.mock('../../src/api/cicd', () => api)
 // 展开真实模块:repoDisplayName(纯函数)走实现,仅网络调用 mock
 vi.mock('../../src/api/repo', async (importOriginal) => ({ ...(await importOriginal()), ...repoApi }))
-vi.mock('../../src/api/uiAutomation', () => ({ listUiScripts: vi.fn(async () => []) }))
 vi.mock('../../src/components/cicd/PlanDialog.vue', () => ({ default: { template: '<div class="plan-dialog-stub"/>' } }))
 vi.mock('../../src/components/cicd/TriggerDialog.vue', () => ({ default: { template: '<div class="trigger-dialog-stub"/>' } }))
 
