@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import git_service
 from app.auth import get_current_user, get_current_user_sse
-from app.cicd import api_scan, executor, freshness, jenkins_client, registry
+from app.cicd import api_scan, executor, freshness, jenkins_client, registry, ui_scan
 from app.cicd.jenkins_job import job_name  # noqa: F401(后续任务用)
 from app.config import settings
 from app.database import get_db
@@ -28,11 +28,11 @@ class ScanIn(BaseModel):
     branch: str = Field(min_length=1, max_length=200)
 
 
-def _api_repo(db: Session, project_id: int) -> AutomationRepo:
-    repo = db.query(AutomationRepo).filter_by(project_id=project_id, kind="api",
+def _repo_of_kind(db: Session, project_id: int, kind: str) -> AutomationRepo:
+    repo = db.query(AutomationRepo).filter_by(project_id=project_id, kind=kind,
                                               is_deleted=False).first()
     if repo is None:
-        raise HTTPException(400, "项目未配置 api 自动化仓,请先在「自动化工程」配置")
+        raise HTTPException(400, f"项目未配置 {kind} 自动化仓,请先在「自动化工程」配置")
     return repo
 
 
@@ -42,7 +42,7 @@ def scan_interface_cases(project_id: int, payload: ScanIn, db: Session = Depends
     if db.get(Project, project_id) is None:
         raise HTTPException(404, "project not found")
     ensure_project_access(db, current, project_id, "editor")
-    repo = _api_repo(db, project_id)
+    repo = _repo_of_kind(db, project_id, "api")
     try:
         sync = git_service.sync_repo(repo, payload.branch)
     except git_service.GitError as e:
@@ -60,7 +60,36 @@ def list_interface_cases(project_id: int, branch: str, db: Session = Depends(get
     from app.models import InterfaceCase
 
     ensure_project_access(db, current, project_id, "viewer")
-    q = db.query(InterfaceCase).filter_by(project_id=project_id, branch=branch, is_deleted=False)
+    q = db.query(InterfaceCase).filter_by(project_id=project_id, branch=branch,
+                                          case_type="api", is_deleted=False)
+    return q.order_by(InterfaceCase.class_name, InterfaceCase.method).limit(2000).all()
+
+
+@router.post("/projects/{project_id}/ui-cases/scan")
+def scan_ui_cases(project_id: int, payload: ScanIn, db: Session = Depends(get_db),
+                  current: User = Depends(get_current_user)):
+    """Web用例注册表扫描(ADR-0013):web 仓 pytest 函数级,仓×分支×文件×函数。"""
+    if db.get(Project, project_id) is None:
+        raise HTTPException(404, "project not found")
+    ensure_project_access(db, current, project_id, "editor")
+    repo = _repo_of_kind(db, project_id, "web")
+    try:
+        sync = git_service.sync_repo(repo, payload.branch)
+    except git_service.GitError as e:
+        raise HTTPException(400, f"分支同步失败: {e}") from e
+    scanned = ui_scan.scan_workspace(git_service.working_copy_path(repo))
+    return registry.sync_registry(db, project_id, payload.branch, scanned,
+                                  commit=sync.commit_short, case_type="web")
+
+
+@router.get("/projects/{project_id}/ui-cases", response_model=list[InterfaceCaseOut])
+def list_ui_cases(project_id: int, branch: str, db: Session = Depends(get_db),
+                  current: User = Depends(get_current_user)):
+    from app.models import InterfaceCase
+
+    ensure_project_access(db, current, project_id, "viewer")
+    q = db.query(InterfaceCase).filter_by(project_id=project_id, branch=branch,
+                                          case_type="web", is_deleted=False)
     return q.order_by(InterfaceCase.class_name, InterfaceCase.method).limit(2000).all()
 
 
