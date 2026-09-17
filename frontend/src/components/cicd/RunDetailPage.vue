@@ -141,7 +141,8 @@ function onLocate(row: CiCaseRow): void {
     curMatch.value = (curMatch.value + 1) % matches.value.length  // 循环跳下一条
   }
   void nextTick(() => {
-    consoleEl.value?.querySelector('mark.cur')?.scrollIntoView({ block: 'center' })
+    // jsdom 未实现 scrollIntoView,可选调用保测试环境不炸
+    consoleEl.value?.querySelector('mark.cur')?.scrollIntoView?.({ block: 'center' })
   })
 }
 
