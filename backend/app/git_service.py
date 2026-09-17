@@ -244,6 +244,18 @@ def list_remote_branches(project) -> list[str]:
     return branches
 
 
+def remote_branch_files(project, branch: str) -> set[str]:
+    """分支上全部文件路径集合(物料感知用):fetch 刷新 remote-tracking refs 但不动工作区,
+    再 ls-tree 枚举 origin/<branch>。分支不存在抛 GitError(由调用方转 400)。"""
+    wc = working_copy_path(project)
+    if not (wc.exists() and (wc / ".git").exists()):
+        ensure_repo(project)
+    url = build_remote_url(project)
+    _run(["git", "fetch", "-q", url, "+refs/heads/*:refs/remotes/origin/*"], cwd=wc, token=project.git_token)
+    out = _run(["git", "ls-tree", "-r", "--name-only", f"origin/{branch}"], cwd=wc, token=project.git_token)
+    return {ln for ln in out.splitlines() if ln}
+
+
 class PushConflict(GitError):
     def __init__(self, message: str):
         super().__init__("rebase", message)

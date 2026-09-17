@@ -107,6 +107,12 @@ export const scanInterfaceCases = (projectId: number, branch: string) =>
 export const listInterfaceCases = (projectId: number, branch: string) =>
   http.get<InterfaceCase[]>(`/projects/${projectId}/interface-cases?branch=${encodeURIComponent(branch)}`)
 
+// ui 物料感知(分支即事实源):每个 web 脚本的导出文件在该分支上是否存在
+export interface UiScriptMaterial { script_id: number; name: string; file: string; exists: boolean }
+export const listUiScriptMaterials = (projectId: number, branch: string) =>
+  http.get<UiScriptMaterial[]>(
+    `/projects/${projectId}/ui-script-materials?branch=${encodeURIComponent(branch)}`)
+
 export const preflight = (projectId: number, planIds: number[]) =>
   http.post<PreflightItem[]>(`/projects/${projectId}/ci-runs/preflight`, { plan_ids: planIds })
 export const triggerRuns = (projectId: number, planIds: number[], confirmStale: boolean) =>

@@ -477,6 +477,7 @@ curl -X POST http://127.0.0.1:8000/api/projects/1/perf-records/import \
 |---|---|---|
 | POST | `/api/projects/{id}/interface-cases/scan` | 扫描同步 `{branch}`:sync_repo → 扫工作区(方法级正则解析)→ 注册表同步(扫到置 `active` 刷 framework/file_path/last_commit,未扫到置 `stale`)→ `{total, active, stale, added}`;项目 404 / 未配 api 仓 400 / 分支同步失败 400 |
 | GET | `/api/projects/{id}/interface-cases?branch=` | 用例列表(class_name,method 升序,上限 2000;`{id, branch, class_name, method, status[active\|stale], framework, file_path}`) |
+| GET | `/api/projects/{id}/ui-script-materials?branch=` | **ui 物料感知(分支即事实源)**:每个 web 脚本的导出文件在该分支是否存在(fetch 刷新 refs 不动工作区)→ `[{script_id, name, file, exists}]`(file 与导出/触发校验同一 slugify 规则);计划弹窗仅列 `exists=true`;项目 404 / 未配 web 仓 400 / 分支不存在 400 |
 
 **执行**(preflight/触发/停止/重跑=editor;记录读=viewer)
 

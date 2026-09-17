@@ -16,7 +16,7 @@ from app.config import settings
 from app.database import get_db
 from app.jobs.bus import bus
 from app.models import (AutomationRepo, CiRun, ExecutionPlan, JenkinsConnection,
-                        Project, User)
+                        Project, UiScript, User)
 from app.permissions import ensure_project_access
 from app.schemas import CiRunOut, ExecutionPlanOut, InterfaceCaseOut
 from app.ui_automation.playwright_export import slugify
@@ -62,6 +62,32 @@ def list_interface_cases(project_id: int, branch: str, db: Session = Depends(get
     ensure_project_access(db, current, project_id, "viewer")
     q = db.query(InterfaceCase).filter_by(project_id=project_id, branch=branch, is_deleted=False)
     return q.order_by(InterfaceCase.class_name, InterfaceCase.method).limit(2000).all()
+
+
+@router.get("/projects/{project_id}/ui-script-materials")
+def list_ui_script_materials(project_id: int, branch: str, db: Session = Depends(get_db),
+                             current: User = Depends(get_current_user)):
+    """ui 物料感知(分支即事实源):每个 web 脚本的导出文件在该分支上是否存在。
+
+    与 api 注册表「先扫描再勾选」对齐:计划弹窗只列 exists=true 的脚本。
+    fetch 刷新 refs 不动工作区;分支不存在 → 400。
+    """
+    if db.get(Project, project_id) is None:
+        raise HTTPException(404, "project not found")
+    ensure_project_access(db, current, project_id, "viewer")
+    repo = db.query(AutomationRepo).filter_by(project_id=project_id, kind="web",
+                                              is_deleted=False).first()
+    if repo is None:
+        raise HTTPException(400, "项目未配置 web 自动化仓,请先在「自动化工程」配置")
+    try:
+        files = git_service.remote_branch_files(repo, branch)
+    except git_service.GitError as e:
+        raise HTTPException(400, f"分支物料读取失败: {e}") from e
+    scripts = db.query(UiScript).filter_by(project_id=project_id, is_deleted=False,
+                                           driver_target="web").all()
+    return [{"script_id": s.id, "name": s.name,
+             "file": f"test_{slugify(s.id, s.name)}.py", "exists": f"test_{slugify(s.id, s.name)}.py" in files}
+            for s in scripts]
 
 
 class PlanIn(BaseModel):

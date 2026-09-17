@@ -82,7 +82,9 @@ def trigger_plan(db: Session, user: User, plan: ExecutionPlan, *, confirm_stale:
     ws = git_service.working_copy_path(repo)
     snap, selection_arg = _resolve_selection(db, plan, ws)
     if not selection_arg:
-        raise HTTPException(400, "所选用例在仓内均无对应物料,请先导出脚本/扫描注册表")
+        hint = ("请先导出脚本到该分支,或编辑计划改选脚本所在分支" if plan.kind == "ui"
+                else "请先导出脚本/扫描注册表到该分支")
+        raise HTTPException(400, f"计划分支「{plan.branch}」上无所选用例的任何物料,{hint}")
     own = client or client_from(conn)
     try:
         name = jenkins_job.job_name(plan.project_id, plan.kind)

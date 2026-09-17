@@ -37,6 +37,13 @@ export interface AutomationRepoRow {
 export const listAutomationRepos = (projectId: number) =>
   http.get<AutomationRepoRow[]>(`/projects/${projectId}/repo/automation-repos`)
 
+// 仓显示名:repo_url 末段去 .git(容忍 //light_api_autotest_demo 双斜杠/file:/// 形态);解析不出回退原串
+export function repoDisplayName(repoUrl: string): string {
+  const last = repoUrl.split('/').filter(Boolean).pop() ?? ''
+  if (!last) return repoUrl
+  return last.endsWith('.git') ? last.slice(0, -'.git'.length) : last
+}
+
 export const putAutomationRepo = (projectId: number, kind: RepoKind, body: { repo_url: string; repo_token?: string | null }) =>
   http.put<{ id: number; kind: RepoKind; repo_url: string; repo_token: string | null }>(
     `/projects/${projectId}/repo/automation-repos/${kind}`, body,

@@ -19,6 +19,9 @@
           </el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="自动化工程" width="180" show-overflow-tooltip>
+        <template #default="{ row }">{{ repoNameOf(row.kind) }}</template>
+      </el-table-column>
       <el-table-column prop="branch" label="分支" width="160" show-overflow-tooltip />
       <el-table-column label="用例数" width="90">
         <template #default="{ row }">{{ row.selection.length }}</template>
@@ -42,7 +45,8 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deletePlan, listPlans } from '../../api/cicd'
-import type { ExecutionPlan } from '../../api/cicd'
+import type { ExecutionPlan, PlanKind } from '../../api/cicd'
+import { listAutomationRepos, repoDisplayName } from '../../api/repo'
 import PlanDialog from './PlanDialog.vue'
 import TriggerDialog from './TriggerDialog.vue'
 
@@ -59,6 +63,18 @@ async function load(): Promise<void> {
   plans.value = await listPlans(props.projectId)
 }
 
+// 计划绑仓由 kind 推导(ui→web/api→api),列里按 kind 映射仓显示名;未配置显示 —
+const repoNames = ref<Record<string, string>>({})
+
+async function loadRepos(): Promise<void> {
+  const rows = await listAutomationRepos(props.projectId)
+  repoNames.value = Object.fromEntries(rows.map((r) => [r.kind, repoDisplayName(r.repo_url)]))
+}
+
+function repoNameOf(kind: PlanKind): string {
+  return repoNames.value[kind === 'ui' ? 'web' : 'api'] ?? '—'
+}
+
 async function remove(row: ExecutionPlan): Promise<void> {
   await ElMessageBox.confirm(`删除执行计划「${row.name}」?历史执行记录不受影响。`, '删除', { type: 'warning' })
   await deletePlan(row.id)
@@ -71,7 +87,10 @@ function onTriggered(): void {
   emit('triggered')
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadRepos()
+})
 </script>
 
 <style scoped>
