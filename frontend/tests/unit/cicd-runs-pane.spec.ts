@@ -28,16 +28,21 @@ const DONE = {
 }
 
 describe('RunsPane', () => {
-  it('渲染执行记录与状态标签,点行跳详情', async () => {
-    api.listCiRuns.mockResolvedValue([RUN])
+  it('渲染执行记录与状态标签;点行不跳转,点「详情」按钮才跳', async () => {
+    api.listCiRuns.mockResolvedValue([{ ...RUN, created_at: '2026-09-17T14:09:52' }])
     const w = mount(RunsPane, { props: { projectId: 3 }, global: { plugins: [ElementPlus] } })
     await flushPromises()
     expect(w.text()).toContain('接口回归')
     // 状态列渲染 STATUS_LABEL 文案('执行中'),原始 status 值不进 DOM——brief 断言按实现修正
     expect(w.text()).toContain('执行中')
-    // EP 2.14 的 class-name 会同时落表头 TH 与表体 TD,须圈定在数据行内(仓内惯例 .el-table__row)
-    await w.find('.el-table__row .row-click').trigger('click')
-    // goDetail 传 String(id)(真实路由 :runId(\d+) 交付 string 参数),断言对齐实现
+    // 触发时间格式:ISO 的 T 分隔换为空格(2026-09-17 用户拍板)
+    expect(w.text()).toContain('2026-09-17 14:09:52')
+    // 点数据行任意处不跳转(2026-09-17 用户拍板:仅「详情」按钮跳转)
+    await w.find('.el-table__row').trigger('click')
+    expect(routerState.push).not.toHaveBeenCalled()
+    // 点「详情」按钮才跳;goDetail 传 String(id)(真实路由 :runId(\d+) 交付 string 参数)
+    const btn = w.findAll('button').find((b) => b.text().includes('详情'))
+    await btn!.trigger('click')
     expect(routerState.push).toHaveBeenCalledWith({ name: 'project-cicd-run-detail', params: { runId: '5' } })
     w.unmount() // 仓内惯例:清真实 3s 轮询定时器,避免泄到下一条用例
   })

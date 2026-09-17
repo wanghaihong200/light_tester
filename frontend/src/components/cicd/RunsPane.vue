@@ -3,14 +3,14 @@
   <div class="runs-pane">
     <div class="toolbar"><h2>执行记录</h2></div>
     <div class="table-wrap">
-    <el-table :data="paged" @row-click="(row: CiRun) => goDetail(row.id)">
-      <el-table-column prop="id" label="#" width="70" class-name="row-click" />
-      <el-table-column prop="plan_name" label="计划" min-width="150" class-name="row-click" show-overflow-tooltip />
-      <el-table-column label="类型" width="80" class-name="row-click">
+    <el-table :data="paged">
+      <el-table-column prop="id" label="#" width="70" />
+      <el-table-column prop="plan_name" label="计划" min-width="150" show-overflow-tooltip />
+      <el-table-column label="类型" width="80">
         <template #default="{ row }">{{ row.kind === 'ui' ? 'UI' : '接口' }}</template>
       </el-table-column>
-      <el-table-column prop="branch" label="分支" width="140" class-name="row-click" show-overflow-tooltip />
-      <el-table-column label="build" width="100" class-name="row-click">
+      <el-table-column prop="branch" label="分支" width="140" show-overflow-tooltip />
+      <el-table-column label="build" width="100">
         <template #default="{ row }">{{ row.build_number ?? '-' }}</template>
       </el-table-column>
       <el-table-column label="状态" width="110">
@@ -18,16 +18,18 @@
           <el-tag size="small" :type="TAG[row.status]">{{ STATUS_LABEL[row.status] }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="通过/总数" width="110" class-name="row-click">
+      <el-table-column label="通过/总数" width="110">
         <template #default="{ row }">{{ row.passed }}/{{ row.total }}</template>
       </el-table-column>
-      <el-table-column label="执行时长" width="100" class-name="row-click">
+      <el-table-column label="执行时长" width="100">
         <template #default="{ row }">{{ ciRunDurationText(row.started_at, row.finished_at) }}</template>
       </el-table-column>
-      <el-table-column prop="created_at" label="触发时间" width="180" class-name="row-click" />
+      <el-table-column label="触发时间" width="170">
+        <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="90">
         <template #default="{ row }">
-          <el-button link type="primary" @click.stop="goDetail(row.id)">详情</el-button>
+          <el-button link type="primary" @click="goDetail(row.id)">详情</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -75,6 +77,10 @@ watch(() => runs.value.length, (len) => {
   if (page.value > maxPage) page.value = maxPage
 })
 
+function fmtTime(iso: string): string {
+  return iso ? iso.replace('T', ' ') : '-'
+}
+
 async function load(): Promise<void> {
   runs.value = await listCiRuns(props.projectId)
   const active = runs.value.some((r) => r.status === 'queued' || r.status === 'running')
@@ -94,6 +100,5 @@ onUnmounted(() => { if (timer !== null) clearInterval(timer) })
 .runs-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 8px 12px; }
 .toolbar h2 { font-size: 18px; margin: 0 0 8px; }
 .table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.row-click { cursor: pointer; }
 .pager { display: flex; flex-shrink: 0; justify-content: flex-end; margin-top: 8px; }
 </style>
