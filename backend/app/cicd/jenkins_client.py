@@ -50,7 +50,8 @@ class JenkinsClient:
         return {"ok": True}
 
     def job_exists(self, name: str) -> bool:
-        r = self._get(f"/job/{name}/api.json")
+        # Jenkins REST 只有 /api/json 形式;/api.json 后缀式不存在,GET 恒 404(会被误读成 job 不存在)
+        r = self._get(f"/job/{name}/api/json")
         if r.status_code == 200:
             return True
         if r.status_code == 404:
@@ -75,7 +76,7 @@ class JenkinsClient:
             raise JenkinsError("触发成功但响应缺少队列地址")
         deadline = time.monotonic() + queue_timeout
         while time.monotonic() < deadline:
-            q = self._get(f"/queue/item/{qid}/api.json")
+            q = self._get(f"/queue/item/{qid}/api/json")
             if q.status_code == 200:
                 exe = (q.json() or {}).get("executable") or {}
                 if exe.get("number"):
@@ -83,7 +84,7 @@ class JenkinsClient:
                     return int(exe["number"]), url
             elif q.status_code == 404:
                 # 真实例调度完成后 queue item 即被清除:按 queueId 回退匹配 job 的 builds
-                r = self._get(f"/job/{name}/api.json",
+                r = self._get(f"/job/{name}/api/json",
                               params={"tree": "builds[number,url,queueId]{0,10}"})
                 if r.status_code == 200:
                     for b in r.json().get("builds") or []:
@@ -94,7 +95,7 @@ class JenkinsClient:
         raise JenkinsError("排队超时:Jenkins 队列未在时限内调度该构建")
 
     def get_build(self, name: str, number: int) -> dict | None:
-        r = self._get(f"/job/{name}/{number}/api.json",
+        r = self._get(f"/job/{name}/{number}/api/json",
                       params={"tree": "building,result,url"})
         if r.status_code == 404:
             return None
@@ -118,7 +119,7 @@ class JenkinsClient:
             self._raise("停止构建", r)
 
     def list_artifacts(self, name: str, number: int) -> list[str]:
-        r = self._get(f"/job/{name}/{number}/api.json",
+        r = self._get(f"/job/{name}/{number}/api/json",
                       params={"tree": "artifacts[relativePath]"})
         if r.status_code == 404:
             raise JenkinsError("构建不存在,无法列产物")

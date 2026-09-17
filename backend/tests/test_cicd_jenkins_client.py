@@ -41,7 +41,8 @@ class FakeJenkins:
         parts = [p for p in path.split("/") if p]
         if len(parts) >= 3 and parts[0] == "job":
             job = parts[1]
-            if len(parts) == 3 and parts[2] == "api.json" and method == "GET":
+            # 契约钉子:真 Jenkins 只认 /api/json 形式,/api.json 后缀式不存在(404)——2026-09-17 冒烟缺陷
+            if len(parts) == 4 and parts[2] == "api" and parts[3] == "json" and method == "GET":
                 if job not in self.jobs:
                     return httpx.Response(404, json={})
                 builds = [{"number": n, "url": b["url"], "queueId": b.get("queue_id")}
@@ -60,7 +61,7 @@ class FakeJenkins:
                     self.builds[(job, n)]["building"] = False
                     self.builds[(job, n)]["result"] = "ABORTED"
                     return httpx.Response(200)
-                if method == "GET" and parts[-1] == "api.json":
+                if method == "GET" and parts[-1] == "json" and parts[-2] == "api":
                     b = self.builds.get((job, n))
                     if b is None:
                         return httpx.Response(404, json={})
@@ -79,7 +80,7 @@ class FakeJenkins:
                     if blob is None:
                         return httpx.Response(404)
                     return httpx.Response(200, content=blob)
-        if path.startswith("/queue/item/") and path.endswith("api.json"):
+        if path.startswith("/queue/item/") and path.endswith("api/json"):
             qid = parts[2]
             n = self._queue.get(qid)
             if n is None:
