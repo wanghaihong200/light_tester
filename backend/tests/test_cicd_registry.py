@@ -114,3 +114,27 @@ def test_scan_requires_editor(client, db_session, make_user, api_repo):
     r = client.post(f"/api/projects/{pid}/interface-cases/scan",
                     json={"branch": "master"}, headers=h)
     assert r.status_code == 403
+
+
+def test_sync_registry_case_type_isolation(db_session):
+    """计划 17:web 重扫只圈 web 行,api 行(同 project/branch)不受 stale 污染。"""
+    db_session.add(Project(id=2, name="p2"))
+    db_session.commit()
+    db_session.add_all([
+        InterfaceCase(project_id=2, branch="main", class_name="com.x.A", method="keep",
+                      status="active", case_type="api"),
+        InterfaceCase(project_id=2, branch="main", class_name="tests/test_a.py", method="gone",
+                      status="active", case_type="web"),
+    ])
+    db_session.commit()
+    stat = registry.sync_registry(db_session, 2, "main",
+                                  scanned=[{"class_name": "tests/test_a.py", "method": "new1",
+                                            "file_path": "tests/test_a.py", "framework": "pytest",
+                                            "title": "标题", "markers": ["account:standard"]}],
+                                  commit="abc1234", case_type="web")
+    assert (stat["added"], stat["stale"]) == (1, 1)  # web 域内:新增 new1、gone→stale
+    rows = {(r.class_name, r.method): r for r in
+            db_session.query(InterfaceCase).filter_by(project_id=2, branch="main").all()}
+    assert rows[("com.x.A", "keep")].status == "active"  # api 行不被 web 扫描波及
+    new = rows[("tests/test_a.py", "new1")]
+    assert new.case_type == "web" and new.title == "标题" and new.markers == ["account:standard"]
