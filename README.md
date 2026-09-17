@@ -1,8 +1,8 @@
 # 轻测试 LightTester
 
 AI 测试平台(单机 Web MVP):功能用例管理(XMind 导图视图)、AI 生成功能用例与接口脚本、
-Web/APP UI 自动化(录制/采集/执行)、HTTP Mock 服务、APP 性能测试、用户体系与项目级权限。
-前后端同仓(monorepo)。
+Web/APP UI 自动化(录制/采集/执行)、HTTP Mock 服务、APP 性能测试、持续集成(Jenkins 执行通道)、
+用户体系与项目级权限。前后端同仓(monorepo)。
 
 | 功能                    | 入口                          | 说明                                                                                                                               |
 |-------------------------|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
@@ -15,6 +15,7 @@ Web/APP UI 自动化(录制/采集/执行)、HTTP Mock 服务、APP 性能测试
 | APP 自动化              | 项目内▸UI自动化▸APP自动化     | SoloPi 采集/回放(Android)，可导出appium脚本                                                                                        |
 | HTTP Mock               | 项目内▸接口Mock▸HTTP Mock     | 每项目多实例 mock server,规则匹配 + 模板响应,若未匹配到规则，则透传原始请求，返回对应接口真实响应数据。<br/>有mock匹配记录，方便排查问题 |
 | APP 性能测试            | 项目内▸性能测试▸APP性能测试   | SoloPi执行性能测试，平台采集数据进行展示                                                                                           |
+| 持续集成                | 项目内▸持续集成▸执行计划/执行记录 | 自动化用例接入 Jenkins 执行:计划选择集合快照、新鲜度检测、自动建参数化流水线、实时日志与 JUnit 报告                              |
 | 用户与权限              | 顶栏▸用户管理                 | JWT 登录,owner/editor/viewer 项目级角色                                                                                            |
 
 > 以下截图均来自真实运行环境(测试数据)。
@@ -138,6 +139,25 @@ Web / Android / 鸿蒙三端脚本与执行历史:新建脚本 → AI 按步骤�
 
 ![性能趋势](docs/images/perf-trend.png)
 
+## 持续集成 ▸ 执行计划与执行记录
+
+把自动化用例接入 Jenkins 执行通道(平台编排,Jenkins 只管跑):
+
+- **执行计划**:单类型(ui/api)计划绑定分支并勾选用例(选择集合快照);触发前自动同步仓库分支,
+  并做**新鲜度检测**——本地有未提交/未推送代码时提示确认,可选择按远端现状(老代码)继续;
+- **自动建 Job**:平台按需在 Jenkins 创建常驻参数化流水线(`light_tester_p{项目}_{类型}`,
+  双 docker agent:接口=maven+JDK8、UI=Playwright),`buildWithParameters` 传入仓地址/分支/用例集合触发;
+- **执行记录**:纯出站轮询(~2s)拉构建状态与 console 增量;详情页**实时直播日志**,
+  用例树按「类 → 方法」分组(数据驱动重名自动合并),点用例在日志中**定位高亮**,另有全量日志弹窗;支持停止/重跑;
+- **报告**:JUnit XML 一统(pytest/surefire 兼容),逐用例结果入平台,数据驱动子用例逐行呈现。
+
+前置:管理员在「用户管理」页底部配置 Jenkins 连接(base_url + API token);Jenkins 侧配好
+GitLab 凭据与 docker 环境(流水线自动拉起 alpine/git、maven、playwright 镜像)。
+
+![执行记录](docs/images/ci-runs.png)
+
+![执行详情](docs/images/ci-run-detail.png)
+
 ## 快速开始
 
 ```bash
@@ -157,7 +177,7 @@ npm run dev                                                # http://localhost:51
 
 | 目录 | 内容 | 技术栈 |
 |---|---|---|
-| [`backend/`](backend/) | FastAPI 服务(用例树/文档库/AI 生成任务管道+Agent SDK 引擎/Web·APP UI 自动化/HTTP Mock 服务/性能记录/用户权限)、平台技能副本 `.claude/skills/` | Python 3.12 · FastAPI · SQLAlchemy · MySQL · claude-agent-sdk · Playwright · jsonpath-ng · Jinja2 |
+| [`backend/`](backend/) | FastAPI 服务(用例树/文档库/AI 生成任务管道+Agent SDK 引擎/Web·APP UI 自动化/HTTP Mock 服务/性能记录/持续集成·Jenkins 触发与轮询/用户权限)、平台技能副本 `.claude/skills/` | Python 3.12 · FastAPI · SQLAlchemy · MySQL · claude-agent-sdk · Playwright · jsonpath-ng · Jinja2 |
 | [`frontend/`](frontend/) | Vue3 单页应用(导图编辑器/任务抽屉/Monaco/Web·APP 自动化/Mock 管理台/性能图表/用户管理) | Vue3 · TypeScript · Element Plus · simple-mind-map · Monaco · echarts |
 
 各自的详细说明见 [`backend/README.md`](backend/README.md) 与 [`frontend/README.md`](frontend/README.md);
