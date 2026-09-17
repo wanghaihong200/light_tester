@@ -82,14 +82,22 @@ const durationText = computed(() => {
   return sec < 60 ? `${sec.toFixed(0)} 秒` : `${(sec / 60).toFixed(1)} 分钟`
 })
 
+// ui 未执行行分组头:file_path 转 pytest junit classname 惯例(slash→点号、去 .py 尾),
+// 与同文件已执行行(同一 junit class_name)并成一组;空/缺失回落 '-'(计划17 修复环 R1)
+function uiSkippedClass(file_path: string): string {
+  return file_path ? file_path.replace(/\/+/g, '.').replace(/\.py$/, '') : '-'
+}
+
 // 报告行 = Jenkins 产物行 + 快照 skipped 行(未执行标注,ADR-0012 决策 4 的「报告标注」出口)
 const caseRows = computed<CaseRow[]>(() => {
   if (!run.value) return []
   const skippedRows = (run.value.selection ?? [])
     .filter((s) => s.skipped)
     .map((s): CaseRow => ({
-      class_name: 'name' in s ? s.name : s.ref,  // 判别键用必需的 name(ref? 可选无法窄化,vue-tsc TS2339)
-      name: 'method' in s ? s.method : '脚本',
+      // 计划17 nodeid 快照(修复环 R1):ui 项={file_path, function}——分组头=文件转点号、行名=函数名;
+      // api 项={ref, class_name, method} 维持原样(s.ref 可选的 TS2322 为既有问题,单独立轮)
+      class_name: 'file_path' in s ? uiSkippedClass(s.file_path) : s.ref,
+      name: 'file_path' in s ? (s.function || '-') : s.method,
       status: 'not_run',
       time_s: 0,
       message: s.skip_reason === 'stale' ? '未执行 · 注册表已失效(标 stale)' : '未执行 · 仓内导出文件缺失',

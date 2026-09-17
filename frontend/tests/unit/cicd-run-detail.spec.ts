@@ -128,4 +128,26 @@ describe('RunDetailPage', () => {
     expect(w.text()).toContain('定位「dd」命中 1 处')
     expect(w.find('mark.cur').text()).toBe('dd')
   })
+
+  it('ui 未执行行(计划17 nodeid 快照):分组头=文件转 junit 点号惯例并入同文件已执行行,行名=函数名', async () => {
+    api.getCiRun.mockClear()
+    api.getCiRunConsole.mockClear()
+    // ui run:同文件一函数已执行、一函数 stale 未执行(快照为 nodeid 键名 {file_path, function})
+    api.getCiRun.mockResolvedValue({
+      ...TERMINAL,
+      kind: 'ui' as const,
+      selection: [{ file_path: 'tests/test_login.py', function: 'test_stale', skipped: true, skip_reason: 'stale' }],
+      results: [
+        { class_name: 'tests.test_login', name: 'test_ok', status: 'passed', time_s: 0.2, message: null },
+      ],
+    })
+    api.getCiRunConsole.mockResolvedValue('$ python -m pytest tests/test_login.py::test_stale --junitxml=report.xml\n')
+    const w = mount(RunDetailPage, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(w.text()).toContain('未执行')  // skipped 快照行标注仍在
+    expect(w.text()).toContain('test_login')  // 分组头=文件名段(file_path 转 junit classname 点号惯例)
+    expect(w.text()).toContain('test_stale')  // 行名=函数名(不再退化「脚本」)
+    expect(w.text()).not.toContain('(未分类)')  // 不再落 CaseTree 未分类兜底
+    expect(w.text()).not.toContain('脚本')
+  })
 })
