@@ -36,6 +36,8 @@ describe('api/cicd', () => {
   it('deletePlan 与 SSE 地址', async () => {
     await deletePlan(9)
     expect(calls[0].path).toBe('/ci-plans/9')
-    expect(ciRunEventsUrl(5)).toBe('/ci-runs/5/events')
+    // 裸 EventSource 不走 http 客户端(无 /api baseURL),必须自带 /api 前缀——
+    // 缺前缀时 vite 不代理,EventSource 404,详情页 console 全空(2026-09-17 冒烟缺陷)
+    expect(ciRunEventsUrl(5)).toBe('/api/ci-runs/5/events')
   })
 })

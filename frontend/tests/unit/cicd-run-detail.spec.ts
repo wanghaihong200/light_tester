@@ -54,6 +54,9 @@ describe('RunDetailPage', () => {
     FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'log', text: 'ERROR: auth failed for origin' }) })
     await flushPromises()
     expect(w.find('.console').text()).toContain('ERROR: auth failed for origin')
+    FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'snapshot', status: 'success' }) })
+    await flushPromises()
+    expect(FakeEventSource.last!.closed).toBe(true)  // 收到快照必须收流:否则 EventSource 自动重连循环回放尾部
   })
 
   it('活跃:开 SSE,log 事件追加日志,done 重拉结果', async () => {

@@ -106,11 +106,16 @@ function openStream(): void {
       scrollBottom()
     } else if (d.type === 'status') {
       if (run.value && d.status) run.value.status = d.status
+    } else if (d.type === 'snapshot') {
+      // 终态流:尾部+快照即止。不显式关流会被 EventSource 视为断线自动重连,每轮回放一遍尾部
+      es?.close()
+      es = null
     } else if (d.type === 'done') {
       es?.close()
       es = null
       if (run.value && d.status) run.value.status = d.status
-      void load()  // done 后整跑重拉:results/统计就位
+      // done 后只刷统计不开新流:直播期间 logText 已含完整日志,重开会回放尾部造成重叠
+      void getCiRun(Number(route.params.runId)).then((fresh) => { run.value = fresh })
     }
   }
 }

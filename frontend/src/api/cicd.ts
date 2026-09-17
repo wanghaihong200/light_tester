@@ -108,7 +108,7 @@ export const getCiRun = (id: number) => http.get<CiRun>(`/ci-runs/${id}`)
 export const stopCiRun = (id: number) => http.post<CiRun>(`/ci-runs/${id}/stop`)
 export const rerunCiRun = (id: number) => http.post<CiRun>(`/ci-runs/${id}/rerun`)
 // 配合 client.withSseToken 使用(裸 EventSource 带不了 Authorization,后端认 ?token=)
-export const ciRunEventsUrl = (id: number) => `/ci-runs/${id}/events`
+export const ciRunEventsUrl = (id: number) => `/api/ci-runs/${id}/events`
 
 export interface JenkinsCfg {
   base_url: string
