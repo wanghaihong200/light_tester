@@ -4,7 +4,7 @@ import json as _json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -251,6 +251,16 @@ def get_run(run_id: int, db: Session = Depends(get_db),
     return _get_run(db, run_id, current)
 
 
+@router.get("/ci-runs/{run_id}/console")
+def get_run_console(run_id: int, db: Session = Depends(get_db),
+                    current: User = Depends(get_current_user)):
+    """全量 console 日志(text/plain,无截断);尚无日志文件(排队中/无产物)返回空串。"""
+    run = _get_run(db, run_id, current)
+    log_path = settings.ci_data_dir / "runs" / str(run.id) / "console.log"
+    text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+    return Response(text, media_type="text/plain; charset=utf-8")
+
+
 def _sse(event: dict) -> str:
     return f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
 
@@ -258,7 +268,8 @@ def _sse(event: dict) -> str:
 @router.get("/ci-runs/{run_id}/events")
 async def run_events(run_id: int, db: Session = Depends(get_db),
                      current: User = Depends(get_current_user_sse)):
-    """SSE 直播:先 status 快照 + 日志尾部回放(≤8KB),再持续推增量到 done/error 断流。"""
+    """SSE 直播:status 快照起步,持续推增量到 done/error 断流(终态只发 snapshot 即关)。
+    console 全量归 REST /console 端点,SSE 不回放日志(防尾部重复/不完整,2026-09-17 详情页改版)。"""
     run = _get_run(db, run_id, current)
     key = f"ci_{run.id}"
     queue = bus.subscribe(key)
@@ -269,12 +280,6 @@ async def run_events(run_id: int, db: Session = Depends(get_db),
     async def stream():
         try:
             yield _sse({"type": "status", "status": run.status})
-            # 尾部回放对终态同样生效:console 已落盘,事后打开详情不能是空白(2026-09-17 冒烟缺陷)
-            log_path = settings.ci_data_dir / "runs" / str(run.id) / "console.log"
-            if log_path.exists():
-                tail = log_path.read_bytes()[-8192:]
-                if tail:
-                    yield _sse({"type": "log", "text": tail.decode("utf-8", "replace")})
             if run.status in ("success", "failure", "aborted", "error"):
                 yield _sse({"type": "snapshot", **snapshot})
                 return

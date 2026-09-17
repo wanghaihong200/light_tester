@@ -55,18 +55,13 @@ def env16(tmp_path, monkeypatch, db_session):
     return {"project_id": proj.id, "plan_id": plan.id, "run": run}
 
 
-def test_sse_terminal_snapshot(client, db_session, make_user, monkeypatch):
-    from app.config import settings
-
+def test_sse_terminal_snapshot(client, db_session, make_user):
+    """终态 SSE 只发 status+snapshot;console 全量改由 REST /console 端点提供,
+    SSE 不再回放日志(根治尾部重复与不完整两类问题,2026-09-17 详情页改版)。"""
     proj = Project(name="sse")
     db_session.add(proj)
     db_session.commit()
     run = _mk_run(db_session, project_id=proj.id)
-    # 完成态也必须回放 console 尾部:数据已在盘上,详情页打开不能是空白(2026-09-17 冒烟缺陷)
-    d = settings.ci_data_dir / "runs" / str(run.id)
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "console.log").write_text("Started by user hi\nERROR: auth failed for origin\n",
-                                   encoding="utf-8")
     h = _auth(client, db_session, make_user, "ssev", project_ids=[proj.id], role="viewer")
     token = h["Authorization"].split(" ")[1]
     with client.stream("GET", f"/api/ci-runs/{run.id}/events?token={token}") as r:
@@ -74,8 +69,37 @@ def test_sse_terminal_snapshot(client, db_session, make_user, monkeypatch):
         body = b"".join(r.iter_bytes()).decode()
     assert '"type": "status"' in body or '"type":"status"' in body
     assert '"type": "snapshot"' in body or '"type":"snapshot"' in body
-    assert "auth failed for origin" in body  # 日志尾部已回放
-    assert body.index('"type": "log"') < body.index('"type": "snapshot"')  # 尾部在快照前
+    assert '"type": "log"' not in body  # 日志归 REST,直播帧只在活跃期出现
+
+
+def test_console_endpoint_full_log(client, db_session, make_user, monkeypatch):
+    """全量日志端点:终态 run 详情页经 REST 拉完整 console.log(不再受 8KB 尾部限制)。"""
+    from app.config import settings
+
+    proj = Project(name="clog")
+    db_session.add(proj)
+    db_session.commit()
+    run = _mk_run(db_session, project_id=proj.id, status="success")
+    d = settings.ci_data_dir / "runs" / str(run.id)
+    d.mkdir(parents=True, exist_ok=True)
+    content = "Started by user hi\n" + ("[Pipeline] line\n" * 2000) + "Finished: SUCCESS\n"
+    (d / "console.log").write_text(content, encoding="utf-8")
+    h = _auth(client, db_session, make_user, "clogv", project_ids=[proj.id], role="viewer")
+    r = client.get(f"/api/ci-runs/{run.id}/console", headers=h)
+    assert r.status_code == 200
+    assert r.text == content  # 全量,无截断
+    assert "text/plain" in r.headers["content-type"]
+
+
+def test_console_endpoint_missing_file_returns_empty(client, db_session, make_user):
+    proj = Project(name="clog2")
+    db_session.add(proj)
+    db_session.commit()
+    run = _mk_run(db_session, project_id=proj.id, status="queued")  # 尚无日志文件
+    h = _auth(client, db_session, make_user, "clog2v", project_ids=[proj.id], role="viewer")
+    r = client.get(f"/api/ci-runs/{run.id}/console", headers=h)
+    assert r.status_code == 200
+    assert r.text == ""
 
 
 def test_stop_running_run(client, db_session, make_user, fake_jenkins, monkeypatched_client):

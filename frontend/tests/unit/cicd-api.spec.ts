@@ -6,6 +6,7 @@ vi.mock('../../src/api/client', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../src/api/client')>()
   return {
     ...orig,
+    getText: vi.fn(async (path: string) => { calls.push({ path }); return 'TEXT' }),
     http: {
       ...orig.http,
       get: vi.fn(async (path: string) => { calls.push({ path }); return { ok: true, path } }),
@@ -16,7 +17,7 @@ vi.mock('../../src/api/client', async (importOriginal) => {
   }
 })
 
-import { preflight, triggerRuns, ciRunEventsUrl, deletePlan } from '../../src/api/cicd'
+import { preflight, triggerRuns, ciRunEventsUrl, deletePlan, getCiRunConsole } from '../../src/api/cicd'
 
 describe('api/cicd', () => {
   afterEach(() => { calls.length = 0 })
@@ -39,5 +40,10 @@ describe('api/cicd', () => {
     // 裸 EventSource 不走 http 客户端(无 /api baseURL),必须自带 /api 前缀——
     // 缺前缀时 vite 不代理,EventSource 404,详情页 console 全空(2026-09-17 冒烟缺陷)
     expect(ciRunEventsUrl(5)).toBe('/api/ci-runs/5/events')
+  })
+
+  it('console 全量日志走 getText 的 /ci-runs/{id}/console(/api 前缀由 client.getText 统一补)', async () => {
+    await getCiRunConsole(7)
+    expect(calls.at(-1)?.path).toBe('/ci-runs/7/console')
   })
 })

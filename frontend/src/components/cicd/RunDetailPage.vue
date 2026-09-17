@@ -23,23 +23,21 @@
       <div class="stat" v-if="run.error"><span class="err">{{ run.error }}</span></div>
     </div>
 
-    <el-table v-if="run" :data="caseRows" size="small" class="cases">
-      <el-table-column prop="class_name" label="测试类" min-width="220" show-overflow-tooltip />
-      <el-table-column prop="name" label="用例/方法" min-width="160" />
-      <el-table-column label="状态" width="110">
-        <template #default="{ row }">
-          <el-tag size="small" :type="row.status === 'passed' ? 'success' : row.status === 'failed' ? 'danger' : 'info'">
-            {{ ROW_LABEL[row.status] ?? row.status }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="耗时(s)" width="90">
-        <template #default="{ row }">{{ row.skipped_note ? '-' : row.time_s }}</template>
-      </el-table-column>
-      <el-table-column prop="message" label="失败信息" min-width="200" show-overflow-tooltip />
-    </el-table>
+    <div v-if="run" class="cases-wrap">
+      <CaseTree :rows="caseRows" @locate="onLocate" />
+    </div>
 
-    <pre v-if="run" class="console" ref="consoleEl">{{ logText }}</pre>
+    <div class="console-head">
+      <span class="console-title">执行日志</span>
+      <span v-if="search" class="locate-info">定位「{{ search }}」命中 {{ matches.length }} 处</span>
+      <el-button v-if="search" link size="small" @click="clearLocate">清除定位</el-button>
+      <el-button class="full-btn" size="small" @click="fullLogVisible = true">全量日志</el-button>
+    </div>
+    <pre v-if="run" class="console" ref="consoleEl" v-html="consoleHtml"></pre>
+
+    <el-dialog v-model="fullLogVisible" title="全量日志" width="80%" top="4vh" destroy-on-close>
+      <pre class="log-full">{{ logText }}</pre>
+    </el-dialog>
   </div>
 </template>
 
@@ -47,9 +45,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ciRunEventsUrl, getCiRun, rerunCiRun, stopCiRun } from '../../api/cicd'
-import type { CiRun } from '../../api/cicd'
+import { ciRunEventsUrl, getCiRun, getCiRunConsole, rerunCiRun, stopCiRun } from '../../api/cicd'
+import type { CiCaseRow, CiRun } from '../../api/cicd'
 import { withSseToken } from '../../api/client'
+import CaseTree from './CaseTree.vue'
+import type { CaseRow } from './CaseTree.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -60,38 +60,104 @@ const TAG: Record<string, 'info' | 'primary' | 'success' | 'danger' | 'warning'>
 const STATUS_LABEL: Record<string, string> = {
   queued: '排队中', running: '执行中', success: '成功', failure: '失败', aborted: '已终止', error: '异常',
 }
-const ROW_LABEL: Record<string, string> = { passed: '通过', failed: '失败', skipped: '跳过', not_run: '未执行' }
 
 const run = ref<CiRun | null>(null)
 const logText = ref('')
 const consoleEl = ref<HTMLElement | null>(null)
+const fullLogVisible = ref(false)
+const search = ref('')
+const curMatch = ref(0)
 let es: EventSource | null = null
 
 const isActive = computed(() => run.value?.status === 'queued' || run.value?.status === 'running')
 
 // 报告行 = Jenkins 产物行 + 快照 skipped 行(未执行标注,ADR-0012 决策 4 的「报告标注」出口)
-const caseRows = computed(() => {
+const caseRows = computed<CaseRow[]>(() => {
   if (!run.value) return []
   const skippedRows = (run.value.selection ?? [])
     .filter((s) => s.skipped)
-    .map((s) => ({
+    .map((s): CaseRow => ({
       class_name: 'name' in s ? s.name : s.ref,  // 判别键用必需的 name(ref? 可选无法窄化,vue-tsc TS2339)
       name: 'method' in s ? s.method : '脚本',
       status: 'not_run',
       time_s: 0,
-      message: s.skip_reason === 'stale' ? '注册表已失效(标 stale)' : '仓内导出文件缺失',
+      message: s.skip_reason === 'stale' ? '未执行 · 注册表已失效(标 stale)' : '未执行 · 仓内导出文件缺失',
       skipped_note: true,
     }))
   return [...(run.value.results ?? []), ...skippedRows]
 })
 
-function scrollBottom(): void {
-  void nextTick(() => { if (consoleEl.value) consoleEl.value.scrollTop = consoleEl.value.scrollHeight })
+// ── 日志定位:命中处 <mark> 高亮,点击同用例循环跳下一条 ──
+
+const matches = computed<number[]>(() => {
+  const text = logText.value
+  const needle = search.value
+  if (!needle) return []
+  const out: number[] = []
+  let pos = 0
+  while ((pos = text.indexOf(needle, pos)) !== -1) {
+    out.push(pos)
+    pos += needle.length
+  }
+  return out
+})
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+const consoleHtml = computed(() => {
+  const text = logText.value
+  const hits = matches.value
+  if (!search.value || !hits.length) return escapeHtml(text)
+  const parts: string[] = []
+  let pos = 0
+  hits.forEach((idx, i) => {
+    parts.push(escapeHtml(text.slice(pos, idx)))
+    const seg = escapeHtml(text.slice(idx, idx + search.value.length))
+    parts.push(i === curMatch.value
+      ? `<mark class="cur" data-i="${i}">${seg}</mark>`
+      : `<mark data-i="${i}">${seg}</mark>`)
+    pos = idx + search.value.length
+  })
+  parts.push(escapeHtml(text.slice(pos)))
+  return parts.join('')
+})
+
+function onLocate(row: CiCaseRow): void {
+  if (!logText.value) {
+    ElMessage.info('日志为空,暂无可定位内容')
+    return
+  }
+  if (search.value !== row.name) {
+    search.value = row.name
+    curMatch.value = 0
+    if (!matches.value.length) {
+      ElMessage.info('日志中没有该用例的独立输出片段(测试框架未逐用例输出)')
+      return
+    }
+  } else {
+    if (!matches.value.length) return
+    curMatch.value = (curMatch.value + 1) % matches.value.length  // 循环跳下一条
+  }
+  void nextTick(() => {
+    consoleEl.value?.querySelector('mark.cur')?.scrollIntoView({ block: 'center' })
+  })
+}
+
+function clearLocate(): void {
+  search.value = ''
+  curMatch.value = 0
+}
+
+// ── 加载与直播 ──
+
 async function load(): Promise<void> {
-  run.value = await getCiRun(Number(route.params.runId))
-  openStream()  // 终态也开:后端回放 console 尾部+快照后即断流,事后打开详情不空白
+  const runId = Number(route.params.runId)
+  run.value = await getCiRun(runId)
+  // 全量日志走 REST;SSE 只负责活跃期增量直播(不再回放尾部,防重复/不完整)
+  logText.value = await getCiRunConsole(runId)
+  openStream()
 }
 
 function openStream(): void {
@@ -103,21 +169,28 @@ function openStream(): void {
     const d = JSON.parse(e.data) as { type: string; text?: string; status?: CiRun['status'] }
     if (d.type === 'log') {
       logText.value += d.text ?? ''
-      scrollBottom()
+      void nextTick(() => { if (consoleEl.value) consoleEl.value.scrollTop = consoleEl.value.scrollHeight })
     } else if (d.type === 'status') {
       if (run.value && d.status) run.value.status = d.status
     } else if (d.type === 'snapshot') {
-      // 终态流:尾部+快照即止。不显式关流会被 EventSource 视为断线自动重连,每轮回放一遍尾部
+      // 终态流:快照即止。不显式关流会被 EventSource 视为断线自动重连,反复拉流
       es?.close()
       es = null
     } else if (d.type === 'done') {
       es?.close()
       es = null
       if (run.value && d.status) run.value.status = d.status
-      // done 后只刷统计不开新流:直播期间 logText 已含完整日志,重开会回放尾部造成重叠
-      void getCiRun(Number(route.params.runId)).then((fresh) => { run.value = fresh })
+      // 终态落定:统计与全量日志一并重拉(REST 全量替换,直播文本与落盘日志完全对齐)
+      void reload()
     }
   }
+}
+
+async function reload(): Promise<void> {
+  const runId = Number(route.params.runId)
+  const [fresh, consoleText] = await Promise.all([getCiRun(runId), getCiRunConsole(runId)])
+  run.value = fresh
+  logText.value = consoleText
 }
 
 async function doStop(): Promise<void> {
@@ -133,6 +206,7 @@ async function doRerun(): Promise<void> {
   es = null
   await router.replace({ name: 'project-cicd-run-detail', params: { runId: String(fresh.id) } })  // 等路由生效,load 才拉到新 runId
   logText.value = ''
+  search.value = ''
   await load()
 }
 
@@ -141,16 +215,27 @@ onBeforeUnmount(() => { es?.close() })
 </script>
 
 <style scoped>
-.run-detail { padding: 16px 20px; }
+/* 壳(.panel-body)已把本组件限高:整页纵向 flex,用例树与日志区各自内滚,不再溢出底部白框 */
+.run-detail { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 16px 20px; }
 .header { align-items: center; display: flex; gap: 12px; margin-bottom: 12px; }
 .header h2 { font-size: 18px; margin: 0; }
 .actions { display: flex; gap: 8px; margin-left: auto; }
-.summary { display: flex; gap: 24px; margin-bottom: 14px; }
+.summary { display: flex; gap: 24px; margin-bottom: 12px; }
 .stat { display: flex; flex-direction: column; }
 .stat .num { font-size: 20px; font-weight: 700; }
 .stat .lbl { color: var(--pro-muted); font-size: 12px; }
 .stat.pass .num { color: var(--el-color-success); }
 .stat.fail .num { color: var(--el-color-danger); }
-.console { background: #0d1117; color: #c9d1d9; font-size: 12px; height: 320px;
-  margin-top: 14px; overflow: auto; padding: 10px; white-space: pre-wrap; }
+.cases-wrap { border: 1px solid var(--el-border-color-lighter); border-radius: 6px;
+  flex: 1 1 auto; margin-top: 4px; min-height: 120px; overflow: auto; padding: 6px; }
+.console-head { align-items: center; display: flex; gap: 10px; margin-top: 10px; }
+.console-title { font-size: 13px; font-weight: 600; }
+.locate-info { color: var(--el-color-primary); font-size: 12px; }
+.full-btn { margin-left: auto; }
+.console { background: #0d1117; color: #c9d1d9; flex: 0 0 280px; font-size: 12px;
+  margin-top: 6px; overflow: auto; padding: 10px; white-space: pre-wrap; }
+.console :deep(mark) { background: rgba(210, 153, 34, 0.45); color: inherit; }
+.console :deep(mark.cur) { background: var(--el-color-primary); color: #fff; }
+.log-full { background: #0d1117; color: #c9d1d9; font-size: 12px; height: 70vh;
+  margin: 0; overflow: auto; padding: 10px; white-space: pre-wrap; }
 </style>

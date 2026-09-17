@@ -69,6 +69,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 // ── 直连资源鉴权:后端全端点 401 门禁后,浏览器原生 img/a/window.open 带不了 Authorization 头 ──
 
+// 文本类资源(CI console 日志等):fetch → text;错误语义与 request() 一致
+export async function getText(path: string): Promise<string> {
+  const res = await fetch(BASE + path, { headers: authHeaders() })
+  throwOn401(res)
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`)
+  return res.text()
+}
+
 // 内联展示类资源(如执行截图):fetch → blob → objectURL,由调用方在组件卸载时 revoke
 export async function fetchBlobUrl(path: string): Promise<string> {
   const res = await fetch(BASE + path, { headers: authHeaders() })

@@ -459,7 +459,7 @@ curl -X POST http://127.0.0.1:8000/api/projects/1/perf-records/import \
 ```
 
 - **快照缺失标注**:触发时对勾选项逐一核对仓内物料,已不存在的标 `skipped:true` + `skip_reason`(`stale`=注册表已无此方法 / `file_missing`=ui 脚本导出文件不在工作区)——警告列出、可继续、报告页标注「未执行」。
-- **SSE 事件流** `GET /api/ci-runs/{run_id}/events`(鉴权同 jobs 事件流,Bearer 或 `?token=`):连上先 `status`(当前状态);活跃 run 补发日志尾部回放(≤8KB)一条 `log`,再持续转发轮询增量(`log` 文本块 / `status`→running),收到 `done`(带终态 status)或 `error` 后断流;**已终态连上即收 `status`+`snapshot`(status/total/passed/failed/skipped/results/error)后关流**。
+- **SSE 事件流** `GET /api/ci-runs/{run_id}/events`(鉴权同 jobs 事件流,Bearer 或 `?token=`):连上先 `status`(当前状态);活跃 run 持续转发轮询增量(`log` 文本块 / `status`→running),收到 `done`(带终态 status)或 `error` 后断流;**已终态连上即收 `status`+`snapshot`(status/total/passed/failed/skipped/results/error)后关流**。console 全量日志不走 SSE,经 `GET /api/ci-runs/{run_id}/console` 拉取。
 - **权限**:计划/注册表/执行记录读=viewer;扫描、计划增删改、触发/停止/重跑=editor;Jenkins 连接三端点=**仅 admin**(403 `仅管理员可配置 Jenkins 连接`)。
 
 **执行计划**(editor 写 / viewer 读;选择集合 ui 项=`{script_id, name}`(落库补 `file=test_{slug}.py`)/ api 项=`{class_name, method}`(落库补 `ref={class}#{method}`))
@@ -487,6 +487,7 @@ curl -X POST http://127.0.0.1:8000/api/projects/1/perf-records/import \
 | GET | `/api/projects/{id}/ci-runs` | 执行记录列表(id 倒序,近 100 条) |
 | GET | `/api/ci-runs/{run_id}` | 执行详情(CiRunOut:id/project_id/plan_id/plan_name/kind/branch/selection 快照/status/jenkins_job/build_number/jenkins_url/total/passed/failed/skipped/results(逐用例含 skip_reason)/console_bytes/freshness/error/started_at/finished_at/created_at/created_by) |
 | GET | `/api/ci-runs/{run_id}/events` | **SSE 直播**(事件类型与断流语义见上) |
+| GET | `/api/ci-runs/{run_id}/console` | **全量 console 日志**(text/plain,无截断;排队中/尚无日志返回空串;权限同执行详情) |
 | POST | `/api/ci-runs/{run_id}/stop` | 停止:Jenkins 侧 abort build(已落 build_number 时)+ 平台置 `aborted` 广播 done;非 queued/running 400 `该执行已结束,无需停止`;未配连接 400;Jenkins 停止失败 502 |
 | POST | `/api/ci-runs/{run_id}/rerun` | 重跑(201,新 CiRun):按原计划再触发,**confirm_stale=True(不过新鲜度门)**;原计划已删 400 `原计划已删除,无法重跑` |
 

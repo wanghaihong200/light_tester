@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   getCiRun: vi.fn(),
+  getCiRunConsole: vi.fn(),
   stopCiRun: vi.fn(),
   rerunCiRun: vi.fn(),
   ciRunEventsUrl: vi.fn((id: number) => `/ci-runs/${id}/events`),
@@ -42,36 +43,62 @@ const TERMINAL = {
 }
 
 describe('RunDetailPage', () => {
-  it('终态:渲染汇总/用例行/快照 skipped 标注/外链,开 SSE 回放日志尾部', async () => {
+  it('终态:REST 拉全量日志渲染 console;开 SSE 只收 status+snapshot 后收流', async () => {
     api.getCiRun.mockResolvedValue(TERMINAL)
+    api.getCiRunConsole.mockResolvedValue('Started by user hi\nERROR: auth failed for origin\nFULL')
     const w = mount(RunDetailPage, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     expect(w.text()).toContain('接口回归')
     expect(w.text()).toContain('assert 1 == 2')
-    expect(w.text()).toContain('未执行');  // skipped 快照行
-    expect(w.text()).toContain('com.x.A#dead')
-    expect(FakeEventSource.last).not.toBeNull()  // 终态也开流:后端回放 console 尾部+快照即关(2026-09-17 冒烟缺陷)
-    FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'log', text: 'ERROR: auth failed for origin' }) })
-    await flushPromises()
-    expect(w.find('.console').text()).toContain('ERROR: auth failed for origin')
+    expect(w.text()).toContain('未执行')  // skipped 快照行(标注并入 message)
+    expect(w.text()).toContain('A#dead')  // api 类 skipped 行的类组短名(完整 ref 在 title tooltip)
+    expect(w.find('.console').text()).toContain('FULL')  // 全量日志来自 REST
+    expect(FakeEventSource.last).not.toBeNull()  // 终态仍开流(status+snapshot 即关)
     FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'snapshot', status: 'success' }) })
     await flushPromises()
-    expect(FakeEventSource.last!.closed).toBe(true)  // 收到快照必须收流:否则 EventSource 自动重连循环回放尾部
+    expect(FakeEventSource.last!.closed).toBe(true)  // 快照后必须收流,防自动重连循环
   })
 
-  it('活跃:开 SSE,log 事件追加日志,done 重拉结果', async () => {
-    api.getCiRun.mockClear()  // hoisted mock 跨用例累积调用,绝对计数须先清(同 T19 惯例)
+  it('活跃:开 SSE,log 事件追加直播日志,done 后全量重拉 console 为替换不叠加', async () => {
+    api.getCiRun.mockClear()
+    api.getCiRunConsole.mockClear()
     api.getCiRun.mockResolvedValueOnce({ ...TERMINAL, status: 'running', results: null, total: 0, passed: 0, failed: 0 })
     api.getCiRun.mockResolvedValueOnce(TERMINAL)
+    api.getCiRunConsole.mockResolvedValueOnce('live-so-far\n')
+    api.getCiRunConsole.mockResolvedValueOnce('live-so-far\nFinished: SUCCESS\n')
     const w = mount(RunDetailPage, { global: { plugins: [ElementPlus] } })
     await flushPromises()
     expect(FakeEventSource.last).not.toBeNull()
-    FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'log', text: 'hello build' }) })
+    FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'log', text: 'hello build\n' }) })
     await flushPromises()
     expect(w.find('.console').text()).toContain('hello build')
     FakeEventSource.last!.onmessage?.({ data: JSON.stringify({ type: 'done', status: 'success' }) })
     await flushPromises()
     expect(api.getCiRun).toHaveBeenCalledTimes(2)
+    expect(api.getCiRunConsole).toHaveBeenCalledTimes(2)
     expect((w.vm as unknown as { run: { status: string } }).run.status).toBe('success')
+    // done 后 REST 全量替换:直播拼接文本被完整日志覆盖,不产生重叠
+    expect(w.find('.console').text()).toContain('Finished: SUCCESS')
+    expect(w.find('.console').text()).not.toContain('hello build')
+  })
+
+  it('点击用例定位:console 内命中高亮,重复点击循环', async () => {
+    api.getCiRun.mockClear()
+    api.getCiRunConsole.mockClear()
+    api.getCiRun.mockResolvedValue(TERMINAL)
+    api.getCiRunConsole.mockResolvedValue('start\nbad1 line A\nmid\nbad1 line B\nend\n')
+    const w = mount(RunDetailPage, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    const leaf = w.findAll('.row.leaf').find((r) => r.text().includes('bad1'))
+    await leaf!.trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('命中 2 处')
+    expect(w.find('.console').html()).toContain('<mark')
+    // 再点一次 → 循环到下一条
+    await leaf!.trigger('click')
+    await flushPromises()
+    const cur = w.find('mark.cur')
+    expect(cur.exists()).toBe(true)
+    expect(cur.text()).toBe('bad1')
   })
 })

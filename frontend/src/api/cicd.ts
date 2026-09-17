@@ -1,5 +1,5 @@
 // frontend/src/api/cicd.ts
-import { http } from './client'
+import { http, getText } from './client'
 
 export type PlanKind = 'ui' | 'api'
 
@@ -109,6 +109,8 @@ export const stopCiRun = (id: number) => http.post<CiRun>(`/ci-runs/${id}/stop`)
 export const rerunCiRun = (id: number) => http.post<CiRun>(`/ci-runs/${id}/rerun`)
 // 配合 client.withSseToken 使用(裸 EventSource 带不了 Authorization,后端认 ?token=)
 export const ciRunEventsUrl = (id: number) => `/api/ci-runs/${id}/events`
+// 全量 console 日志(text/plain,无截断);直播增量仍走 SSE
+export const getCiRunConsole = (id: number) => getText(`/ci-runs/${id}/console`)
 
 export interface JenkinsCfg {
   base_url: string
