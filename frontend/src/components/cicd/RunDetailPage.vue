@@ -100,7 +100,7 @@ const caseRows = computed<CaseRow[]>(() => {
       name: 'file_path' in s ? (s.function || '-') : s.method,
       status: 'not_run',
       time_s: 0,
-      message: s.skip_reason === 'stale' ? '未执行 · 注册表已失效(标 stale)' : '未执行 · 仓内导出文件缺失',
+      message: s.skip_reason === 'stale' ? '未执行 · 注册表已失效(标 stale)' : '未执行 · 仓内用例文件缺失',
       skipped_note: true,
     }))
   return [...(run.value.results ?? []), ...skippedRows]

@@ -63,7 +63,7 @@ def scan_workspace(ws: Path) -> list[dict]:
             continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-        except SyntaxError:
+        except (SyntaxError, ValueError):  # ValueError=null byte(py3.11-;3.12+ 改抛 SyntaxError)
             continue
         file_marks = _file_markers(tree)
         for node in tree.body:

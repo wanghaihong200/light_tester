@@ -4,3 +4,6 @@ ALTER TABLE interface_cases
   ADD COLUMN case_type VARCHAR(8) NOT NULL DEFAULT 'api' COMMENT '用例域:api(接口方法)/web(pytest 函数)' AFTER method,
   ADD COLUMN title VARCHAR(500) NULL DEFAULT NULL COMMENT '用例标题快照(web=docstring 首行;api 为空)' AFTER framework,
   ADD COLUMN markers JSON NULL DEFAULT NULL COMMENT '仓侧标记只读快照(web=@pytest.mark 展示串;api 为空)' AFTER title;
+
+-- 终审修复波:回填存量 NULL 行(markers 声明为可空后序列化已兼容,此处统一为空数组消除歧义)
+UPDATE interface_cases SET markers = JSON_ARRAY() WHERE markers IS NULL;

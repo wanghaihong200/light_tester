@@ -86,6 +86,20 @@ def test_skips_venv_hidden_and_unparsable(tmp_path):
     assert got == ["test_nested"]
 
 
+def test_null_byte_file_skipped_not_crash(tmp_path):
+    """终审修复波:含 \\x00 的文件 ast.parse 抛异常,扫描必须跳过不炸。
+
+    py3.12+ 对 null byte 抛 SyntaxError,py3.11- 抛 ValueError——
+    两个都要接住(防回归钉:本机 3.12 改前已不炸,fix 护住旧解释器)。
+    """
+    _mk(tmp_path, "tests/test_good.py", "def test_good():\n    pass\n")
+    bad = tmp_path / "tests" / "test_null.py"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_bytes(b"def test_x():\n    pass\n\x00")
+    got = [c["method"] for c in scan_workspace(tmp_path)]
+    assert got == ["test_good"]  # 坏文件跳过,好文件照常入册
+
+
 def test_duplicate_def_deduped(tmp_path):
     _mk(tmp_path, "tests/test_dup.py", "def test_same():\n    pass\n\ndef test_same():\n    pass\n")
     got = scan_workspace(tmp_path)

@@ -82,3 +82,19 @@ def test_interface_case_web_columns(db_session):
     db_session.expire_all()
     got = db_session.get(InterfaceCase, api_row.id)
     assert got.case_type == "api" and got.title is None and (got.markers or []) == []
+
+
+def test_interface_case_out_tolerates_markers_none():
+    """终审修复波:存量行 markers=NULL 时 Out 序列化不得抛。
+
+    pydantic v2 的字段默认值只在属性缺失时生效,显式 None 仍走校验——
+    markers 必须声明为 `list[str] | None`,否则迁移回填前存量 NULL 行
+    会让 GET /interface-cases 直接 ValidationError(500)。
+    """
+    from app.schemas import InterfaceCaseOut
+
+    row = InterfaceCase(id=1, project_id=1, branch="main", class_name="tests/test_a.py",
+                        method="test_x", status="active", framework="pytest",
+                        case_type="web", markers=None)
+    out = InterfaceCaseOut.model_validate(row)  # 改前:markers 收到 None 抛 ValidationError
+    assert out.markers is None

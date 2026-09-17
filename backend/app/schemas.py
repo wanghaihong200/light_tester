@@ -395,7 +395,7 @@ class InterfaceCaseOut(BaseModel):
     method: str
     case_type: str = "api"
     title: str | None = None
-    markers: list[str] = []
+    markers: list[str] | None = None  # 存量行 NULL(迁移回填前);pydantic v2 默认值只救缺失不救 None
     status: str
     framework: str
     file_path: str | None
