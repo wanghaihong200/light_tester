@@ -50,6 +50,7 @@ body,
 #app {
   height: 100%;
   margin: 0;
+  overflow: hidden; /* 布局壳(100vh)外一律不滚:滚动全在 .app-content/.console 内部,防顶栏被滚动裁切 */
   font-size: 13px;
   font-family: Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
   color: var(--el-text-color-primary);

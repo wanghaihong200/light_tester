@@ -39,6 +39,16 @@ export interface Freshness {
 
 export interface CiCaseRow { class_name: string; name: string; status: string; time_s: number; message: string | null }
 
+/** 执行时长文案:<60s 秒,否则 分+秒;无开始时间(未真正开跑)为 '-' */
+export function ciRunDurationText(startedAt: string | null, finishedAt: string | null): string {
+  if (!startedAt) return '-'
+  const start = new Date(startedAt).getTime()
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now()
+  const sec = Math.max(0, (end - start) / 1000)
+  if (sec < 60) return `${Math.round(sec)} 秒`
+  return `${Math.floor(sec / 60)}分${Math.round(sec % 60)}秒`
+}
+
 export interface CiRun {
   id: number
   project_id: number
@@ -59,6 +69,7 @@ export interface CiRun {
   console_bytes: number
   error: string | null
   freshness: Freshness | null
+  started_at: string | null
   created_at: string
   finished_at: string | null
 }

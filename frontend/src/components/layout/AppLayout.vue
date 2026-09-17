@@ -59,17 +59,17 @@ function go(path: string): void {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 16px 16px;
+  padding: 0 10px 10px;
 }
 .app-footer {
   background: rgba(247, 249, 255, 0.88);
   border-top: 1px solid var(--pro-sidebar-border);
   color: var(--pro-muted);
   flex-shrink: 0;
-  font-size: 12px;
-  height: 32px;
-  line-height: 32px;
-  padding: 0 16px;
+  font-size: 11px;
+  height: 22px;
+  line-height: 22px;
+  padding: 0 12px;
   text-align: center;
 }
 </style>

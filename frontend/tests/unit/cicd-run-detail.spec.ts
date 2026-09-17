@@ -101,4 +101,31 @@ describe('RunDetailPage', () => {
     expect(cur.exists()).toBe(true)
     expect(cur.text()).toBe('bad1')
   })
+
+  it('数据驱动用例定位回退:完整名未命中时回退到去后缀方法名', async () => {
+    api.getCiRun.mockClear()
+    api.getCiRunConsole.mockClear()
+    // 日志只有 SELECTION 里的 base 方法名,无 [参数](序号) 完整名——数据驱动通过用例的典型形态
+    api.getCiRun.mockResolvedValue({
+      ...TERMINAL,
+      selection: [{ ref: 'com.x.B#dd', class_name: 'com.x.B', method: 'dd', skipped: false }],
+      results: [
+        { class_name: 'com.x.B', name: 'dd[admin](1)', status: 'passed', time_s: 0.3, message: null },
+      ],
+    })
+    api.getCiRunConsole.mockResolvedValue('mvn -Dtest=com.x.B#dd\nRunning com.x.B\n')
+    const w = mount(RunDetailPage, { global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    // 全通过类默认收起:先展开类组,再展开方法组,叶子才可见
+    await w.findAll('.case-tree .row').find((r) => r.find('.name').text() === 'B')!.trigger('click')
+    await flushPromises()
+    await w.findAll('.case-tree .row').find((r) => r.find('.name').text() === 'dd')!.trigger('click')
+    await flushPromises()
+    const leaf = w.findAll('.row.leaf').find((r) => r.text().includes('dd[admin](1)'))
+    await leaf!.trigger('click')
+    await flushPromises()
+    // 回退命中 base 名,定位条展示实际命中的文本
+    expect(w.text()).toContain('定位「dd」命中 1 处')
+    expect(w.find('mark.cur').text()).toBe('dd')
+  })
 })

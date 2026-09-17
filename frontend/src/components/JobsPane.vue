@@ -333,7 +333,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .jobs-pane {
-  padding: 16px 0;
+  padding: 8px 0;
   display: flex;
   flex-direction: column;
   gap: 16px;

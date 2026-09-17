@@ -95,7 +95,7 @@ onMounted(async () => {
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  padding: 12px 16px;
+  padding: 8px 12px;
 }
 .panel-head {
   align-items: baseline;
@@ -105,7 +105,7 @@ onMounted(async () => {
 .panel-title {
   color: var(--el-text-color-primary);
   font-size: 16px;
-  margin: 0 0 8px;
+  margin: 0 0 4px;
 }
 .panel-desc {
   color: var(--el-text-color-secondary);

@@ -2,7 +2,8 @@
 <template>
   <div class="runs-pane">
     <div class="toolbar"><h2>执行记录</h2></div>
-    <el-table :data="runs" @row-click="(row: CiRun) => goDetail(row.id)">
+    <div class="table-wrap">
+    <el-table :data="paged" @row-click="(row: CiRun) => goDetail(row.id)">
       <el-table-column prop="id" label="#" width="70" class-name="row-click" />
       <el-table-column prop="plan_name" label="计划" min-width="150" class-name="row-click" show-overflow-tooltip />
       <el-table-column label="类型" width="80" class-name="row-click">
@@ -20,6 +21,9 @@
       <el-table-column label="通过/总数" width="110" class-name="row-click">
         <template #default="{ row }">{{ row.passed }}/{{ row.total }}</template>
       </el-table-column>
+      <el-table-column label="执行时长" width="100" class-name="row-click">
+        <template #default="{ row }">{{ ciRunDurationText(row.started_at, row.finished_at) }}</template>
+      </el-table-column>
       <el-table-column prop="created_at" label="触发时间" width="180" class-name="row-click" />
       <el-table-column label="操作" width="90">
         <template #default="{ row }">
@@ -27,13 +31,25 @@
         </template>
       </el-table-column>
     </el-table>
+    </div>
+    <div class="pager">
+      <el-pagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50]"
+        :total="runs.length"
+        background
+        layout="total, sizes, prev, pager, next"
+        size="small"
+      />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { listCiRuns } from '../../api/cicd'
+import { ciRunDurationText, listCiRuns } from '../../api/cicd'
 import type { CiRun } from '../../api/cicd'
 
 const props = defineProps<{ projectId: number }>()
@@ -48,6 +64,16 @@ const STATUS_LABEL: Record<string, string> = {
 
 const runs = ref<CiRun[]>([])
 let timer: ReturnType<typeof setInterval> | null = null
+
+// 前端分页:后端一次回近 100 条,页内切片即可
+const page = ref(1)
+const pageSize = ref(10)
+const paged = computed(() => runs.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
+// 记录减少(如清库/刷新)时把页码拉回合法范围
+watch(() => runs.value.length, (len) => {
+  const maxPage = Math.max(1, Math.ceil(len / pageSize.value))
+  if (page.value > maxPage) page.value = maxPage
+})
 
 async function load(): Promise<void> {
   runs.value = await listCiRuns(props.projectId)
@@ -65,7 +91,9 @@ onUnmounted(() => { if (timer !== null) clearInterval(timer) })
 </script>
 
 <style scoped>
-.runs-pane { padding: 16px 20px; }
-.toolbar h2 { font-size: 18px; margin: 0 0 12px; }
+.runs-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 8px 12px; }
+.toolbar h2 { font-size: 18px; margin: 0 0 8px; }
+.table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .row-click { cursor: pointer; }
+.pager { display: flex; flex-shrink: 0; justify-content: flex-end; margin-top: 8px; }
 </style>

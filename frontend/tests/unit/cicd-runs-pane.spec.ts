@@ -1,10 +1,14 @@
 // frontend/tests/unit/cicd-runs-pane.spec.ts
 import { flushPromises, mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import { describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({ listCiRuns: vi.fn() }))
-vi.mock('../../src/api/cicd', () => api)
+vi.mock('../../src/api/cicd', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/api/cicd')>()),  // 保留 ciRunDurationText 等纯函数
+  listCiRuns: api.listCiRuns,
+}))
 const routerState = vi.hoisted(() => ({ push: vi.fn() }))
 vi.mock('vue-router', () => ({ useRouter: () => routerState }))
 
@@ -14,7 +18,13 @@ const RUN = {
   id: 5, project_id: 3, plan_id: 1, plan_name: '接口回归', kind: 'api' as const, branch: 'master',
   selection: [], status: 'running' as const, jenkins_job: 'light_tester_p3_api', build_number: 4,
   jenkins_url: 'http://jk/job/j/4/', total: 2, passed: 1, failed: 1, skipped: 0, results: null,
-  console_bytes: 100, error: null, freshness: null, created_at: '2026-09-16T10:00:00', finished_at: null,
+  console_bytes: 100, error: null, freshness: null,
+  started_at: '2026-09-16T10:00:10', created_at: '2026-09-16T10:00:00', finished_at: null,
+}
+
+const DONE = {
+  ...RUN, id: 6, status: 'success' as const,
+  started_at: '2026-09-16T11:00:00', finished_at: '2026-09-16T11:01:30',
 }
 
 describe('RunsPane', () => {
@@ -47,6 +57,34 @@ describe('RunsPane', () => {
     await vi.advanceTimersByTimeAsync(7000)
     expect(api.listCiRuns.mock.calls.length).toBe(calls) // 终态不再轮询
     vi.useRealTimers()
+    w.unmount()
+  })
+
+  it('时长列:90 秒的终态记录显示 1分30秒,无 started_at 显示 -', async () => {
+    api.listCiRuns.mockClear()
+    api.listCiRuns.mockResolvedValue([DONE, RUN])
+    const w = mount(RunsPane, { props: { projectId: 3 }, global: { plugins: [ElementPlus] } })
+    await flushPromises()
+    expect(w.text()).toContain('1分30秒')
+    expect(w.text()).toContain('-')
+    w.unmount()
+  })
+
+  it('分页:默认每页 10 条,超出部分进第二页', async () => {
+    api.listCiRuns.mockClear()
+    api.listCiRuns.mockResolvedValue(Array.from({ length: 12 }, (_, i) => ({ ...DONE, id: i + 1 })))
+    const w = mount(RunsPane, {
+      props: { projectId: 3 },
+      global: { plugins: [[ElementPlus, { locale: zhCn }]] },  // 与 main.ts 同 locale,分页文案才是中文
+    })
+    await flushPromises()
+    expect(w.findAll('.el-table__row')).toHaveLength(10) // 第一页只有 10 行
+    expect(w.text()).toMatch(/共\s*12\s*条/)
+    // 切到第二页 → 剩 2 行
+    const next = w.find('.el-pagination .btn-next')
+    await next.trigger('click')
+    await flushPromises()
+    expect(w.findAll('.el-table__row')).toHaveLength(2)
     w.unmount()
   })
 })

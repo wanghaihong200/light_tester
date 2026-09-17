@@ -42,6 +42,12 @@ import type { CiCaseRow } from '../../api/cicd'
 
 // 报告行 = JUnit 产物行 + 快照未执行行(skipped_note 标注);script setup 不能 export,类型放本块
 export type CaseRow = CiCaseRow & { skipped_note?: boolean }
+
+/** 方法组标签:去掉数据驱动后缀 `[参数]` 与 `(序号)`;日志定位回退也用它 */
+export function stripDataDrivenSuffix(name: string): string {
+  const base = name.replace(/\[[^\]]*\]/g, '').replace(/\(\d+\)\s*$/, '').trim()
+  return base || name
+}
 </script>
 
 <script setup lang="ts">
@@ -64,8 +70,7 @@ function worst(a: string, b: string): string {
 
 /** 方法组标签:去掉数据驱动后缀 `[参数]` 与 `(序号)` */
 function methodBase(name: string): string {
-  const base = name.replace(/\[[^\]]*\]/g, '').replace(/\(\d+\)\s*$/, '').trim()
-  return base || name
+  return stripDataDrivenSuffix(name)
 }
 
 const groups = computed<ClassNode[]>(() => {

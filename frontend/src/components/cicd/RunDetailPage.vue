@@ -20,6 +20,7 @@
       <div class="stat fail"><span class="num">{{ run.failed }}</span><span class="lbl">失败</span></div>
       <div class="stat"><span class="num">{{ run.skipped }}</span><span class="lbl">跳过</span></div>
       <div class="stat"><span class="num">{{ run.branch }}</span><span class="lbl">分支</span></div>
+      <div class="stat duration"><span class="num">{{ durationText }}</span><span class="lbl">执行时长</span></div>
       <div class="stat" v-if="run.error"><span class="err">{{ run.error }}</span></div>
     </div>
 
@@ -45,10 +46,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ciRunEventsUrl, getCiRun, getCiRunConsole, rerunCiRun, stopCiRun } from '../../api/cicd'
-import type { CiCaseRow, CiRun } from '../../api/cicd'
+import { ciRunDurationText, ciRunEventsUrl, getCiRun, getCiRunConsole, rerunCiRun, stopCiRun } from '../../api/cicd'
+import type { CiRun } from '../../api/cicd'
 import { withSseToken } from '../../api/client'
-import CaseTree from './CaseTree.vue'
+import CaseTree, { stripDataDrivenSuffix } from './CaseTree.vue'
 import type { CaseRow } from './CaseTree.vue'
 
 const route = useRoute()
@@ -70,6 +71,16 @@ const curMatch = ref(0)
 let es: EventSource | null = null
 
 const isActive = computed(() => run.value?.status === 'queued' || run.value?.status === 'running')
+
+// 执行时长:用户拍板以分钟为单位;<1 分钟显示秒;运行中未真正开跑为 '-'
+const durationText = computed(() => {
+  const r = run.value
+  if (!r?.started_at) return '-'
+  const sec = Math.max(0, ((r.finished_at ? new Date(r.finished_at).getTime() : Date.now())
+    - new Date(r.started_at).getTime()) / 1000)
+  if (!r.finished_at && sec < 1) return '-'
+  return sec < 60 ? `${sec.toFixed(0)} 秒` : `${(sec / 60).toFixed(1)} 分钟`
+})
 
 // 报告行 = Jenkins 产物行 + 快照 skipped 行(未执行标注,ADR-0012 决策 4 的「报告标注」出口)
 const caseRows = computed<CaseRow[]>(() => {
@@ -124,18 +135,22 @@ const consoleHtml = computed(() => {
   return parts.join('')
 })
 
-function onLocate(row: CiCaseRow): void {
+function onLocate(row: CaseRow): void {
   if (!logText.value) {
     ElMessage.info('日志为空,暂无可定位内容')
     return
   }
   if (search.value !== row.name) {
-    search.value = row.name
-    curMatch.value = 0
-    if (!matches.value.length) {
+    // 候选回退链:完整名(数据驱动含 [参数](序号))→ 去后缀方法名 → 类名;
+    // 通过用例框架不逐条打印时,方法名仍会出现在 mvn -Dtest 命令行/类级输出里
+    const candidates = [row.name, stripDataDrivenSuffix(row.name), row.class_name]
+    const hit = candidates.find((c) => c && logText.value.includes(c))
+    if (!hit) {
       ElMessage.info('日志中没有该用例的独立输出片段(测试框架未逐用例输出)')
       return
     }
+    search.value = hit
+    curMatch.value = 0
   } else {
     if (!matches.value.length) return
     curMatch.value = (curMatch.value + 1) % matches.value.length  // 循环跳下一条
@@ -227,6 +242,7 @@ onBeforeUnmount(() => { es?.close() })
 .stat .lbl { color: var(--pro-muted); font-size: 12px; }
 .stat.pass .num { color: var(--el-color-success); }
 .stat.fail .num { color: var(--el-color-danger); }
+.stat.duration .num { color: var(--el-text-color-regular); font-size: 14px; line-height: 28px; }
 .cases-wrap { border: 1px solid var(--el-border-color-lighter); border-radius: 6px;
   flex: 1 1 auto; margin-top: 4px; min-height: 120px; overflow: auto; padding: 6px; }
 .console-head { align-items: center; display: flex; gap: 10px; margin-top: 10px; }
