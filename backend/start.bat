@@ -14,6 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo Starting backend at http://127.0.0.1:8000  (API docs: http://127.0.0.1:8000/docs)
-".venv\Scripts\python.exe" -m uvicorn app.main:app --port 8000
+rem --host 0.0.0.0: CI 测试容器经 host.docker.internal 打平台登录接口需可达本机所有地址
+".venv\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 pause

@@ -62,8 +62,16 @@ def test_pipeline_checkout_runs_on_builtin():
 def test_pipeline_agent_cache_volumes():
     """docker agent 容器每次构建环境全新:maven 空 ~/.m2 全量重下依赖、pip 重装 pytest——
     挂命名卷跨 build 复用缓存(2026-09-17 冒烟用户拍板)。"""
-    assert "args '-v light-tester-m2:/root/.m2'" in PIPELINE_SCRIPT
-    assert "args '-v light-tester-pip:/root/.cache/pip'" in PIPELINE_SCRIPT
+    assert "-v light-tester-m2:/root/.m2" in PIPELINE_SCRIPT
+    assert "-v light-tester-pip:/root/.cache/pip" in PIPELINE_SCRIPT
+
+
+def test_pipeline_agents_inject_light_host():
+    """测试容器内 localhost=容器自身,依赖宿主机服务(MySQL/被测后端)不可达——
+    平台统一注入 LIGHT_HOST=host.docker.internal,测试配置用 ${LIGHT_HOST:localhost} 占位,
+    本地不设变量走 localhost 语义不变(2026-09-17 冒烟 LoginDataDrivenTest 缺陷)。"""
+    assert "LIGHT_HOST=host.docker.internal" in PIPELINE_SCRIPT
+    assert PIPELINE_SCRIPT.count("LIGHT_HOST=host.docker.internal") == 2  # maven 与 playwright 两个 agent 都有
 
 
 def test_pipeline_script_has_no_parameters_directive():

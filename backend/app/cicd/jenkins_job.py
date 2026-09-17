@@ -39,7 +39,8 @@ PIPELINE_SCRIPT = """pipeline {
       agent {
         docker {
           image 'mcr.microsoft.com/playwright/python:v1.60.0-jammy'
-          args '-v light-tester-pip:/root/.cache/pip'
+          // LIGHT_HOST=宿主机地址:测试配置用 ${LIGHT_HOST:localhost} 占位,容器内可打宿主机服务
+          args '-e LIGHT_HOST=host.docker.internal -v light-tester-pip:/root/.cache/pip'
         }
       }
       steps {
@@ -61,7 +62,8 @@ PIPELINE_SCRIPT = """pipeline {
       agent {
         docker {
           image 'maven:3.9-eclipse-temurin-8'
-          args '-v light-tester-m2:/root/.m2'
+          // LIGHT_HOST=宿主机地址:测试配置用 ${LIGHT_HOST:localhost} 占位,容器内可打宿主机服务
+          args '-e LIGHT_HOST=host.docker.internal -v light-tester-m2:/root/.m2'
         }
       }
       steps {
