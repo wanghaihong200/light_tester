@@ -66,6 +66,15 @@ def test_pipeline_agent_cache_volumes():
     assert "-v light-tester-pip:/root/.cache/pip" in PIPELINE_SCRIPT
 
 
+def test_pipeline_run_ui_installs_pinned_deps_and_vendor():
+    """镜像 v1.60.0-jammy 实测 Python 包裸(仅浏览器二进制,2026-09-18 冒烟):
+    playwright/pytest-playwright 必须显式安装,playwright 钉 1.60 与镜像浏览器(chromium-1223)
+    配套,pytest-playwright 钉 <0.8(框架约束);工程依赖仓自包含(vendor/*.whl,如
+    light_web_ui_tester)按需装,无 vendor 的导出物仓跳过不失败。"""
+    assert 'pip install -q "playwright==1.60.*" "pytest-playwright>=0.5,<0.8" pytest' in PIPELINE_SCRIPT
+    assert "[ -d vendor ] && python -m pip install -q vendor/*.whl || echo" in PIPELINE_SCRIPT
+
+
 def test_pipeline_agents_inject_light_host():
     """测试容器内 localhost=容器自身,依赖宿主机服务(MySQL/被测后端)不可达——
     平台统一注入 LIGHT_HOST=host.docker.internal,测试配置用 ${LIGHT_HOST:localhost} 占位,

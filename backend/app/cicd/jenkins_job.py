@@ -44,7 +44,11 @@ PIPELINE_SCRIPT = """pipeline {
         }
       }
       steps {
-        sh 'python -m pip install -q pytest'
+        // 镜像 v1.60.0-jammy 的 Python 环境为裸(仅浏览器二进制,2026-09-18 冒烟实测):
+        // playwright 钉 1.60 与镜像浏览器(chromium-1223)配套,pytest-playwright <0.8 为框架约束;
+        // 工程依赖仓自包含(vendor/*.whl)按需装,无 vendor 的导出物仓跳过不失败。
+        sh 'python -m pip install -q "playwright==1.60.*" "pytest-playwright>=0.5,<0.8" pytest'
+        sh '[ -d vendor ] && python -m pip install -q vendor/*.whl || echo "no vendor deps, skip"'
         sh 'python -m pytest ${SELECTION} --junitxml=ci-results/junit.xml -q'
       }
       post {
